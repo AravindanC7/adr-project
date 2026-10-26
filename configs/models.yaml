@@ -1,0 +1,37 @@
+# Team model list. Names on the left go into the outcome table's `model` column.
+# Prices are USD per 1M tokens: copy them from each provider's pricing page. The weekly spend cap
+# only works for models that have prices; until then it tracks tokens only.
+# heldout: true = never used for the failure map, thresholds or any tuning (AGENTS.md section 8).
+
+weekly_spend_cap_usd: 25.0
+
+models:
+  - name: claude-haiku
+    provider: anthropic
+    model_id: claude-haiku-5-5
+    price_in_per_mtok: null
+    price_out_per_mtok: null
+    heldout: false
+
+  - name: gpt-mini
+    provider: openai
+    model_id: gpt-5.4-mini-2026-03-17
+    price_in_per_mtok: null
+    price_out_per_mtok: null
+    heldout: false
+
+  - name: gemini-flash
+    provider: google
+    model_id: gemini-3.5-flash
+    price_in_per_mtok: null
+    price_out_per_mtok: null
+    heldout: true   # PROPOSED held-out model; confirm with the team (step #16)
+
+  - name: open-weight
+    provider: openai_compatible
+    model_id: "<run `ollama list` and put the model name here>"
+    base_url_env: OPEN_WEIGHT_BASE_URL
+    api_key_env: OPEN_WEIGHT_API_KEY
+    price_in_per_mtok: 0.0
+    price_out_per_mtok: 0.0
+    heldout: false

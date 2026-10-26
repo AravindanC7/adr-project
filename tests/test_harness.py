@@ -151,6 +151,7 @@ def test_warned_attacker_avoids_traps(tmp_path):
     cfg = CopyPasteConfig(run_id="t-L1", models=["fake-a"], attacker_level="L1",
                           results_dir=str(tmp_path))
     rows = run_copy_paste(client, assessment, items, variants, mechs, cfg)
+    assert (tmp_path / "runs" / "t-L1" / "errors.jsonl").read_text() == ""
     outcomes = {(r.mechanism, r.outcome) for r in rows if r.mechanism}
     assert ("decoy", "picked_decoy") not in outcomes
     assert ("canary", "clean") in outcomes
@@ -168,4 +169,68 @@ def test_failed_calls_are_logged_not_fatal(tmp_path):
     rows = run_copy_paste(client, assessment, items, variants, mechs, cfg)
     assert len(rows) == 4
     errs = (tmp_path / "runs" / "t-err" / "errors.jsonl").read_text().splitlines()
-    assert len(errs) == 1 and "failed after" in json.loads(errs[0])["error"]
+    err = json.loads(errs[0])
+    assert len(errs) == 1 and "provider down" in err["error"]
+    assert err["variant_id"] == "handwritten:q2|decoy|0" and err["model"] == "fake-a"
+
+
+# ---------- provider error handling ----------
+class _Err(Exception):
+    def __init__(self, msg, status_code=None):
+        super().__init__(msg)
+        self.status_code = status_code
+
+
+def test_classify_error():
+    from adr.harness.llm_client import classify_error
+
+    assert classify_error(TypeError("create() got an unexpected keyword argument 'temperature'")) == "no_temperature"
+    assert classify_error(_Err("Unsupported value: 'temperature' does not support 0", 400)) == "no_temperature"
+    assert classify_error(_Err("Your credit balance is too low", 400)) == "fatal"
+    assert classify_error(_Err("429 RESOURCE_EXHAUSTED quota", 429)) == "rate_limit"
+    assert classify_error(_Err("Overloaded", 529)) == "rate_limit"
+    assert classify_error(TimeoutError("read timed out")) == "retry"
+
+
+def test_temperature_refusal_is_dropped_and_remembered(tmp_path):
+    seen = []
+
+    class NoTemp:
+        def complete(self, model_id, system, messages, temperature, max_tokens):
+            seen.append(temperature)
+            if temperature is not None:
+                raise TypeError("create() got an unexpected keyword argument 'temperature'")
+            return "2", 5, 1
+
+    client = LLMClient(models={"m": ModelSpec("m", "fake", "m1", 0.0, 0.0)},
+                       cache_dir=tmp_path, providers={"m": NoTemp()}, max_retries=1)
+    out = client.complete("m", [{"role": "user", "content": "a"}], prompt_version="t")
+    client.complete("m", [{"role": "user", "content": "b"}], prompt_version="t")
+    assert out.text == "2"
+    assert seen == [0.0, None, None]  # second call skips the refused setting
+    assert client.read_cache(out.cache_key)["temperature_sent"] is None
+
+
+def test_rate_limit_waits_then_succeeds_and_fatal_does_not_retry(tmp_path):
+    calls = {"n": 0}
+
+    def flaky(system, messages):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise _Err("429 Too Many Requests", 429)
+        return "ok"
+
+    waits = []
+    client, _ = make_client(tmp_path, fn=flaky)
+    client.max_retries, client._sleep = 5, waits.append
+    assert client.complete("fake-a", [{"role": "user", "content": "x"}], prompt_version="t").text == "ok"
+    assert len(waits) == 2 and waits[0] >= 10
+
+    def broke(system, messages):
+        raise _Err("Your credit balance is too low", 400)
+
+    client2, fake2 = make_client(tmp_path / "b", fn=broke)
+    client2.max_retries, client2._sleep = 5, waits.append
+    with pytest.raises(RuntimeError, match="fatal error after 1 try: .*credit balance"):
+        client2.complete("fake-a", [{"role": "user", "content": "x"}], prompt_version="t")
+    assert fake2.calls == 1

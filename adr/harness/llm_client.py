@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import threading
 import time
 import warnings
@@ -174,6 +175,36 @@ def make_provider(spec: ModelSpec) -> Provider:
     raise ValueError(f"{spec.name}: unknown provider {spec.provider!r}")
 
 
+# ---------------------------------------------------------------- errors
+_RATE_WORDS = ("rate limit", "rate_limit", "resource_exhausted", "overloaded", "too many requests")
+_FATAL_WORDS = ("credit balance", "insufficient_quota", "billing", "invalid api key",
+                "api key not valid", "invalid x-api-key", "incorrect api key", "not found")
+
+
+def classify_error(e: Exception) -> str:
+    """Decide how to react to a provider error.
+
+    "no_temperature": the model refuses a temperature setting -> drop it and retry now
+    "rate_limit":     slow down and retry (429, 529, overloaded)
+    "fatal":          retrying can't help (bad key, no credit, bad request, unknown model)
+    "retry":          probably transient (timeouts, 5xx) -> short backoff and retry
+    """
+    msg = str(e).lower()
+    status = getattr(e, "status_code", None) or getattr(e, "code", None)
+    status = status if isinstance(status, int) else None
+    if "temperature" in msg and (
+        isinstance(e, TypeError) or status == 400 or "unsupported" in msg
+    ):
+        return "no_temperature"
+    if any(w in msg for w in _FATAL_WORDS):
+        return "fatal"
+    if status in (429, 529) or any(w in msg for w in _RATE_WORDS):
+        return "rate_limit"
+    if isinstance(e, TypeError) or status in (400, 401, 403, 404, 422):
+        return "fatal"
+    return "retry"
+
+
 # ---------------------------------------------------------------- client
 def cache_key(spec: ModelSpec, request: dict[str, Any]) -> str:
     payload = {"provider": spec.provider, "model_id": spec.model_id, **request}
@@ -192,7 +223,8 @@ class LLMClient:
     cache_dir: Path = DEFAULT_CACHE_DIR
     weekly_spend_cap_usd: float | None = None
     providers: dict[str, Provider] = field(default_factory=dict)  # name -> provider (overrides)
-    max_retries: int = 3
+    max_retries: int = 5
+    _sleep: Callable[[float], None] = time.sleep  # replaced in tests
 
     def __post_init__(self) -> None:
         self.cache_dir = Path(self.cache_dir)
@@ -200,14 +232,15 @@ class LLMClient:
         self._ledger = self.cache_dir / "_spend_ledger.jsonl"
         self._lock = threading.Lock()
         self._warned_no_price: set[str] = set()
+        self._no_temperature: set[str] = set()
 
     # -- construction
     @classmethod
     def from_config(cls, path: str | Path, **kw: Any) -> LLMClient:
         try:
-            from dotenv import load_dotenv
+            from dotenv import find_dotenv, load_dotenv
 
-            load_dotenv()
+            load_dotenv(find_dotenv(usecwd=True))
         except ImportError:
             pass
         cfg = yaml.safe_load(Path(path).read_text())
@@ -297,19 +330,34 @@ class LLMClient:
                 )
 
         provider = self._provider(model)
-        last_err: Exception | None = None
-        for attempt in range(self.max_retries):
+        sent_temperature = None if model in self._no_temperature else temperature
+        attempt = 0
+        while True:
             try:
                 text, tin, tout = provider.complete(
-                    spec.model_id, system, messages, temperature, max_tokens
+                    spec.model_id, system, messages, sent_temperature, max_tokens
                 )
                 break
             except Exception as e:  # noqa: BLE001 - provider SDKs raise many types
-                last_err = e
-                if attempt < self.max_retries - 1:
-                    time.sleep(min(2**attempt, 20))
-        else:
-            raise RuntimeError(f"{model}: call failed after {self.max_retries} tries") from last_err
+                kind = classify_error(e)
+                if kind == "no_temperature" and sent_temperature is not None:
+                    # Some newer models/SDKs refuse a temperature setting: drop it for this
+                    # model from now on and retry at once (doesn't count as an attempt).
+                    with self._lock:
+                        self._no_temperature.add(model)
+                    sent_temperature = None
+                    continue
+                attempt += 1
+                if kind == "fatal" or attempt >= self.max_retries:
+                    raise RuntimeError(
+                        f"{model}: {kind} error after {attempt} tr{'y' if attempt == 1 else 'ies'}: "
+                        f"{type(e).__name__}: {str(e)[:300]}"
+                    ) from e
+                if kind == "rate_limit":
+                    wait = min(60.0, 10.0 * 2 ** (attempt - 1)) + random.uniform(0, 3)
+                else:
+                    wait = min(2.0**attempt, 20.0)
+                self._sleep(wait)
 
         cost = self._cost(spec, tin, tout)
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -318,6 +366,7 @@ class LLMClient:
             "provider": spec.provider,
             "model_id": spec.model_id,
             "request": request,
+            "temperature_sent": sent_temperature,
             "response": {"text": text, "input_tokens": tin, "output_tokens": tout,
                          "cost_usd": cost},
             "created_at": now,

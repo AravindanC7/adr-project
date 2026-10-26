@@ -113,8 +113,9 @@ def main() -> None:
     for (model, mech, outcome), n in sorted(counts.items()):
         print(f"  {model:14s} {mech:14s} {outcome:22s} {n}")
     err = Path("results/runs") / run_id / "errors.jsonl"
-    if err.exists():
-        print(f"  {len(err.read_text().splitlines())} calls failed; see {err}")
+    n_err = len(err.read_text().splitlines()) if err.exists() else 0
+    if n_err:
+        print(f"  {n_err} calls failed; see {err}")
 
 
 if __name__ == "__main__":

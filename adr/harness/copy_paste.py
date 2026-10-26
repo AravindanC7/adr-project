@@ -123,12 +123,23 @@ def run_copy_paste(
 
     def work(job: _Job):
         system, messages = build_prompt(job.item, job.rendered, cfg.attacker_level, cfg.persona)
-        out = client.complete(
-            job.model, messages, system=system, temperature=cfg.temperature,
-            max_tokens=cfg.max_tokens, prompt_version=cfg.prompt_version,
-            sample_idx=job.sample_idx,
-        )
+        try:
+            out = client.complete(
+                job.model, messages, system=system, temperature=cfg.temperature,
+                max_tokens=cfg.max_tokens, prompt_version=cfg.prompt_version,
+                sample_idx=job.sample_idx,
+            )
+        except Exception as e:
+            e.adr_job = job  # type: ignore[attr-defined]  # so the error log can say which call
+            raise
         return job, out
+
+    def _where(e: Exception) -> dict:
+        job = getattr(e, "adr_job", None)
+        if job is None:
+            return {}
+        return {"model": job.model, "variant_id": job.rendered.variant_id,
+                "sample_idx": job.sample_idx}
 
     with ThreadPoolExecutor(max_workers=cfg.max_workers) as pool:
         futures = [pool.submit(work, j) for j in jobs]
@@ -137,12 +148,12 @@ def run_copy_paste(
                 job, out = fut.result()
             except SpendCapExceeded as e:
                 stopped_for_budget = True
-                errors.append({"error": str(e)})
+                errors.append({**_where(e), "error": str(e)})
                 for f in futures:
                     f.cancel()
                 continue
             except Exception as e:  # noqa: BLE001 - keep the run going, log the failure
-                errors.append({"error": repr(e)})
+                errors.append({**_where(e), "error": str(e)})
                 continue
 
             spec = client.spec(job.model)
@@ -195,8 +206,7 @@ def run_copy_paste(
     with (run_dir / "responses.jsonl").open("w") as f:
         for r in sorted(responses, key=lambda r: (r["model"], r["session_id"], r["variant_id"])):
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    if errors:
-        with (run_dir / "errors.jsonl").open("w") as f:
-            for e in errors:
-                f.write(json.dumps(e) + "\n")
+    with (run_dir / "errors.jsonl").open("w") as f:  # always rewritten, empty = no failures
+        for e in errors:
+            f.write(json.dumps(e) + "\n")
     return rows
