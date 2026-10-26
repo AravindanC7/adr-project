@@ -1,0 +1,188 @@
+"""The Adaptive Defense Router: SPRT scoring + choosing the most informative next check.
+
+Implements the `adr.contracts.Router` protocol, so the server (Harshini) and the replay
+simulation (Arav) call it the same way.
+
+Each step:
+  - next(state): among the items not yet shown, score every pre-built variant whose check has a
+    failure-map cell, by expected information gain minus burden and false-flag penalties. Serve
+    the best (near-ties broken at random). If no check is worth it, serve the next item plain.
+  - update(state, variant_id, outcome): add the check's log-likelihood ratio to the score
+    (capped per mechanism), then set the status from the thresholds.
+"""
+
+from __future__ import annotations
+
+import random
+from dataclasses import dataclass
+
+from adr.contracts import (
+    ACTIVE_MECHANISMS,
+    PASSIVE_MECHANISMS,
+    Assessment,
+    Choice,
+    FailureMap,
+    Item,
+    RenderedItem,
+    SessionState,
+    check_outcome,
+    make_variant_id,
+    parse_variant_id,
+)
+from adr.router.selection import utility
+from adr.router.sprt import capped_delta, sigmoid, wald_thresholds
+
+
+@dataclass(frozen=True)
+class RouterConfig:
+    alpha: float = 0.01            # target false-flag rate on honest people
+    # Target miss rate on AI users. 0.05, not the 0.2 first suggested: on the synthetic map,
+    # beta=0.2 clears too many AI users early (TPR@1% FPR 0.82 vs 0.92) for ~2 fewer checks.
+    beta: float = 0.05
+    prior_log_odds: float = 0.0    # prior belief before any evidence (0 = 50/50)
+    escalate_frac: float = 0.5     # status "escalated" once score >= escalate_frac * A
+    lambda_burden: float = 0.5     # penalty per unit of respondent burden
+    lambda_fp: float = 0.05        # penalty per unit of honest-person false-flag risk
+    escalated_burden_scale: float = 0.25  # when escalated, burden matters less: harder checks OK
+    mech_cap: float | None = 3.0   # max |total| any one mechanism may add (nats); None = no cap
+    objective: str = "kl"          # "kl" (Chernoff's rule) or "info_gain"; see selection.py
+    tie_eps: float = 0.01          # candidates within this of the best are a tie
+    allow_reorder: bool = True     # may serve items out of display order
+    attack_mode: str | None = None # which failure-map cells to use; None = pooled over modes
+    upper: float | None = None     # override A (after empirical calibration, step #42)
+    lower: float | None = None     # override B
+
+
+class SPRTRouter:
+    def __init__(
+        self,
+        items: dict[str, Item],
+        variants: dict[str, list[RenderedItem]],
+        failure_map: FailureMap,
+        config: RouterConfig = RouterConfig(),
+    ):
+        self.items = items
+        self.variants = variants
+        self.fmap = failure_map
+        self.cfg = config
+        a, b = wald_thresholds(config.alpha, config.beta)
+        self.A = config.upper if config.upper is not None else a
+        self.B = config.lower if config.lower is not None else b
+        self._assessments: dict[str, Assessment] = {}
+        self._variant_index: dict[str, RenderedItem] = {
+            v.variant_id: v for vs in variants.values() for v in vs
+        }
+
+    # ------------------------------------------------------------ protocol
+    def start(
+        self, assessment: Assessment, session_id: str, seed: int
+    ) -> tuple[SessionState, Choice]:
+        missing = [i for i in assessment.item_ids if i not in self.items]
+        if missing:
+            raise KeyError(f"items not loaded in router: {missing[:5]}")
+        self._assessments[assessment.assessment_id] = assessment
+        state = SessionState(
+            session_id=session_id,
+            assessment_id=assessment.assessment_id,
+            score=self.cfg.prior_log_odds,
+            seed=seed,
+        )
+        choice = self.next(state)
+        assert choice is not None  # an assessment has at least one item
+        return state, choice
+
+    def update(self, state: SessionState, variant_id: str, outcome: str) -> SessionState:
+        item_id, mech, _ = parse_variant_id(variant_id)
+        if item_id not in self.items:
+            raise KeyError(f"unknown item {item_id!r}")
+        new = state.model_copy(deep=True)
+
+        if mech not in PASSIVE_MECHANISMS and variant_id not in new.served:
+            new.served.append(variant_id)
+
+        delta = 0.0
+        if mech is None:
+            if outcome != "none":
+                raise ValueError('plain variants have outcome "none"')
+        else:
+            check_outcome(mech, outcome)
+            cell = self.fmap.lookup(mech, self.items[item_id].item_type, self.cfg.attack_mode)
+            if cell is not None:
+                total = new.contrib.get(mech, 0.0)
+                delta = capped_delta(total, cell.llr(outcome), self.cfg.mech_cap)
+                new.contrib[mech] = total + delta
+        new.score += delta
+        new.history.append((variant_id, outcome, delta))
+        new.status = self._status(new)
+        return new
+
+    def next(self, state: SessionState) -> Choice | None:
+        if state.status == "review":
+            return None  # paused for human review
+        assessment = self._assessments[state.assessment_id]
+        shown = {parse_variant_id(v)[0] for v in state.served}
+        remaining = [i for i in assessment.item_ids if i not in shown]
+        if not remaining:
+            return None
+        if state.status == "cleared":
+            return self._plain(remaining[0])
+
+        pool = remaining if self.cfg.allow_reorder else remaining[:1]
+        scored = self._score_candidates(state, pool)
+        if not scored:
+            return self._plain(remaining[0])
+        best = max(u for u, _ in scored)
+        if best <= 0:
+            return self._plain(remaining[0])
+        ties = [v for u, v in scored if u >= best - self.cfg.tie_eps]
+        rng = random.Random(f"{state.seed}:{state.session_id}:{len(state.served)}")
+        pick = rng.choice(ties)
+        return Choice(item_id=pick.item_id, variant_id=pick.variant_id, mechanism=pick.mechanism)
+
+    # ------------------------------------------------------------ helpers
+    def _status(self, state: SessionState) -> str:
+        if state.status == "review" or state.score >= self.A:
+            return "review"
+        if state.score <= self.B:
+            return "cleared"
+        if state.score >= self.cfg.escalate_frac * self.A:
+            return "escalated"
+        return "active"
+
+    def _plain(self, item_id: str) -> Choice:
+        plain = [v for v in self.variants.get(item_id, []) if v.mechanism is None]
+        vid = plain[0].variant_id if plain else make_variant_id(item_id, None)
+        return Choice(item_id=item_id, variant_id=vid, mechanism=None)
+
+    def _score_candidates(
+        self, state: SessionState, pool: list[str]
+    ) -> list[tuple[float, RenderedItem]]:
+        pi = sigmoid(state.score)
+        burden_w = self.cfg.lambda_burden * (
+            self.cfg.escalated_burden_scale if state.status == "escalated" else 1.0
+        )
+        out: list[tuple[float, RenderedItem]] = []
+        for item_id in pool:
+            item = self.items[item_id]
+            for v in self.variants.get(item_id, []):
+                if v.mechanism not in ACTIVE_MECHANISMS:
+                    continue
+                if self.cfg.mech_cap is not None and (
+                    state.contrib.get(v.mechanism, 0.0) >= self.cfg.mech_cap
+                ):
+                    continue  # this check can't add more evidence toward AI
+                cell = self.fmap.lookup(v.mechanism, item.item_type, self.cfg.attack_mode)
+                if cell is None:
+                    continue
+                u = utility(pi, cell, v.burden, burden_w, self.cfg.lambda_fp, self.cfg.objective)
+                out.append((u, v))
+        return out
+
+    def explain(self, state: SessionState, top: int = 5) -> list[dict]:
+        """For the demo and debugging: the top candidate checks and their utilities."""
+        assessment = self._assessments[state.assessment_id]
+        shown = {parse_variant_id(v)[0] for v in state.served}
+        remaining = [i for i in assessment.item_ids if i not in shown]
+        scored = sorted(self._score_candidates(state, remaining), key=lambda t: -t[0])[:top]
+        return [{"variant_id": v.variant_id, "mechanism": v.mechanism, "utility": round(u, 4)}
+                for u, v in scored]

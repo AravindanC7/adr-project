@@ -1,0 +1,39 @@
+# Copy to configs/models.yaml and fill in at kickoff.
+# - `name` is our short label; it goes into the outcome table's `model` column.
+# - `provider` is one of: anthropic, openai, google, openai_compatible.
+# - `model_id` is the exact API model string. Check the provider's docs; don't guess.
+# - Prices are USD per 1M tokens. Used by the spend cap. Leave null to track tokens only.
+# - `heldout: true` marks the held-out model (step #16). Never tune anything on it.
+
+weekly_spend_cap_usd: 25.0
+
+models:
+  - name: claude-small
+    provider: anthropic
+    model_id: claude-haiku-5-5
+    price_in_per_mtok: null
+    price_out_per_mtok: null
+    heldout: false
+
+  - name: gpt-small
+    provider: openai
+    model_id: "<fill in at kickoff>"
+    price_in_per_mtok: null
+    price_out_per_mtok: null
+    heldout: false
+
+  - name: open-weight
+    provider: openai_compatible
+    model_id: "<e.g. a Qwen or Llama instruct model on your server>"
+    base_url_env: OPEN_WEIGHT_BASE_URL
+    api_key_env: OPEN_WEIGHT_API_KEY
+    price_in_per_mtok: 0.0
+    price_out_per_mtok: 0.0
+    heldout: false
+
+  - name: gemini-small
+    provider: google
+    model_id: "<fill in at kickoff>"
+    price_in_per_mtok: null
+    price_out_per_mtok: null
+    heldout: true   # example only: the team picks the held-out model on Mon Oct 26

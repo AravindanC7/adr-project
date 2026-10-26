@@ -1,0 +1,24 @@
+# secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# data and caches live on the shared drive, not in git
+data/raw/*
+data/processed/*
+cache/llm/*
+results/outcomes/*
+results/runs/*
+!**/.gitkeep
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
