@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quick Questions</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <!-- Neutral name on purpose: respondents must not learn the page is checking for AI use. -->
+  <header class="band">
+    <div class="band-inner"><span class="logo" aria-hidden="true">✦</span><span id="brand">Quick Questions</span></div>
+  </header>
+
+  <main>
+    <p id="error" role="alert"></p>
+
+    <section id="start">
+      <h1>Hi there 👋</h1>
+      <p class="lead">Pick one to begin. It only takes a few minutes.</p>
+      <ul id="assessments" class="assessments"></ul>
+    </section>
+
+    <section id="question" hidden>
+      <div class="progress-row">
+        <p id="progress" class="progress"></p>
+        <div class="track" aria-hidden="true"><div id="bar" class="fill"></div></div>
+      </div>
+      <form id="form" class="card" novalidate>
+        <h2 id="stem" tabindex="-1"></h2>
+        <div id="answer"></div>
+        <button id="next" class="primary" type="submit" disabled>Next →</button>
+      </form>
+    </section>
+
+    <section id="done" hidden>
+      <span class="done-emoji" aria-hidden="true">🎉</span>
+      <h1>All done, thank you!</h1>
+      <div class="confetti" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+      </div>
+      <button id="again" class="primary" type="button">Back to the start</button>
+    </section>
+  </main>
+</body>
+</html>
