@@ -9,7 +9,9 @@ Live timeline: https://claude.ai/artifact/CoAhT5HJsBkLfWZbdZKFVz
 ## Setup
 
 ```bash
-python -m venv .venv && source .venv/bin/activate        # Python 3.10+
+python3.13 -m venv .venv      # needs Python 3.10+; macOS's built-in python3 is 3.9 and won't work
+source .venv/bin/activate
+# Check with: python --version (must be 3.10 or newer)
 pip install -e ".[dev]"                                   # core + pytest + ruff
 pip install -e ".[anthropic,openai]"                      # only the providers you use
 cp .env.example .env                                      # add API keys
@@ -24,11 +26,12 @@ pytest                                                    # all tests should pas
 | Contracts (draft) | `adr/contracts/` | Item schema, mechanism interface, outcome table, failure map, router API. Tests in `tests/test_contracts.py`. **Needs team sign-off.** |
 | LLM client | `adr/harness/llm_client.py` | Anthropic, OpenAI, Google, OpenAI-compatible (open-weight). Disk cache, weekly spend cap, retries. |
 | Copy-paste attacker (#9) | `adr/harness/copy_paste.py`, `prompts.py`, `parse.py` | Levels L0, L1, L2, L4. L3 (retry) comes with step #36. |
+| Document-upload attacker (#20) | `adr/harness/doc_upload.py`, `pdf_render.py` | Whole assessment as one PDF, traps in the invisible text layer. Anthropic, OpenAI, Google only. |
 | Router prototype (#13) | `adr/router/` | SPRT score, Chernoff-rule check selection, burden and false-flag penalties, per-mechanism cap, escalation, random tie-breaks. |
 | Early baselines | `adr/baselines/simple.py` | Random check per item; single fixed mechanism. |
 | Synthetic test data | `adr/router/synthetic.py` | **Invented numbers** for developing the router. Never report these. |
 
-Not started: document-upload attacker (#20), browser agent (#22), replay on real outcomes (#27),
+Not started: browser agent (#22), replay on real outcomes (#27),
 the other baselines, and everything Archana and Harshini own.
 
 ## Try it
@@ -39,6 +42,9 @@ python scripts/run_copy_paste.py --stub --fake
 
 # Same, against one real model from configs/models.yaml (costs a few cents at most):
 python scripts/run_copy_paste.py --stub --models claude-small
+
+# Document-upload attacker: the 4 items as one PDF with invisible traps (same flags):
+python scripts/run_doc_upload.py --stub --fake
 
 # Router vs early baselines on SYNTHETIC data (about 20 s):
 python scripts/router_synthetic_demo.py
