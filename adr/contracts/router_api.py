@@ -9,7 +9,11 @@ Flow for one session:
         mechanism (the active one, plus passive behaviour/style checks);
         for each (variant_id, outcome): state = router.update(state, variant_id, outcome)
         choice = router.next(state)       # None = assessment finished
-The score in SessionState is never sent to the respondent's browser.
+Never send any of these to the respondent's browser (an AI agent reads everything it gets):
+    - SessionState (score, status, contrib, history)
+    - Choice.mechanism
+    - any variant_id (it names the mechanism; send an opaque per-step token instead)
+The browser only needs the visible item and whether the assessment is finished.
 """
 
 from __future__ import annotations
