@@ -90,9 +90,10 @@ choice = router.next(state)    # None = finished, or paused for review
 
 Never send `state.score` to the browser.
 
-## Proposed contract changes to agree at the next sync
+## Contract changes beyond the Oct 17 draft
 
-These go beyond the Oct 17 draft in AGENTS.md section 6:
+These go beyond the Oct 17 draft in AGENTS.md section 6. **Items 1–8 are agreed by the team.**
+Items 9–12 (contracts v2) were agreed on Nov 2 and land with the `arav/contracts-v2` PR.
 
 1. `RenderedItem.copy_text`: the exact text a select-and-copy of the item yields, hidden spans
    included. The mechanism sets it, because only it knows where hidden text goes.
@@ -108,3 +109,13 @@ These go beyond the Oct 17 draft in AGENTS.md section 6:
    history), `Choice.mechanism` and every `variant_id` never reach the browser; variant ids name
    the mechanism. The server sends an opaque per-step token and maps it back to the variant id.
    The browser only gets the visible item and whether the assessment is finished.
+9. `AssessmentType` gains `"test"` (a quiz with right answers and a time limit) and
+   `"assignment"` (written answers). `Item.correct_option` is allowed on quiz and test items.
+10. `Item.passage` (optional): reading-comprehension text shown before the stem, which asks about
+    it. `Assessment.time_limit_s` (optional, > 0): time allowed for the whole assessment.
+11. `HiddenPosition = "before_stem" | "after_stem" | "after_options"`. A variant whose `hidden`
+    has `hidden_text` must also have `hidden_position`; copy text, the PDF and the page all place
+    hidden text from it. Mechanisms may add their own extra keys to `hidden`.
+12. JSONL files via `adr/contracts/io.py`: `write_jsonl(path, models)` and
+    `read_jsonl(path, model_cls)`, which reports the line number of a bad line. Variants are stored
+    one file per assessment, at `variants/<assessment_id>.jsonl` (`variants_path(root, id)`).

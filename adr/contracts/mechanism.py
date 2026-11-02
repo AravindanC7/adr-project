@@ -16,7 +16,7 @@ into the router the same way.
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, get_args, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -39,6 +39,11 @@ OUTCOME_LABELS: dict[str, tuple[str, ...]] = {
 PASSIVE_MECHANISMS: frozenset[str] = frozenset({"behaviour", "style"})
 ACTIVE_MECHANISMS: frozenset[str] = frozenset(OUTCOME_LABELS) - PASSIVE_MECHANISMS
 
+# Where hidden text goes relative to the visible item. The harness, the PDF renderer and the
+# front end all place it from this, so every attack mode sees it in the same spot.
+HiddenPosition = Literal["before_stem", "after_stem", "after_options"]
+HIDDEN_POSITIONS: tuple[str, ...] = get_args(HiddenPosition)
+
 
 def make_variant_id(item_id: str, mechanism: str | None, n: int = 0) -> str:
     """Stable id for one variant: "<item_id>|<mechanism or plain>|<n>".
@@ -56,7 +61,14 @@ def parse_variant_id(variant_id: str) -> tuple[str, str | None, int]:
 
 
 class RenderedItem(BaseModel):
-    """One pre-generated variant of an item carrying (at most) one active mechanism."""
+    """One pre-generated variant of an item carrying (at most) one active mechanism.
+
+    Standard keys in `hidden` (each mechanism may add its own extra keys):
+      hidden_text:     text that is in the page, the copied text and the PDF text layer, but
+                       not visible to a human reader.
+      hidden_position: where hidden_text goes: "before_stem", "after_stem" or "after_options".
+                       Required whenever hidden_text is set.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -70,7 +82,10 @@ class RenderedItem(BaseModel):
     visible: dict[str, Any] = Field(description="What a human sees: stem, options")
     hidden: dict[str, Any] = Field(
         default_factory=dict,
-        description="Mechanism data, e.g. hidden_text, canary_token, decoy_option_index",
+        description=(
+            "Mechanism data. Standard keys: hidden_text, hidden_position (required with "
+            "hidden_text). Mechanisms add their own, e.g. canary_token, decoy_option_index"
+        ),
     )
     copy_text: str | None = Field(
         default=None,
@@ -94,6 +109,16 @@ class RenderedItem(BaseModel):
             raise ValueError("passive mechanisms (behaviour, style) don't make variants")
         if "stem" not in self.visible:
             raise ValueError("visible must include 'stem'")
+        if "hidden_text" in self.hidden and "hidden_position" not in self.hidden:
+            raise ValueError(
+                f"{self.variant_id}: hidden_text needs hidden_position, one of {HIDDEN_POSITIONS}"
+            )
+        position = self.hidden.get("hidden_position")
+        if "hidden_position" in self.hidden and position not in HIDDEN_POSITIONS:
+            raise ValueError(
+                f"{self.variant_id}: hidden_position must be one of {HIDDEN_POSITIONS}, "
+                f"got {position!r}"
+            )
         return self
 
 

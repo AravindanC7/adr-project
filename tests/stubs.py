@@ -72,7 +72,8 @@ class StubDecoy:
             mechanism="decoy",
             variant_id=make_variant_id(item.item_id, "decoy", seed),
             visible={"stem": item.stem, "options": item.options},
-            hidden={"decoy_option_index": decoy, "hidden_text": hidden_text},
+            hidden={"decoy_option_index": decoy, "hidden_text": hidden_text,
+                    "hidden_position": "after_stem"},
             copy_text=f"{item.stem}\n{hidden_text}\n{opts}",
         )
 
@@ -102,7 +103,8 @@ class StubCanary:
             mechanism="canary",
             variant_id=make_variant_id(item.item_id, "canary", seed),
             visible={"stem": item.stem},
-            hidden={"canary_token": token, "hidden_text": hidden_text},
+            hidden={"canary_token": token, "hidden_text": hidden_text,
+                    "hidden_position": "after_stem"},
             copy_text=f"{item.stem} {hidden_text}",
         )
 

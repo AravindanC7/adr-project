@@ -25,7 +25,8 @@ Source = Literal[
     "arc",
     "handwritten",  # small test items written by the team before real loaders exist
 ]
-AssessmentType = Literal["survey", "quiz"]
+# "test" = a quiz with right answers and a time limit; "assignment" = written answers.
+AssessmentType = Literal["survey", "quiz", "test", "assignment"]
 ItemType = Literal["mcq", "likert", "ranking", "numeric", "open_text"]
 AttackMode = Literal["copy_paste", "doc_upload", "browser_agent"]
 MechanismName = Literal["decoy", "opinion_trap", "canary", "glitch_token", "behaviour", "style"]
@@ -33,6 +34,8 @@ Split = Literal["train", "heldout_survey"]
 
 # Item types whose answer is one or more option indexes.
 OPTION_TYPES: frozenset[str] = frozenset({"mcq", "likert", "ranking"})
+# Assessment types whose items can have a right answer.
+ANSWER_KEY_TYPES: frozenset[str] = frozenset({"quiz", "test"})
 
 
 class Item(BaseModel):
@@ -45,10 +48,17 @@ class Item(BaseModel):
     assessment_type: AssessmentType
     item_type: ItemType
     stem: str = Field(min_length=1, description="Question text as shown to a human")
+    passage: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Reading-comprehension text shown before the stem; the stem asks about it",
+    )
     options: list[str] | None = Field(
         default=None, description="MCQ / Likert / ranking labels, in display order"
     )
-    correct_option: int | None = Field(default=None, description="Index into options; quizzes only")
+    correct_option: int | None = Field(
+        default=None, description="Index into options; quiz and test items only"
+    )
     reverse_keyed_with: str | None = Field(
         default=None, description="IPIP: item_id of the paired reverse-keyed item"
     )
@@ -68,8 +78,11 @@ class Item(BaseModel):
         elif self.options:
             raise ValueError(f"{self.item_id}: {self.item_type} items must not have options")
         if self.correct_option is not None:
-            if self.assessment_type != "quiz":
-                raise ValueError(f"{self.item_id}: only quiz items have a correct_option")
+            if self.assessment_type not in ANSWER_KEY_TYPES:
+                raise ValueError(
+                    f"{self.item_id}: only quiz or test items have a correct_option "
+                    f"(this one is a {self.assessment_type})"
+                )
             if not self.options or not (0 <= self.correct_option < len(self.options)):
                 raise ValueError(f"{self.item_id}: correct_option is not a valid option index")
         if "decoy" in self.eligible_mechanisms and self.correct_option is None:
@@ -80,7 +93,7 @@ class Item(BaseModel):
 
 
 class Assessment(BaseModel):
-    """An ordered set of items shown together (one survey or one quiz)."""
+    """An ordered set of items shown together (one survey, quiz, test or assignment)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -88,6 +101,9 @@ class Assessment(BaseModel):
     title: str
     assessment_type: AssessmentType
     item_ids: list[str] = Field(min_length=1, description="Display order; the router may reorder")
+    time_limit_s: int | None = Field(
+        default=None, gt=0, description="Time allowed for the whole assessment, in seconds"
+    )
 
     @model_validator(mode="after")
     def _unique_items(self) -> Assessment:
