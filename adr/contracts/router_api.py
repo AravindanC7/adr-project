@@ -39,7 +39,7 @@ class SessionState(BaseModel):
     )
     status: SessionStatus = "active"
     seed: int = 0
-    # PROPOSED (not in the Oct 17 draft): running total per mechanism, needed for the
+    # Running total per mechanism (agreed; README contract change 3), needed for the
     # per-mechanism cap that limits overconfidence from correlated signals.
     contrib: dict[str, float] = Field(default_factory=dict)
 

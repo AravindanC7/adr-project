@@ -90,7 +90,7 @@ class RenderedItem(BaseModel):
     copy_text: str | None = Field(
         default=None,
         description=(
-            "PROPOSED: exact text a person gets by selecting and copying this item on the page, "
+            "Exact text a person gets by selecting and copying this item on the page, "
             "including visually hidden spans. None = the harness builds it from `visible`. "
             "The mechanism sets it because only the mechanism knows where hidden text goes."
         ),

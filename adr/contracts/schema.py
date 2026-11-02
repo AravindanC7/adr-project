@@ -113,10 +113,10 @@ class Assessment(BaseModel):
 
 
 class HumanDistribution(BaseModel):
-    """PROPOSED (not in the Oct 17 draft): how often real people chose each option.
+    """How often real people chose each option (agreed; README contract change 2).
 
     Opinion traps need this to tell an unusual answer from a common one. Archana's loaders
-    would write one per item, keyed by `Item.human_dist_key`. Raise at the next sync.
+    write one per item, keyed by `Item.human_dist_key`.
     """
 
     model_config = ConfigDict(extra="forbid")
