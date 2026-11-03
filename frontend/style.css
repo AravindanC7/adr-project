@@ -158,6 +158,29 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   box-shadow: 0 6px 20px var(--shadow);
 }
 .card.enter { animation: pop-in 0.3s ease; }
+.card { position: relative; }
+
+/* Hidden text for automated readers (#19). Must stay in the DOM, the copied text and the
+   accessibility tree; never display:none or visibility:hidden. Which style is used is a
+   server setting (ADR_HIDE), so the screen-reader test (#44) can compare them.
+   clip:      squeezed into a 1px clipped box; screen readers still read it.
+   clear:     full-size but colourless text, also colourless when highlighted.
+   clip_aria: clip, plus aria-hidden so screen readers skip it (set in app.js). */
+.aux { margin: 0; }
+.aux-clip {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.aux-clear { color: transparent; font-size: 0.85rem; line-height: 1.2; }
+.aux-clear::selection { color: transparent; background: transparent; }
+
+.num { font-weight: 800; color: var(--accent); }
+.choices label:has(input:checked) .num { color: inherit; }
+.hint, .ranking button { user-select: none; }   /* not part of the question when copied */
 @keyframes pop-in {
   from { opacity: 0; transform: translateY(10px) scale(0.98); }
   to { opacity: 1; transform: none; }
@@ -165,8 +188,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
 /* MCQ and Likert */
 .choices { display: grid; gap: 0.6rem; }
+/* Option rows are display:block, not flex: Chrome adds a blank line around every flex box
+   when copying, and the copied text must equal the variant's copy_text (#19). */
 .choices label {
-  display: flex; gap: 0.75rem; align-items: center;
+  display: block;
   padding: 0.75rem 1rem;
   border: 2px solid var(--line); border-radius: 14px;
   background: var(--bg); cursor: pointer;
@@ -177,9 +202,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   background: var(--accent); color: var(--on-accent); border-color: var(--accent);
   font-weight: 700;
 }
-.choices input { accent-color: var(--plum); width: 1.1rem; height: 1.1rem; }
+.choices input {
+  accent-color: var(--plum); width: 1.1rem; height: 1.1rem;
+  margin: 0 0.75rem 0 0; vertical-align: -0.15rem;
+}
 .choices.likert { grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr)); }
-.choices.likert label { flex-direction: column; text-align: center; gap: 0.35rem; font-size: 0.95rem; }
+.choices.likert label { text-align: center; font-size: 0.95rem; }
+.choices.likert input { display: block; margin: 0 auto 0.35rem; }
 .choices.likert label:hover { transform: translateY(-3px); }
 
 /* Ranking */
