@@ -1,3 +1,12 @@
+/* Self-hosted so the page makes no third-party requests (no Google Fonts): respondents'
+   browsers only ever talk to our server. Nunito, SIL Open Font License, see fonts/OFL.txt. */
+@font-face {
+  font-family: "Nunito";
+  src: url("fonts/Nunito-wght.ttf") format("truetype");
+  font-weight: 200 1000;
+  font-display: swap;
+}
+
 /* Palette: chocolate plum, popcorn, cerulean. Every color below is one of the three or a mix
    of them. Text pairs meet WCAG AA contrast (4.5:1) in both themes. */
 :root {

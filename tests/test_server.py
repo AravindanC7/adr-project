@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 pytest.importorskip("fastapi")  # pip install -e ".[server]"
@@ -8,6 +10,12 @@ from server.app import DEFAULT_BANK, check_answer, create_app, load_bank
 
 # One valid answer per item type, for the stub bank.
 VALID = {"mcq": 1, "likert": 3, "ranking": [3, 1, 0, 2], "numeric": 7, "open_text": "I like it."}
+ITEMS, ASSESSMENTS = load_bank(DEFAULT_BANK)
+
+# Words that must never reach the browser (AGENTS.md 6.5): ids, check names, router state.
+SECRETS = ["handwritten:", "|plain|", "variant", "mechanism", "decoy", "canary", "opinion_trap",
+           "status", "score", "contrib", "history", "correct_option", "eligible", "escalated",
+           "review"]
 
 
 @pytest.fixture
@@ -15,20 +23,26 @@ def client():
     return TestClient(create_app())
 
 
-def respond(client, step, answer, ms=1200):
-    sid, item = step["session_id"], step["item"]
-    return client.post(f"/session/{sid}/respond", json={
-        "variant_id": item["variant_id"],
-        "response": {"session_id": sid, "item_id": item["item_id"],
-                     "variant_id": item["variant_id"], "answer": answer},
+def respond(client, step, answer, ms=1200, token=None):
+    return client.post(f"/session/{step['session_id']}/respond", json={
+        "token": token or step["item"]["token"],
+        "answer": answer,
         "telemetry": {"time_on_item_ms": ms},
     })
 
 
+def walk(client, assessment_id):
+    """Answer every question validly; return every body the browser received."""
+    bodies = [client.post("/session/start", json={"assessment_id": assessment_id}).json()]
+    while not bodies[-1]["finished"]:
+        item = bodies[-1]["item"]
+        bodies.append(respond(client, bodies[-1], VALID[item["item_type"]]).json())
+    return bodies
+
+
 def test_stub_bank_covers_every_item_type():
-    items, assessments = load_bank(DEFAULT_BANK)
-    assert {it.item_type for it in items.values()} == set(VALID)
-    assert set(assessments) == {"stub-quiz", "stub-survey"}
+    assert {it.item_type for it in ITEMS.values()} == set(VALID)
+    assert set(ASSESSMENTS) == {"stub-quiz", "stub-survey"}
 
 
 def test_lists_assessments(client):
@@ -37,54 +51,66 @@ def test_lists_assessments(client):
 
 
 def test_full_survey_walk_in_display_order(client):
-    step = client.post("/session/start", json={"assessment_id": "stub-survey"}).json()
-    seen = []
-    while step["item"] is not None:
-        seen.append(step["item"]["item_id"])
-        assert step["item"]["position"] == len(seen)
-        step = respond(client, step, VALID[step["item"]["item_type"]]).json()
-        assert step.get("session_id"), step
-    assert step["next"] is None
-    assert seen == [f"handwritten:s{i}" for i in range(1, 6)]
-    state = client.get(f"/session/{step['session_id']}").json()
-    assert [v.split("|")[1] for v in state["served"]] == ["plain"] * 5
+    bodies = walk(client, "stub-survey")
+    shown = [b["item"] for b in bodies if b["item"]]
+    expected = [ITEMS[i].stem for i in ASSESSMENTS["stub-survey"].item_ids]
+    assert [it["stem"] for it in shown] == expected
+    assert [it["position"] for it in shown] == [1, 2, 3, 4, 5]
+    assert bodies[-1] == {"session_id": bodies[0]["session_id"], "finished": True, "item": None}
 
 
-def test_browser_never_sees_answer_key_or_hidden_data(client):
+@pytest.mark.parametrize("assessment_id", ["stub-quiz", "stub-survey"])
+def test_browser_never_sees_ids_checks_or_router_state(client, assessment_id):
+    bodies = walk(client, assessment_id)
+    for b in bodies:
+        assert set(b) == {"session_id", "finished", "item"}
+        if b["item"]:
+            assert set(b["item"]) == {"token", "item_type", "stem", "options", "position", "total"}
+    sent = json.dumps(bodies) + json.dumps(client.get("/assessments").json())
+    leaked = [word for word in SECRETS if word in sent]
+    assert leaked == []
+
+
+def test_tokens_are_one_time_and_unguessable(client):
     step = client.post("/session/start", json={"assessment_id": "stub-quiz"}).json()
-    assert set(step) == {"session_id", "status", "next", "item"}
-    assert set(step["item"]) == {
-        "item_id", "variant_id", "item_type", "stem", "options", "position", "total",
-    }
-    assert "score" not in step
+    assert respond(client, step, 1, token="handwritten:q1|plain|0").status_code == 409
+    nxt = respond(client, step, 1).json()
+    assert nxt["item"]["token"] != step["item"]["token"]
+    assert respond(client, step, 1).status_code == 409  # old token, already answered
+
+
+def test_state_endpoint_only_in_debug_mode(client, monkeypatch):
+    sid = client.post("/session/start", json={"assessment_id": "stub-quiz"}).json()["session_id"]
+    assert "score" not in client.get(f"/session/{sid}").text  # falls through to static files
+
+    monkeypatch.setenv("ADR_DEBUG_STATE", "1")
+    debug = TestClient(create_app())
+    bodies = walk(debug, "stub-quiz")
+    state = debug.get(f"/session/{bodies[0]['session_id']}").json()
+    assert [v.split("|")[1] for v in state["served"]] == ["plain"] * 3
 
 
 @pytest.mark.parametrize("answer", [9, -1, True, "1", [0, 1], None])
 def test_rejects_bad_mcq_answers(client, answer):
     step = client.post("/session/start", json={"assessment_id": "stub-quiz"}).json()
-    assert respond(client, step, answer).status_code == 422
-
-
-def test_rejects_answer_to_the_wrong_item(client):
-    step = client.post("/session/start", json={"assessment_id": "stub-quiz"}).json()
-    step["item"]["variant_id"] = "handwritten:q2|plain|0"
-    step["item"]["item_id"] = "handwritten:q2"
-    assert respond(client, step, 1).status_code == 409
+    r = respond(client, step, answer)
+    assert r.status_code == 422 and "handwritten" not in r.text
 
 
 def test_finished_session_and_unknown_ids(client):
-    step = client.post("/session/start", json={"assessment_id": "stub-quiz"}).json()
-    for answer in (1, 1, 7):
-        last, step = step, respond(client, step, answer).json()
-    assert step["item"] is None
-    assert respond(client, last, 7).status_code == 409
-    assert client.get("/session/nope").status_code == 404
+    bodies = walk(client, "stub-quiz")
+    assert respond(client, bodies[-2], 7).status_code == 409
+    assert client.post("/session/nope/respond", json={
+        "token": "x", "answer": 1, "telemetry": {"time_on_item_ms": 1}}).status_code == 404
     assert client.post("/session/start", json={"assessment_id": "nope"}).status_code == 404
 
 
-def test_serves_the_front_end(client):
+def test_serves_the_front_end_with_no_third_party_requests(client):
     page = client.get("/")
     assert page.status_code == 200 and 'id="stem"' in page.text
+    for path in ("/", "/style.css", "/app.js"):
+        assert "https://" not in client.get(path).text.replace("https://github.com", "")
+    assert client.get("/fonts/Nunito-wght.ttf").status_code == 200
 
 
 def _item(item_type, options=None):

@@ -1,5 +1,6 @@
 // Respondent page (step #11 skeleton). Shows whatever item the server sends, one at a time,
-// and posts the answer back as a contract Response (adr/contracts/mechanism.py).
+// and posts back the answer with that question's opaque token. The server keeps every id,
+// check name and score to itself (AGENTS.md 6.5) and builds the contract Response.
 //
 // All item text goes in with textContent, never innerHTML: stems and options are plain text.
 // Hidden spans for the checks come later, from the variant's hidden data (step #19).
@@ -133,7 +134,7 @@ function refresh() {
 
 function render(step) {
   sessionId = step.session_id;
-  if (!step.item) {      // finished (or paused for review; the respondent sees the same page)
+  if (step.finished) {   // finished (or paused for review; the respondent sees the same page)
     current = null;
     $("bar").style.width = "100%";
     show("done");
@@ -176,13 +177,8 @@ async function submit(event) {
   if (answer === null || !current) return;
   $("next").disabled = true;
   const body = {
-    variant_id: current.variant_id,
-    response: {
-      session_id: sessionId,
-      item_id: current.item_id,
-      variant_id: current.variant_id,
-      answer,
-    },
+    token: current.token,   // opaque: the page never learns which item or check this is
+    answer,
     // Time on item only. Paste, focus and keystroke counts come with step #23.
     telemetry: { time_on_item_ms: Math.round(performance.now() - shownAt) },
   };

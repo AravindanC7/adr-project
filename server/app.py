@@ -2,17 +2,23 @@
 
 Owner: Harshini. Reviewer: Arav.
 
-Wraps the router API (adr/contracts/router_api.py) over HTTP, following the endpoint table in
-AGENTS.md section 6.5:
+Wraps the router API (adr/contracts/router_api.py) over HTTP:
 
-    POST /session/start          {assessment_id}                    -> {session_id, status, next, item}
-    POST /session/{id}/respond   {variant_id, response, telemetry}  -> {session_id, status, next, item}
-    GET  /session/{id}           SessionState, for logging and the demo (the browser never calls it)
+    GET  /assessments            the list the start page offers
+    POST /session/start          {assessment_id}            -> {session_id, finished, item}
+    POST /session/{id}/respond   {token, answer, telemetry} -> {session_id, finished, item}
 
-Two additions to that table, both needed to show anything in a browser:
-  * `item`: what to display for `next`. A `Choice` only carries ids, so the server looks up the
-    variant and sends its visible part. Never the answer key, eligible mechanisms or hidden data.
-  * GET /assessments: the list the start page offers.
+What the browser gets, and nothing more (AGENTS.md section 6.5, "Server-side only"): the
+visible question and whether the assessment is finished. An AI agent reads everything the page
+receives, so these stay on the server:
+  * SessionState (score, status, contrib, history). A paused-for-review session looks finished.
+  * Choice.mechanism and every variant_id, which names the mechanism.
+  * item_id (names the source dataset), the answer key and the variant's hidden data.
+Each question carries an opaque one-time `token` instead; the server maps it back to the
+variant and builds the contract Response itself.
+
+Debugging: with ADR_DEBUG_STATE=1, GET /session/{id} returns the SessionState, for the demo
+(#47) and logging. Off by default; never enable it in a session real people take.
 
 What #11 does NOT do yet:
   * Active checks. The router runs with an empty failure map, so it serves every item plain, in
@@ -47,7 +53,6 @@ from adr.contracts import (
     Response,
     SessionState,
     Telemetry,
-    parse_variant_id,
 )
 from adr.harness.copy_paste import plain_variant
 from adr.router.core import SPRTRouter
@@ -67,18 +72,17 @@ class StartRequest(BaseModel):
 class RespondRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    variant_id: str
-    # Kept raw so check_answer sees the JSON as sent: Response's answer field would turn `true`
-    # into 1 and accept it as an option index. Validated as a Response right after that check.
-    response: dict[str, Any]
+    token: str
+    # Raw JSON as sent, so check_answer sees it before Response's answer field would turn
+    # `true` into 1 and accept it as an option index.
+    answer: Any
     telemetry: Telemetry
 
 
 class ShownItem(BaseModel):
     """The part of a variant the browser may see."""
 
-    item_id: str
-    variant_id: str
+    token: str  # opaque, one per question shown; the server maps it back to the variant
     item_type: str
     stem: str
     options: list[str] | None = None
@@ -88,8 +92,7 @@ class ShownItem(BaseModel):
 
 class Step(BaseModel):
     session_id: str
-    status: str
-    next: Choice | None  # None = finished (or paused for review; the browser can't tell which)
+    finished: bool  # also true when paused for review: the browser can't tell the difference
     item: ShownItem | None
 
 
@@ -132,7 +135,8 @@ def check_answer(item: Item, answer: Any) -> None:
     else:  # open_text
         ok = isinstance(answer, str) and answer.strip() != ""
     if not ok:
-        raise ValueError(f"{item.item_id}: {answer!r} is not a valid {item.item_type} answer")
+        # Says what kind of answer is expected, never which item it was.
+        raise ValueError(f"{answer!r} is not a valid {item.item_type} answer")
 
 
 @dataclass
@@ -140,6 +144,7 @@ class _Session:
     state: SessionState
     assessment: Assessment
     current: Choice | None
+    token: str | None = None  # the opaque token for `current`, as the browser knows it
     responses: list[tuple[Response, Telemetry]] = field(default_factory=list)
 
 
@@ -152,27 +157,28 @@ def create_app(bank_path: str | Path | None = None) -> FastAPI:
     router = SPRTRouter(items, variants, FailureMap(version="empty", cells=[]))
     sessions: dict[str, _Session] = {}
 
-    app = FastAPI(title="ADR respondent server")
+    app = FastAPI(title="Survey server", docs_url=None, redoc_url=None, openapi_url=None)
 
     def step(s: _Session) -> Step:
-        item = None
-        if s.current is not None:
-            rendered = by_variant[s.current.variant_id]
-            item = ShownItem(
-                item_id=rendered.item_id,
-                variant_id=rendered.variant_id,
-                item_type=items[rendered.item_id].item_type,
-                stem=rendered.visible["stem"],
-                options=rendered.visible.get("options"),
-                position=len(s.state.served) + 1,
-                total=len(s.assessment.item_ids),
-            )
-        return Step(session_id=s.state.session_id, status=s.state.status, next=s.current, item=item)
+        if s.current is None:
+            s.token = None
+            return Step(session_id=s.state.session_id, finished=True, item=None)
+        rendered = by_variant[s.current.variant_id]
+        s.token = secrets.token_urlsafe(16)
+        item = ShownItem(
+            token=s.token,
+            item_type=items[rendered.item_id].item_type,
+            stem=rendered.visible["stem"],
+            options=rendered.visible.get("options"),
+            position=len(s.state.served) + 1,
+            total=len(s.assessment.item_ids),
+        )
+        return Step(session_id=s.state.session_id, finished=False, item=item)
 
     def get_session(session_id: str) -> _Session:
         s = sessions.get(session_id)
         if s is None:
-            raise HTTPException(404, f"unknown session {session_id!r}")
+            raise HTTPException(404, "unknown session")
         return s
 
     @app.get("/assessments")
@@ -191,7 +197,7 @@ def create_app(bank_path: str | Path | None = None) -> FastAPI:
     def start(req: StartRequest) -> Step:
         assessment = assessments.get(req.assessment_id)
         if assessment is None:
-            raise HTTPException(404, f"unknown assessment {req.assessment_id!r}")
+            raise HTTPException(404, "unknown assessment")
         session_id = uuid.uuid4().hex
         state, choice = router.start(assessment, session_id, seed=secrets.randbelow(2**31))
         s = sessions[session_id] = _Session(state=state, assessment=assessment, current=choice)
@@ -202,27 +208,32 @@ def create_app(bank_path: str | Path | None = None) -> FastAPI:
         s = get_session(session_id)
         if s.current is None:
             raise HTTPException(409, "this session is finished")
-        if req.variant_id != s.current.variant_id:
-            raise HTTPException(409, f"expected an answer to {s.current.variant_id!r}")
-        item_id = parse_variant_id(req.variant_id)[0]
+        if s.token is None or not secrets.compare_digest(req.token, s.token):
+            raise HTTPException(409, "that question is no longer open")
+        choice = s.current
         try:
-            check_answer(items[item_id], req.response.get("answer"))
-            r = Response(**req.response)
-        except ValueError as e:  # pydantic's ValidationError is a ValueError too
+            check_answer(items[choice.item_id], req.answer)
+        except ValueError as e:
             raise HTTPException(422, str(e)) from e
-        if (r.session_id, r.variant_id, r.item_id) != (session_id, req.variant_id, item_id):
-            raise HTTPException(422, "response ids don't match the session and variant")
+        response = Response(
+            session_id=session_id,
+            item_id=choice.item_id,
+            variant_id=choice.variant_id,
+            answer=req.answer,
+        )
 
-        s.responses.append((r, req.telemetry))
+        s.responses.append((response, req.telemetry))
         # Plain variants have outcome "none". Scoring with the active and passive mechanisms
         # (behaviour, style) comes with #19, #25 and #28.
-        s.state = router.update(s.state, req.variant_id, "none")
+        s.state = router.update(s.state, choice.variant_id, "none")
         s.current = router.next(s.state)
         return step(s)
 
-    @app.get("/session/{session_id}")
-    def session_state(session_id: str) -> SessionState:
-        return get_session(session_id).state
+    if os.environ.get("ADR_DEBUG_STATE") == "1":
+
+        @app.get("/session/{session_id}")
+        def session_state(session_id: str) -> SessionState:
+            return get_session(session_id).state
 
     # Last, so the API routes above take precedence over static files.
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
