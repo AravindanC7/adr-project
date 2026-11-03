@@ -126,8 +126,9 @@ function renderOpenText(area, item, onChange) {
 // three (adr/mechanisms/CANARY_SPEC.md). The server picks the hiding style; see style.css.
 function placeAux(aux) {
   if (!aux) return;
-  const node = el("p", { className: aux.style === "clear" ? "aux aux-clear" : "aux aux-clip",
-                         textContent: aux.text });
+  // A div, not a p: Chrome copies a p with a blank line after it, which breaks copy_text.
+  const node = el("div", { className: aux.style === "clear" ? "aux aux-clear" : "aux aux-clip",
+                           textContent: aux.text });
   if (aux.style === "clip_aria") node.setAttribute("aria-hidden", "true");
   if (aux.at === "before_stem") $("stem").before(node);
   else if (aux.at === "after_options") $("answer").after(node);
