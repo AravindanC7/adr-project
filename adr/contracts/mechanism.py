@@ -41,7 +41,11 @@ ACTIVE_MECHANISMS: frozenset[str] = frozenset(OUTCOME_LABELS) - PASSIVE_MECHANIS
 
 
 def make_variant_id(item_id: str, mechanism: str | None, n: int = 0) -> str:
-    """Stable id for one variant: "<item_id>|<mechanism or plain>|<n>"."""
+    """Stable id for one variant: "<item_id>|<mechanism or plain>|<n>".
+
+    Server-side only. Never send to the browser; it names the mechanism. Give the browser
+    an opaque per-step token and map it back on the server.
+    """
     return f"{item_id}|{mechanism or 'plain'}|{n}"
 
 
@@ -58,7 +62,11 @@ class RenderedItem(BaseModel):
 
     item_id: str
     mechanism: MechanismName | None = Field(description="None = plain item, no active check")
-    variant_id: str
+    variant_id: str = Field(
+        description="<item_id>|<mechanism or plain>|<n>. Server-side only. Never send to the "
+        "browser; it names the mechanism. Give the browser an opaque per-step token and map it "
+        "back on the server."
+    )
     visible: dict[str, Any] = Field(description="What a human sees: stem, options")
     hidden: dict[str, Any] = Field(
         default_factory=dict,

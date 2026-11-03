@@ -335,6 +335,8 @@ class Router(Protocol):
 
 The server scores the response with the mechanism's `score()`, calls `router.update()`, and returns `router.next()`. **The score is never sent to the respondent's browser.**
 
+**Server-side only:** `SessionState` (score, status, contrib, history), `Choice.mechanism` and every `variant_id` never reach the browser, because an AI agent reads everything the page receives and variant ids name the mechanism. The server gives the browser an opaque per-step token, maps it back to the `variant_id` itself, and tells the browser only the visible item and whether the assessment is finished.
+
 ---
 
 ## 7. Method details everyone should know

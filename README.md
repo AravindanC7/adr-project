@@ -104,3 +104,7 @@ These go beyond the Oct 17 draft in AGENTS.md section 6:
    `make_variant_id(item_id, "behaviour")` as the id passed to `router.update`.
 7. Router defaults: beta 0.05 (not 0.2), Chernoff-rule selection (not information gain). The
    reasons are in `adr/router/core.py` and `adr/router/selection.py`.
+8. Variant ids and router state stay server-side. `SessionState` (score, status, contrib,
+   history), `Choice.mechanism` and every `variant_id` never reach the browser; variant ids name
+   the mechanism. The server sends an opaque per-step token and maps it back to the variant id.
+   The browser only gets the visible item and whether the assessment is finished.
