@@ -164,6 +164,24 @@ def test_state_endpoint_only_in_debug_mode(client, monkeypatch):
     assert [v.split("|")[1] for v in state["served"]] == ["plain"] * 3
 
 
+def test_full_telemetry_is_kept_and_unknown_fields_are_refused(traps):
+    step = traps.post("/session/start", json={"assessment_id": "stub-quiz"}).json()
+    telemetry = {"time_on_item_ms": 5000, "paste_events": 1, "focus_loss_count": 2,
+                 "keystroke_count": 0, "mean_interkey_ms": None}
+    sid = step["session_id"]
+    extra = dict(telemetry, first_key_ms=300)  # not in the contract yet (proposal for #25)
+    r = traps.post(f"/session/{sid}/respond",
+                   json={"token": step["item"]["token"], "answer": 1, "telemetry": extra})
+    assert r.status_code == 422
+    negative = dict(telemetry, paste_events=-1)
+    r = traps.post(f"/session/{sid}/respond",
+                   json={"token": step["item"]["token"], "answer": 1, "telemetry": negative})
+    assert r.status_code == 422
+    r = traps.post(f"/session/{sid}/respond",
+                   json={"token": step["item"]["token"], "answer": 1, "telemetry": telemetry})
+    assert r.status_code == 200
+
+
 @pytest.mark.parametrize("answer", [9, -1, True, "1", [0, 1], None])
 def test_rejects_bad_mcq_answers(client, answer):
     step = client.post("/session/start", json={"assessment_id": "stub-quiz"}).json()
