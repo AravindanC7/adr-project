@@ -1,7 +1,8 @@
 """The one place in the project that calls a model API.
 
 Every call is cached on disk, keyed by a hash of everything that can change the answer
-(provider, model, system prompt, messages, temperature, max_tokens, prompt_version, sample index).
+(provider, model, system prompt, messages, temperature, max_tokens, prompt_version, sample index,
+and the sha256 of any attached file).
 Re-running a script never pays twice, and teammates who share the cache folder share answers.
 
 A weekly spend cap stops new (uncached) calls once the week's estimated spend reaches the cap.
@@ -11,10 +12,14 @@ Usage:
     out = client.complete("claude-small", [{"role": "user", "content": "Hi"}],
                           prompt_version="cp-v1")
     out.text, out.cached, out.cache_key
+
+Files (e.g. a PDF for the document-upload attacker) go in `attachments`, a list of
+{"filename": str, "mime": str, "data": bytes}. They are attached to the last user message.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -31,12 +36,17 @@ from typing import Any, Protocol
 import yaml
 
 Message = dict[str, str]  # {"role": "user" | "assistant", "content": "..."}
+Attachment = dict[str, Any]  # {"filename": "quiz.pdf", "mime": "application/pdf", "data": b"..."}
 
 DEFAULT_CACHE_DIR = Path(os.environ.get("ADR_CACHE_DIR", "cache/llm"))
 
 
 class SpendCapExceeded(RuntimeError):
     """Raised before an uncached call when this week's spend has reached the cap."""
+
+
+class AttachmentsNotSupported(TypeError):
+    """The provider can't take files. A TypeError, so classify_error treats it as fatal."""
 
 
 @dataclass(frozen=True)
@@ -71,9 +81,41 @@ class Provider(Protocol):
         messages: list[Message],
         temperature: float | None,
         max_tokens: int,
+        attachments: list[Attachment] | None = None,
     ) -> tuple[str, int, int]:
         """Return (text, input_tokens, output_tokens)."""
         ...
+
+
+def _b64(data: bytes) -> str:
+    return base64.b64encode(data).decode("ascii")
+
+
+def _with_files(messages: list[Message], parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Copy of `messages` whose last message is a content list: file parts first, then its text."""
+    *head, last = messages
+    return [*head, {"role": last["role"],
+                    "content": [*parts, {"type": "text", "text": last["content"]}]}]
+
+
+def anthropic_messages(messages: list[Message], attachments: list[Attachment] | None):
+    if not attachments:
+        return messages
+    return _with_files(messages, [
+        {"type": "document", "title": a["filename"],
+         "source": {"type": "base64", "media_type": a["mime"], "data": _b64(a["data"])}}
+        for a in attachments
+    ])
+
+
+def openai_messages(messages: list[Message], attachments: list[Attachment] | None):
+    if not attachments:
+        return messages
+    return _with_files(messages, [
+        {"type": "file", "file": {"filename": a["filename"],
+                                  "file_data": f"data:{a['mime']};base64,{_b64(a['data'])}"}}
+        for a in attachments
+    ])
 
 
 class AnthropicProvider:
@@ -82,8 +124,9 @@ class AnthropicProvider:
 
         self._client = anthropic.Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
 
-    def complete(self, model_id, system, messages, temperature, max_tokens):
-        kwargs: dict[str, Any] = {"model": model_id, "max_tokens": max_tokens, "messages": messages}
+    def complete(self, model_id, system, messages, temperature, max_tokens, attachments=None):
+        kwargs: dict[str, Any] = {"model": model_id, "max_tokens": max_tokens,
+                                  "messages": anthropic_messages(messages, attachments)}
         if system:
             kwargs["system"] = system
         if temperature is not None:
@@ -105,8 +148,15 @@ class OpenAIProvider:
             base_url=base_url,
         )
 
-    def complete(self, model_id, system, messages, temperature, max_tokens):
-        msgs = ([{"role": "system", "content": system}] if system else []) + list(messages)
+    def complete(self, model_id, system, messages, temperature, max_tokens, attachments=None):
+        if attachments and self._compatible:
+            raise AttachmentsNotSupported(
+                f"{model_id}: OpenAI-compatible servers don't support files here; "
+                "use an anthropic, openai or google model for document upload"
+            )
+        msgs = ([{"role": "system", "content": system}] if system else []) + list(
+            openai_messages(messages, attachments)
+        )
         kwargs: dict[str, Any] = {"model": model_id, "messages": msgs}
         # OpenAI's own API now uses max_completion_tokens; most compatible servers use max_tokens.
         kwargs["max_tokens" if self._compatible else "max_completion_tokens"] = max_tokens
@@ -125,7 +175,7 @@ class GoogleProvider:
         self._genai = genai
         self._client = genai.Client(api_key=api_key or os.environ.get("GOOGLE_API_KEY"))
 
-    def complete(self, model_id, system, messages, temperature, max_tokens):
+    def complete(self, model_id, system, messages, temperature, max_tokens, attachments=None):
         types = self._genai.types
         contents = [
             types.Content(
@@ -134,6 +184,9 @@ class GoogleProvider:
             )
             for m in messages
         ]
+        if attachments:
+            files = [types.Part.from_bytes(data=a["data"], mime_type=a["mime"]) for a in attachments]
+            contents[-1].parts = files + contents[-1].parts
         config = types.GenerateContentConfig(
             system_instruction=system, temperature=temperature, max_output_tokens=max_tokens
         )
@@ -147,15 +200,16 @@ class GoogleProvider:
 
 
 class FakeProvider:
-    """Offline provider for tests and dry runs. `fn(system, messages) -> text`."""
+    """Offline provider for tests and dry runs. `fn(system, messages) -> text`, or
+    `fn(system, messages, attachments) -> text` when the call has attachments."""
 
-    def __init__(self, fn: Callable[[str | None, list[Message]], str]):
+    def __init__(self, fn: Callable[..., str]):
         self.fn = fn
         self.calls = 0
 
-    def complete(self, model_id, system, messages, temperature, max_tokens):
+    def complete(self, model_id, system, messages, temperature, max_tokens, attachments=None):
         self.calls += 1
-        text = self.fn(system, messages)
+        text = self.fn(system, messages, attachments) if attachments else self.fn(system, messages)
         return text, sum(len(m["content"]) // 4 for m in messages), len(text) // 4
 
 
@@ -304,9 +358,10 @@ class LLMClient:
         temperature: float | None = 0.0,
         max_tokens: int = 512,
         sample_idx: int = 0,
+        attachments: list[Attachment] | None = None,
     ) -> Completion:
         spec = self.spec(model)
-        request = {
+        request: dict[str, Any] = {
             "system": system,
             "messages": messages,
             "temperature": temperature,
@@ -314,6 +369,13 @@ class LLMClient:
             "prompt_version": prompt_version,
             "sample_idx": sample_idx,
         }
+        if attachments:
+            # Only added when present, so cache keys of calls without files stay the same.
+            request["attachments"] = [
+                {"filename": a["filename"], "mime": a["mime"],
+                 "sha256": hashlib.sha256(a["data"]).hexdigest()}
+                for a in attachments
+            ]
         key = cache_key(spec, request)
         hit = self.read_cache(key)
         if hit is not None:
@@ -330,12 +392,13 @@ class LLMClient:
                 )
 
         provider = self._provider(model)
+        files = {"attachments": attachments} if attachments else {}  # old providers lack the arg
         sent_temperature = None if model in self._no_temperature else temperature
         attempt = 0
         while True:
             try:
                 text, tin, tout = provider.complete(
-                    spec.model_id, system, messages, sent_temperature, max_tokens
+                    spec.model_id, system, messages, sent_temperature, max_tokens, **files
                 )
                 break
             except Exception as e:  # noqa: BLE001 - provider SDKs raise many types
