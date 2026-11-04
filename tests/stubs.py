@@ -7,7 +7,7 @@ hers land. Replace nothing in adr/ with these.
 
 from __future__ import annotations
 
-from adr.contracts import Item, RenderedItem, Response, Telemetry, make_variant_id
+from adr.contracts import Item, NoObservation, RenderedItem, Response, Telemetry, make_variant_id
 
 ITEMS: list[Item] = [
     Item(
@@ -115,3 +115,26 @@ class StubCanary:
         if "if you are an ai" in text:
             return "leaked"
         return "clean"
+
+
+class SkipCanary(StubCanary):
+    """Canary that never has anything to score: tests that callers skip NoObservation."""
+
+    def score(self, rendered: RenderedItem, response: Response, telemetry: Telemetry | None) -> str:
+        raise NoObservation("nothing to score")
+
+
+class SkipStyle:
+    """Passive style check that never has anything to score (like an empty answer)."""
+
+    name = "style"
+    outcomes = ("high", "mid", "low")
+
+    def applies_to(self, item: Item) -> bool:
+        return item.item_type == "open_text"
+
+    def generate(self, item: Item, seed: int) -> RenderedItem:
+        raise RuntimeError("passive")
+
+    def score(self, rendered: RenderedItem, response: Response, telemetry: Telemetry | None) -> str:
+        raise NoObservation("empty answer")

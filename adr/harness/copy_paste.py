@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -30,6 +31,7 @@ from adr.contracts import (
     Assessment,
     Item,
     Mechanism,
+    NoObservation,
     OutcomeRow,
     RenderedItem,
     Response,
@@ -76,6 +78,18 @@ def plain_variant(item: Item) -> RenderedItem:
     )
 
 
+def observe(
+    name: str, mech: Mechanism, rendered: RenderedItem, resp: Response, skipped: Counter[str]
+) -> str | None:
+    """`mech`'s checked outcome, or None when it raises NoObservation (nothing to score, e.g. an
+    empty answer). A skipped observation gets no outcome row; it is counted in `skipped`."""
+    try:
+        return check_outcome(name, mech.score(rendered, resp, None))
+    except NoObservation:
+        skipped[name] += 1
+        return None
+
+
 def _git_commit() -> str | None:
     try:
         return subprocess.run(
@@ -119,6 +133,7 @@ def run_copy_paste(
     rows: list[OutcomeRow] = []
     responses: list[dict] = []
     errors: list[dict] = []
+    skipped: Counter[str] = Counter()  # mechanism -> NoObservation count
     stopped_for_budget = False
 
     def work(job: _Job):
@@ -174,16 +189,16 @@ def run_copy_paste(
             )
             mech_name = job.rendered.mechanism
             if mech_name:
-                outcome = check_outcome(
-                    mech_name, mechanisms[mech_name].score(job.rendered, resp, None)
-                )
+                outcome = observe(mech_name, mechanisms[mech_name], job.rendered, resp, skipped)
             else:
                 outcome = "none"
-            rows.append(OutcomeRow(**base, mechanism=mech_name, outcome=outcome))
+            if outcome is not None:
+                rows.append(OutcomeRow(**base, mechanism=mech_name, outcome=outcome))
             for p_name, p_mech in passive.items():
                 if p_mech.applies_to(job.item):
-                    p_out = check_outcome(p_name, p_mech.score(job.rendered, resp, None))
-                    rows.append(OutcomeRow(**base, mechanism=p_name, outcome=p_out))
+                    p_out = observe(p_name, p_mech, job.rendered, resp, skipped)
+                    if p_out is not None:
+                        rows.append(OutcomeRow(**base, mechanism=p_name, outcome=p_out))
 
     rows.sort(key=lambda r: (r.model or "", r.session_id, r.item_id, r.variant_id, r.mechanism or ""))
     write_outcomes(rows, Path(cfg.results_dir) / "outcomes" / f"{cfg.run_id}.parquet")
@@ -201,6 +216,8 @@ def run_copy_paste(
         "n_jobs": len(jobs),
         "n_rows": len(rows),
         "n_errors": len(errors),
+        "n_skipped_observations": sum(skipped.values()),
+        "skipped_observations": dict(sorted(skipped.items())),  # per mechanism: NoObservation
         "stopped_for_budget": stopped_for_budget,
     }, sort_keys=False))
     with (run_dir / "responses.jsonl").open("w") as f:

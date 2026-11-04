@@ -19,7 +19,7 @@ from adr.harness.llm_client import (
 )
 from adr.harness.pdf_render import render_assessment_pdf
 from adr.harness.prompts import copy_text
-from tests.stubs import ITEMS, ITEMS_BY_ID, StubCanary, StubDecoy
+from tests.stubs import ITEMS, ITEMS_BY_ID, SkipCanary, SkipStyle, StubCanary, StubDecoy
 
 
 def pdf_text(data: bytes) -> str:
@@ -209,6 +209,21 @@ def test_naive_falls_for_decoy_and_rerun_hits_cache(tmp_path):
     rows2 = run_doc_upload(client, assessment, items, variants, mechs, cfg)
     assert fake.calls == calls
     assert [r.outcome for r in rows2] == [r.outcome for r in rows]
+
+
+def test_no_observation_is_skipped_and_counted(tmp_path):
+    import yaml
+
+    client, _ = make_client(tmp_path)
+    assessment, items, variants, mechs = _setup()
+    mechs = {**mechs, "canary": SkipCanary(), "style": SkipStyle()}
+    cfg = DocUploadConfig(run_id="du-skip", models=["fake-a"], results_dir=str(tmp_path))
+    rows = run_doc_upload(client, assessment, items, variants, mechs, cfg)
+    assert len(rows) == 6                               # s1's canary row is gone in both docs
+    assert "canary" not in {r.mechanism for r in rows}
+    config = yaml.safe_load((tmp_path / "runs" / "du-skip" / "config.yaml").read_text())
+    assert config["n_skipped_observations"] == 4
+    assert config["skipped_observations"] == {"canary": 2, "style": 2}
 
 
 def test_warned_attacker_avoids_decoy(tmp_path):

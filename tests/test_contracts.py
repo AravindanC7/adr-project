@@ -14,8 +14,10 @@ from adr.contracts import (
     Item,
     MapCell,
     Mechanism,
+    NoObservation,
     OutcomeRow,
     RenderedItem,
+    Response,
     Telemetry,
     make_variant_id,
     parse_variant_id,
@@ -172,6 +174,36 @@ def test_old_telemetry_still_validates_and_new_fields_are_counts():
             Telemetry(time_on_item_ms=900, **{field: -1})
     with pytest.raises(ValidationError):
         Telemetry(time_on_item_ms=900, pasted_text="secret")    # content is never accepted
+
+
+def _resp(answer):
+    return Response(session_id="s", item_id="x:1", variant_id="x:1|plain|0", answer=answer)
+
+
+@pytest.mark.parametrize("answer", [2, 3.5, 3.0, [2, 0, 1], "I like my team.", "1", None])
+def test_response_answer_is_kept_exactly(answer):
+    got = _resp(answer).answer
+    assert got == answer and type(got) is type(answer)  # int stays int, float stays float, ...
+    again = Response.model_validate_json(_resp(answer).model_dump_json()).answer
+    assert again == answer and type(again) is type(answer)
+
+
+@pytest.mark.parametrize("answer", [True, False, [True, 0], ["1", 2], [1.0, 2]])
+def test_response_answer_rejects_bools_and_coercion(answer):
+    with pytest.raises(ValidationError):
+        _resp(answer)
+
+
+def test_text_one_is_not_option_one():
+    # "1" is valid free text, so Response keeps it, but as text: a decoy never reads it as an index.
+    v = StubDecoy().generate(ITEMS[0], 0)
+    resp = Response(session_id="s", item_id=v.item_id, variant_id=v.variant_id, answer="1")
+    assert resp.answer == "1" and StubDecoy().score(v, resp, None) == "picked_other"
+
+
+def test_no_observation_is_an_exception_not_a_label():
+    assert issubclass(NoObservation, Exception)
+    assert all("NoObservation" not in labels for labels in OUTCOME_LABELS.values())
 
 
 def _canary(hidden):

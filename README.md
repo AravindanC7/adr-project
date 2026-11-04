@@ -93,7 +93,7 @@ Never send `state.score` to the browser.
 ## Contract changes beyond the Oct 17 draft
 
 These go beyond the Oct 17 draft in AGENTS.md section 6. **Items 1–8 are agreed by the team.**
-Items 9–12 (contracts v2) were agreed on Nov 2 and item 13 was added on Nov 3; all land with
+Items 9–12 (contracts v2) were agreed on Nov 2; items 13–15 were added on Nov 3. All land with
 the `arav/contracts-v2` PR.
 
 1. `RenderedItem.copy_text`: the exact text a select-and-copy of the item yields, hidden spans
@@ -127,3 +127,10 @@ the `arav/contracts-v2` PR.
     measured): `first_key_ms` (time until the first keystroke), `away_ms` (total time away
     from the tab), `pasted_chars` (length of pasted text, never the text) and `edit_keys`
     (Backspace/Delete count). Telemetry never holds content. Older telemetry still validates.
+14. `NoObservation` (exception): a mechanism's `score()` raises it when there is nothing to
+    score, e.g. an empty answer. Callers skip that observation: it never becomes an outcome
+    row or a router update. The harness counts skips per mechanism in `config.yaml`
+    (`skipped_observations`); the server and replay must skip them the same way.
+15. `Response.answer` is strict: kept exactly as given. `True`/`False` are rejected, `"1"`
+    stays the text `"1"` (never option 1), `3.0` stays a float, and a ranking must be a list
+    of ints. Whether the type fits the item is checked by the caller and the mechanism.

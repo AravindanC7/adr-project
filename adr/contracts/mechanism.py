@@ -18,7 +18,15 @@ from __future__ import annotations
 
 from typing import Any, Literal, Protocol, get_args, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    model_validator,
+)
 
 from adr.contracts.schema import Item, MechanismName
 
@@ -136,7 +144,10 @@ class Response(BaseModel):
     session_id: str
     item_id: str
     variant_id: str
-    answer: int | list[int] | float | str | None = Field(
+    # Strict: kept exactly as given. True is not option 1, "1" stays the text "1", 3.0 stays a
+    # float. Whether the type fits the item (an index for MCQ, text for open_text) is checked
+    # by the caller and the mechanism, which know the item.
+    answer: StrictInt | list[StrictInt] | StrictFloat | StrictStr | None = Field(
         description="Option index, ranking (list of indexes), number, or text; None = no answer"
     )
     raw_text: str | None = Field(default=None, description="Full model output, or typed text")
@@ -161,6 +172,14 @@ class Telemetry(BaseModel):
     edit_keys: int | None = Field(default=None, ge=0, description="Backspace/Delete count")
 
 
+class NoObservation(Exception):
+    """Raised by a mechanism's score() when there is nothing to score (e.g. an empty answer).
+
+    Callers skip that observation: it never becomes an outcome row or a router update. Use it
+    instead of picking a label, because every label is evidence one way or the other.
+    """
+
+
 @runtime_checkable
 class Mechanism(Protocol):
     """Any detection check. Implement these and it plugs into the harness and the router."""
@@ -174,7 +193,7 @@ class Mechanism(Protocol):
 
     def score(
         self, rendered: RenderedItem, response: Response, telemetry: Telemetry | None
-    ) -> str: ...
+    ) -> str: ...  # one label from `outcomes`, or raise NoObservation
 
 
 def check_outcome(mechanism: str, outcome: str) -> str:

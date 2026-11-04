@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -36,11 +37,10 @@ from adr.contracts import (
     OutcomeRow,
     RenderedItem,
     Response,
-    check_outcome,
     write_outcomes,
 )
 from adr.contracts.outcome import utc_now
-from adr.harness.copy_paste import _git_commit, plain_variant
+from adr.harness.copy_paste import _git_commit, observe, plain_variant
 from adr.harness.llm_client import LLMClient, SpendCapExceeded
 from adr.harness.parse import parse_answer
 from adr.harness.pdf_render import render_assessment_pdf
@@ -147,6 +147,7 @@ def run_doc_upload(
     rows: list[OutcomeRow] = []
     responses: list[dict] = []
     errors: list[dict] = []
+    skipped: Counter[str] = Counter()  # mechanism -> NoObservation count
     stopped_for_budget = False
     attachment_name = re.sub(r"[^A-Za-z0-9_-]+", "_", assessment.assessment_id) + ".pdf"
 
@@ -217,16 +218,16 @@ def run_doc_upload(
                 }
                 mech_name = rendered.mechanism
                 if mech_name:
-                    outcome = check_outcome(
-                        mech_name, mechanisms[mech_name].score(rendered, resp, None)
-                    )
+                    outcome = observe(mech_name, mechanisms[mech_name], rendered, resp, skipped)
                 else:
                     outcome = "none"
-                rows.append(OutcomeRow(**base, mechanism=mech_name, outcome=outcome))
+                if outcome is not None:
+                    rows.append(OutcomeRow(**base, mechanism=mech_name, outcome=outcome))
                 for p_name, p_mech in passive.items():
                     if p_mech.applies_to(item):
-                        p_out = check_outcome(p_name, p_mech.score(rendered, resp, None))
-                        rows.append(OutcomeRow(**base, mechanism=p_name, outcome=p_out))
+                        p_out = observe(p_name, p_mech, rendered, resp, skipped)
+                        if p_out is not None:
+                            rows.append(OutcomeRow(**base, mechanism=p_name, outcome=p_out))
 
     rows.sort(key=lambda r: (r.model or "", r.session_id, r.item_id, r.variant_id, r.mechanism or ""))
     write_outcomes(rows, Path(cfg.results_dir) / "outcomes" / f"{cfg.run_id}.parquet")
@@ -245,6 +246,8 @@ def run_doc_upload(
         "n_jobs": len(jobs),
         "n_rows": len(rows),
         "n_errors": len(errors),
+        "n_skipped_observations": sum(skipped.values()),
+        "skipped_observations": dict(sorted(skipped.items())),  # per mechanism: NoObservation
         "stopped_for_budget": stopped_for_budget,
     }, sort_keys=False))
     with (run_dir / "responses.jsonl").open("w") as f:
