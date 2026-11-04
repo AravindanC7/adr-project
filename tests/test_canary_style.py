@@ -34,6 +34,7 @@ def test_canary_is_deterministic_and_present_in_copy_text() -> None:
 
     assert first.hidden["canary_token"] == second.hidden["canary_token"]
     assert first.hidden["canary_token"] in first.copy_text
+    assert first.hidden["hidden_position"] == "after_stem"
     assert first.hidden["hidden_text"] not in first.visible["stem"]
 
 

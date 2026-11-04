@@ -54,6 +54,7 @@ class CanaryMechanism:
             hidden={
                 "canary_token": token,
                 "hidden_text": hidden_text,
+                "hidden_position": "after_stem",
                 "leak_markers": list(_LEAK_MARKERS),
             },
             copy_text=f"{item.stem}\n{hidden_text}",
