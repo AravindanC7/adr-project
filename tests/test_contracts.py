@@ -16,6 +16,7 @@ from adr.contracts import (
     Mechanism,
     OutcomeRow,
     RenderedItem,
+    Telemetry,
     make_variant_id,
     parse_variant_id,
     read_jsonl,
@@ -142,6 +143,21 @@ def test_rendered_item_rejects_passive_mechanism():
                      visible={"stem": "Q"})
 
 
+def test_old_telemetry_still_validates_and_new_fields_are_counts():
+    old = Telemetry.model_validate_json(
+        '{"time_on_item_ms": 900, "paste_events": 1, "focus_loss_count": 0, '
+        '"keystroke_count": 12, "mean_interkey_ms": 140.5}'
+    )
+    assert (old.first_key_ms, old.away_ms, old.pasted_chars, old.edit_keys) == (None,) * 4
+    new = Telemetry(time_on_item_ms=900, first_key_ms=300, away_ms=0, pasted_chars=42, edit_keys=3)
+    assert new.pasted_chars == 42
+    for field in ("first_key_ms", "away_ms", "pasted_chars", "edit_keys"):
+        with pytest.raises(ValidationError):
+            Telemetry(time_on_item_ms=900, **{field: -1})
+    with pytest.raises(ValidationError):
+        Telemetry(time_on_item_ms=900, pasted_text="secret")    # content is never accepted
+
+
 def _canary(hidden):
     return RenderedItem(item_id="x:1", mechanism="canary", variant_id="x:1|canary|0",
                         visible={"stem": "Q"}, hidden=hidden)
@@ -197,6 +213,22 @@ def test_copy_text_puts_passage_first():
     assert with_passage.startswith("Bees visit flowers.\n\nWhy?")
     assert decoy.hidden["hidden_text"] in with_passage
     assert copy_text(decoy, item).count("Bees") == 1
+
+
+def test_copy_text_keeps_passage_that_is_a_prefix_of_the_stem():
+    item = Item(item_id="arc:p2", source="arc", assessment_type="test", item_type="mcq",
+                passage="Bees", stem="Bees are insects. Why?", options=["Wings", "Legs"],
+                correct_option=1, eligible_mechanisms=["decoy"])
+    for v in (plain_variant(item), StubDecoy().generate(item, 0)):   # with and without copy_text
+        text = copy_text(v, item)
+        assert text.startswith("Bees\n\nBees are insects. Why?\n")
+        assert text.split("\n\n")[0] == "Bees"                      # passage block exactly once
+
+
+@pytest.mark.parametrize("mech,item", [(StubDecoy(), ITEMS[0]), (StubCanary(), ITEMS[2])])
+def test_stub_copy_text_matches_hidden_position(mech, item):
+    v = mech.generate(item, 0)
+    assert v.copy_text == copy_text(v.model_copy(update={"copy_text": None}))
 
 
 # ---------- JSONL io ----------

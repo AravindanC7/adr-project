@@ -93,7 +93,8 @@ Never send `state.score` to the browser.
 ## Contract changes beyond the Oct 17 draft
 
 These go beyond the Oct 17 draft in AGENTS.md section 6. **Items 1–8 are agreed by the team.**
-Items 9–12 (contracts v2) were agreed on Nov 2 and land with the `arav/contracts-v2` PR.
+Items 9–12 (contracts v2) were agreed on Nov 2 and item 13 was added on Nov 3; all land with
+the `arav/contracts-v2` PR.
 
 1. `RenderedItem.copy_text`: the exact text a select-and-copy of the item yields, hidden spans
    included. The mechanism sets it, because only it knows where hidden text goes.
@@ -112,10 +113,16 @@ Items 9–12 (contracts v2) were agreed on Nov 2 and land with the `arav/contrac
 9. `AssessmentType` gains `"test"` (a quiz with right answers and a time limit) and
    `"assignment"` (written answers). `Item.correct_option` is allowed on quiz and test items.
 10. `Item.passage` (optional): reading-comprehension text shown before the stem, which asks about
-    it. `Assessment.time_limit_s` (optional, > 0): time allowed for the whole assessment.
+    it. A mechanism's `copy_text` never includes the passage; the harness always adds it in
+    front, once. `Assessment.time_limit_s` (optional, > 0): time allowed for the whole
+    assessment.
 11. `HiddenPosition = "before_stem" | "after_stem" | "after_options"`. A variant whose `hidden`
     has `hidden_text` must also have `hidden_position`; copy text, the PDF and the page all place
     hidden text from it. Mechanisms may add their own extra keys to `hidden`.
 12. JSONL files via `adr/contracts/io.py`: `write_jsonl(path, models)` and
     `read_jsonl(path, model_cls)`, which reports the line number of a bad line. Variants are stored
     one file per assessment, at `variants/<assessment_id>.jsonl` (`variants_path(root, id)`).
+13. `Telemetry` gains four optional counts and timings (all >= 0, default None = not
+    measured): `first_key_ms` (time until the first keystroke), `away_ms` (total time away
+    from the tab), `pasted_chars` (length of pasted text, never the text) and `edit_keys`
+    (Backspace/Delete count). Telemetry never holds content. Older telemetry still validates.

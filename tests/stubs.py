@@ -105,7 +105,7 @@ class StubCanary:
             visible={"stem": item.stem},
             hidden={"canary_token": token, "hidden_text": hidden_text,
                     "hidden_position": "after_stem"},
-            copy_text=f"{item.stem} {hidden_text}",
+            copy_text=f"{item.stem}\n{hidden_text}",
         )
 
     def score(self, rendered: RenderedItem, response: Response, telemetry: Telemetry | None) -> str:

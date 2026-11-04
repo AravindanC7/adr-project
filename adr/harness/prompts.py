@@ -49,15 +49,14 @@ FORMAT_HINT = {
 def copy_text(rendered: RenderedItem, item: Item | None = None) -> str:
     """The text a person gets by selecting and copying the item on the page.
 
-    The item's reading passage (if any) comes first. Then the mechanism's own `copy_text` if it
-    set one; otherwise stem and numbered options, with hidden text placed by hidden_position.
+    The item's reading passage (if any) comes first, exactly once: it is added here and never
+    by the mechanism (RenderedItem.copy_text leaves it out). Then the mechanism's own `copy_text`
+    if it set one; otherwise stem and numbered options, with hidden text placed by hidden_position.
     """
-    passage = item.passage if item else None
+    passage = item.passage if item is not None else None
     if rendered.copy_text:
-        text = rendered.copy_text
-        if passage and not text.startswith(passage):
-            text = f"{passage}\n\n{text}"
-        return text
+        body = rendered.copy_text
+        return f"{passage}\n\n{body}" if passage is not None else body
     stem = rendered.visible["stem"]
     options = [f"{i + 1}. {o}" for i, o in enumerate(rendered.visible.get("options") or [])]
     hidden = rendered.hidden.get("hidden_text")
@@ -70,7 +69,7 @@ def copy_text(rendered: RenderedItem, item: Item | None = None) -> str:
         *([hidden] if hidden and position == "after_options" else []),
     ]
     body = "\n".join(lines)
-    return f"{passage}\n\n{body}" if passage else body
+    return f"{passage}\n\n{body}" if passage is not None else body
 
 
 def build_prompt(

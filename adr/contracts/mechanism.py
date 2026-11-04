@@ -92,7 +92,8 @@ class RenderedItem(BaseModel):
         description=(
             "Exact text a person gets by selecting and copying this item on the page, "
             "including visually hidden spans. None = the harness builds it from `visible`. "
-            "The mechanism sets it because only the mechanism knows where hidden text goes."
+            "The mechanism sets it because only the mechanism knows where hidden text goes. "
+            "Never includes Item.passage: the harness always adds the passage in front."
         ),
     )
     burden: float = Field(default=0.0, ge=0.0, description="Extra effort for an honest respondent")
@@ -137,7 +138,8 @@ class Response(BaseModel):
 
 
 class Telemetry(BaseModel):
-    """Per item. Timings and counts only; never the characters typed."""
+    """Per item. Counts and timings only, never content: no characters typed, no pasted text,
+    no keys pressed. None = the page did not measure it."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -146,6 +148,12 @@ class Telemetry(BaseModel):
     focus_loss_count: int = Field(default=0, ge=0)
     keystroke_count: int = Field(default=0, ge=0)
     mean_interkey_ms: float | None = Field(default=None, ge=0)
+    first_key_ms: int | None = Field(default=None, ge=0, description="Time until the first keystroke")
+    away_ms: int | None = Field(default=None, ge=0, description="Total time away from the tab")
+    pasted_chars: int | None = Field(
+        default=None, ge=0, description="Length of pasted text, never the text"
+    )
+    edit_keys: int | None = Field(default=None, ge=0, description="Backspace/Delete count")
 
 
 @runtime_checkable
