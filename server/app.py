@@ -7,6 +7,9 @@ Wraps the router API (adr/contracts/router_api.py) over HTTP:
     GET  /assessments            the list the start page offers
     POST /session/start          {assessment_id}            -> {session_id, finished, item}
     POST /session/{id}/respond   {token, answer, telemetry} -> {session_id, finished, item}
+    GET  /study                  {consent}: the consent text in pilot mode, else null
+    POST /session/{id}/withdraw  removes the session and everything answered (Stop button)
+    GET  /session/{id}/debrief   {paragraphs}: pilot only, and only once the session finished
 
 What the browser gets, and nothing more (AGENTS.md section 6.5, "Server-side only"): the
 visible question and whether the assessment is finished. An AI agent reads everything the page
@@ -31,6 +34,8 @@ Settings (environment variables):
                           test (#44) compares them. Default clip.
   ADR_STUB_MECHANISMS=1   Use the test stubs (tests/stubs.py) instead of adr/mechanisms/, for
                           trying the page before Archana's mechanisms are on main.
+  ADR_PILOT=1             Human pilot (#30, #35): consent screen before question 1, a Stop
+                          button, and the debrief after the last one. Text in docs/pilot/.
   ADR_DEBUG_STATE=1       GET /session/{id} returns the SessionState, for the demo (#47) and
                           logging. Never enable it in a session real people take.
 
@@ -75,6 +80,7 @@ from adr.router.core import SPRTRouter
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BANK = ROOT / "server" / "stub_items.json"
 FRONTEND_DIR = ROOT / "frontend"
+PILOT_DIR = ROOT / "docs" / "pilot"
 
 # Mechanisms that change what the page shows. Opinion traps, behaviour and style only look at
 # answers (passive), so the page has nothing to inject for them; glitch tokens are out for now.
@@ -89,6 +95,7 @@ class StartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     assessment_id: str
+    consent: bool = False  # required in pilot mode: the person pressed "I agree"
 
 
 class RespondRequest(BaseModel):
@@ -125,6 +132,14 @@ class Step(BaseModel):
     session_id: str
     finished: bool  # also true when paused for review: the browser can't tell the difference
     item: ShownItem | None
+
+
+class Study(BaseModel):
+    consent: list[str] | None  # paragraphs to show before starting; None = no consent step
+
+
+class Debrief(BaseModel):
+    paragraphs: list[str]
 
 
 class AssessmentInfo(BaseModel):
@@ -168,6 +183,20 @@ def check_answer(item: Item, answer: Any) -> None:
     if not ok:
         # Says what kind of answer is expected, never which item it was.
         raise ValueError(f"{answer!r} is not a valid {item.item_type} answer")
+
+
+def screen_text(path: str | Path) -> list[str]:
+    """Paragraphs of the "## On screen" section of a docs/pilot file, so the wording lives in
+    one place that reviewers can read. Plain text, one paragraph per blank-line block."""
+    text = Path(path).read_text(encoding="utf-8")
+    _, found, rest = text.partition("\n## On screen\n")
+    if not found:
+        raise ValueError(f"{path}: no '## On screen' section")
+    section = rest.split("\n## ", 1)[0]
+    paragraphs = [" ".join(block.split()) for block in section.split("\n\n") if block.strip()]
+    if not paragraphs:
+        raise ValueError(f"{path}: the '## On screen' section is empty")
+    return paragraphs
 
 
 def load_injected_mechanisms(stubs: bool = False) -> dict[str, Mechanism]:
@@ -218,6 +247,7 @@ class _Session:
     assessment: Assessment
     current: Choice | None
     token: str | None = None  # the opaque token for `current`, as the browser knows it
+    consented: bool = False  # pilot: pressed "I agree" (the only thing stored about consent)
     responses: list[tuple[Response, Telemetry]] = field(default_factory=list)
     outcomes: list[tuple[str, str]] = field(default_factory=list)  # (variant_id, outcome)
 
@@ -228,6 +258,7 @@ def create_app(
     mechanisms: dict[str, Mechanism] | None = None,
     pick: Pick | None = None,
     hide: Hide | None = None,
+    pilot: bool | None = None,
 ) -> FastAPI:
     items, assessments = load_bank(bank_path or os.environ.get("ADR_ITEMS", DEFAULT_BANK))
     if mechanisms is None:
@@ -236,6 +267,13 @@ def create_app(
     hide = hide or os.environ.get("ADR_HIDE", "clip")  # type: ignore[assignment]
     if pick not in ("all", "router") or hide not in ("clip", "clear", "clip_aria"):
         raise ValueError(f"bad ADR_PICK={pick!r} or ADR_HIDE={hide!r}")
+    if pilot is None:
+        pilot = os.environ.get("ADR_PILOT") == "1"
+    if pilot and os.environ.get("ADR_DEBUG_STATE") == "1":
+        raise ValueError("ADR_PILOT=1 with ADR_DEBUG_STATE=1 would expose real sessions' state")
+    # Read at startup, so a broken file stops the server before anyone sees the page.
+    consent = screen_text(PILOT_DIR / "consent.md") if pilot else None
+    debrief = screen_text(PILOT_DIR / "debrief.md") if pilot else None
 
     variants = build_variants(items, mechanisms)
     by_variant = {v.variant_id: v for vs in variants.values() for v in vs}
@@ -299,14 +337,22 @@ def create_app(
             for a in assessments.values()
         ]
 
+    @app.get("/study")
+    def study() -> Study:
+        return Study(consent=consent)
+
     @app.post("/session/start")
     def start(req: StartRequest) -> Step:
+        if pilot and not req.consent:
+            raise HTTPException(403, "please read and agree to the consent screen first")
         assessment = assessments.get(req.assessment_id)
         if assessment is None:
             raise HTTPException(404, "unknown assessment")
         session_id = uuid.uuid4().hex
         state, choice = router.start(assessment, session_id, seed=secrets.randbelow(2**31))
-        s = sessions[session_id] = _Session(state=state, assessment=assessment, current=choice)
+        s = sessions[session_id] = _Session(
+            state=state, assessment=assessment, current=choice, consented=req.consent
+        )
         s.current = next_choice(s)
         return step(s)
 
@@ -342,6 +388,23 @@ def create_app(
         s.state = router.update(s.state, choice.variant_id, outcome)
         s.current = next_choice(s)
         return step(s)
+
+    @app.post("/session/{session_id}/withdraw")
+    def withdraw(session_id: str) -> dict[str, bool]:
+        """Stop button or "Remove my answers": forget the session and all its answers."""
+        get_session(session_id)
+        del sessions[session_id]
+        return {"withdrawn": True}
+
+    @app.get("/session/{session_id}/debrief")
+    def debrief_text(session_id: str) -> Debrief:
+        """Explains the hidden checks, so only after the last question (agents read the page)."""
+        s = get_session(session_id)
+        if debrief is None:
+            raise HTTPException(404, "no debrief outside the pilot")
+        if s.current is not None:
+            raise HTTPException(409, "the session isn't finished yet")
+        return Debrief(paragraphs=debrief)
 
     if os.environ.get("ADR_DEBUG_STATE") == "1":
 

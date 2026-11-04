@@ -11,6 +11,7 @@ const $ = (id) => document.getElementById(id);
 let sessionId = null;
 let current = null;           // the ShownItem being answered
 let getAnswer = () => null;   // current answer, or null while unanswered
+let consentText = null;       // pilot (ADR_PILOT=1): paragraphs to agree to before starting
 
 async function api(path, body) {
   const init = body === undefined ? {} : {
@@ -27,7 +28,7 @@ async function api(path, body) {
 }
 
 function show(screen) {
-  for (const id of ["start", "question", "done"]) $(id).hidden = id !== screen;
+  for (const id of ["start", "consent", "question", "done"]) $(id).hidden = id !== screen;
 }
 
 function setError(message) {
@@ -38,6 +39,10 @@ function el(tag, props = {}, ...children) {
   const node = Object.assign(document.createElement(tag), props);
   node.append(...children);
   return node;
+}
+
+function paragraphs(box, texts) {
+  box.replaceChildren(...texts.map((t) => el("p", { textContent: t })));
 }
 
 // ------------------------------------------------------------------ one renderer per item type
@@ -155,6 +160,7 @@ function render(step) {
     $("bar").style.width = "100%";
     show("done");
     $("again").focus();
+    if (consentText) showDebrief();
     return;
   }
   current = step.item;
@@ -179,11 +185,11 @@ function render(step) {
   ItemTelemetry.start(area);
 }
 
-async function begin(assessmentId, title) {
+async function begin(assessmentId, title, consent = false) {
   setError("");
   $("brand").textContent = title;
   try {
-    render(await api("/session/start", { assessment_id: assessmentId }));
+    render(await api("/session/start", { assessment_id: assessmentId, consent }));
   } catch (e) {
     setError(e.message);
   }
@@ -226,17 +232,88 @@ async function loadAssessments() {
     );
     button.querySelector(".chip").setAttribute("aria-hidden", "true");
     button.querySelector(".pick-go").setAttribute("aria-hidden", "true");
-    button.addEventListener("click", () => begin(a.assessment_id, a.title));
+    button.addEventListener("click", () => (consentText ? askConsent(a) : begin(a.assessment_id, a.title)));
     list.append(el("li", {}, button));
   }
 }
 
 const ICONS = { quiz: "🧠", survey: "💬" };
 
-$("form").addEventListener("submit", submit);
-$("again").addEventListener("click", () => {
+// ------------------------------------------------------------------ pilot: consent, stop, debrief
+
+let consentFor = null;   // the assessment waiting for "I agree"
+
+function askConsent(a) {
+  setError("");
+  consentFor = a;
+  $("agree").checked = false;
+  $("consent-yes").disabled = true;
+  show("consent");
+  $("consent-text").focus();
+}
+
+async function withdraw() {
+  await api(`/session/${encodeURIComponent(sessionId)}/withdraw`, {});
+  sessionId = null;
+}
+
+// The debrief explains the hidden checks, so the server only sends it once the session is
+// over; it is never in the page before that (an AI agent reads the whole page).
+async function showDebrief() {
+  try {
+    const { paragraphs: texts } = await api(`/session/${encodeURIComponent(sessionId)}/debrief`);
+    paragraphs($("debrief"), texts);
+    $("debrief").hidden = false;
+    $("remove").hidden = false;
+  } catch (e) {
+    setError(e.message);
+  }
+}
+
+function backToStart(message = "") {
   setError("");
   $("brand").textContent = "Quick Questions";
+  $("debrief").hidden = true;
+  $("debrief").replaceChildren();
+  $("remove").hidden = true;
+  $("withdrawn").textContent = "";
+  $("start-note").textContent = message;
   show("start");
+}
+
+$("agree").addEventListener("change", () => { $("consent-yes").disabled = !$("agree").checked; });
+$("consent-yes").addEventListener("click", () => begin(consentFor.assessment_id, consentFor.title, true));
+$("consent-no").addEventListener("click", () => backToStart("No problem, thanks for looking. You can close this page."));
+$("stop").addEventListener("click", async () => {
+  try {
+    await withdraw();
+    current = null;
+    backToStart("You stopped, and everything you answered has been removed. Thank you anyway!");
+  } catch (e) {
+    setError(e.message);
+  }
 });
-loadAssessments().catch((e) => setError(e.message));
+$("remove").addEventListener("click", async () => {
+  try {
+    await withdraw();
+    $("remove").hidden = true;
+    $("withdrawn").textContent = "Done: your answers have been removed. Thank you for taking part.";
+  } catch (e) {
+    setError(e.message);
+  }
+});
+
+$("form").addEventListener("submit", submit);
+$("again").addEventListener("click", () => backToStart());
+
+async function init() {
+  const study = await api("/study");
+  consentText = study.consent;
+  if (consentText) {
+    paragraphs($("consent-text"), consentText);
+    $("consent-text").tabIndex = -1;
+    $("stop").hidden = false;
+  }
+  await loadAssessments();
+}
+init().catch((e) => setError(e.message));

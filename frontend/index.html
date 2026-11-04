@@ -20,7 +20,19 @@
     <section id="start">
       <h1>Hi there 👋</h1>
       <p class="lead">Pick one to begin. It only takes a few minutes.</p>
+      <p id="start-note" class="lead" role="status"></p>
       <ul id="assessments" class="assessments"></ul>
+    </section>
+
+    <!-- Pilot only (ADR_PILOT=1). The wording comes from the server (docs/pilot/consent.md). -->
+    <section id="consent" hidden>
+      <h1>Before you start</h1>
+      <div id="consent-text" class="card prose"></div>
+      <label class="agree"><input id="agree" type="checkbox"> I am 18 or older, I have read the above and I agree to take part.</label>
+      <div class="row">
+        <button id="consent-yes" class="primary" type="button" disabled>I agree, start →</button>
+        <button id="consent-no" class="quiet" type="button">No thanks</button>
+      </div>
     </section>
 
     <section id="question" hidden>
@@ -35,6 +47,7 @@
         </div>
         <button id="next" class="primary" type="submit" disabled>Next →</button>
       </form>
+      <button id="stop" class="quiet" type="button" hidden>Stop and remove my answers</button>
     </section>
 
     <section id="done" hidden>
@@ -43,7 +56,13 @@
       <div class="confetti" aria-hidden="true">
         <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
       </div>
-      <button id="again" class="primary" type="button">Back to the start</button>
+      <!-- Pilot only: filled from the server after the last question, never part of this HTML. -->
+      <div id="debrief" class="card prose" hidden></div>
+      <p id="withdrawn" class="lead" role="status"></p>
+      <div class="row center">
+        <button id="remove" class="quiet" type="button" hidden>Remove my answers</button>
+        <button id="again" class="primary" type="button">Back to the start</button>
+      </div>
     </section>
   </main>
 </body>
