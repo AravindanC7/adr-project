@@ -40,6 +40,16 @@ def test_mmlu_subject_filter_reports_missing_subjects(tmp_path: Path) -> None:
         load_mmlu(tmp_path, split="test", subjects={"astronomy", "virology"})
 
 
+def test_mmlu_rejects_duplicate_options_case_insensitively(tmp_path: Path) -> None:
+    split_dir = tmp_path / "test"
+    split_dir.mkdir()
+    with (split_dir / "astronomy_test.csv").open("w", encoding="utf-8", newline="") as handle:
+        csv.writer(handle).writerow(["Q?", "Yes", "yes", "No", "Maybe", "A"])
+
+    with pytest.raises(ValueError, match="options must be unique"):
+        load_mmlu(tmp_path, split="test")
+
+
 def test_loads_normalized_arc_record(tmp_path: Path) -> None:
     path = tmp_path / "ARC-Challenge-Train.jsonl"
     record = {

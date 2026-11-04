@@ -90,3 +90,22 @@ def test_rejects_invalid_weights(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="invalid respondent weight"):
         load_opinionqa(tmp_path)
+
+
+def test_warns_when_non_refusal_answers_do_not_match_options(tmp_path: Path) -> None:
+    wave = _synthetic_wave(tmp_path)
+    _write_csv(
+        wave / "responses.csv",
+        ["WEIGHT_W26", "Q1", "Q2"],
+        [
+            {"WEIGHT_W26": "1", "Q1": "More trees", "Q2": "Often"},
+            {"WEIGHT_W26": "1", "Q1": "more trees", "Q2": "Often"},
+            {"WEIGHT_W26": "1", "Q1": "More benches.", "Q2": "Often"},
+            {"WEIGHT_W26": "1", "Q1": "Refused", "Q2": "Often"},
+        ],
+    )
+
+    with pytest.warns(RuntimeWarning, match="ignored 2/4.*non-refusal answers"):
+        _, distributions = load_opinionqa(tmp_path)
+
+    assert distributions[0].n_respondents == 1

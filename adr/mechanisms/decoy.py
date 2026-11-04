@@ -15,11 +15,12 @@ class DecoyMechanism:
 
     def applies_to(self, item: Item) -> bool:
         return (
-            item.assessment_type == "quiz"
+            item.assessment_type in {"quiz", "test"}
             and item.item_type == "mcq"
             and item.options is not None
             and item.correct_option is not None
             and len(item.options) >= 2
+            and len({option.casefold() for option in item.options}) == len(item.options)
         )
 
     def generate(self, item: Item, seed: int) -> RenderedItem:
@@ -47,6 +48,7 @@ class DecoyMechanism:
                 "decoy_option_index": decoy_index,
                 "correct_option_index": item.correct_option,
                 "hidden_text": hidden_text,
+                "hidden_position": "after_stem",
             },
             copy_text=f"{item.stem}\n{hidden_text}\n{formatted_options}",
             burden=0.0,
@@ -54,9 +56,12 @@ class DecoyMechanism:
 
     def score(self, rendered: RenderedItem, response: Response, telemetry: Telemetry | None) -> str:
         del telemetry
-        if response.answer == rendered.hidden["decoy_option_index"]:
+        answer = response.answer
+        if type(answer) is not int:
+            return "picked_other"
+        if answer == rendered.hidden["decoy_option_index"]:
             return "picked_decoy"
-        if response.answer == rendered.hidden["correct_option_index"]:
+        if answer == rendered.hidden["correct_option_index"]:
             return "picked_correct"
         return "picked_other"
 

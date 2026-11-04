@@ -49,6 +49,11 @@ def load_mmlu(
                 stem, *options, answer = (value.strip() for value in row)
                 if not stem or any(not option for option in options):
                     raise ValueError(f"{path}:{row_number}: question and options must be non-empty")
+                normalized_options = [option.casefold() for option in options]
+                if len(set(normalized_options)) != len(normalized_options):
+                    raise ValueError(
+                        f"{path}:{row_number}: options must be unique (case-insensitive)"
+                    )
                 answer_index = ANSWER_INDEX.get(answer.upper())
                 if answer_index is None:
                     raise ValueError(f"{path}:{row_number}: answer must be one of A, B, C, D")

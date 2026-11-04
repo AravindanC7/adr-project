@@ -28,6 +28,7 @@ For a stable `(item_id, seed)` pair, generate:
 - `visible`: the original stem and any normal visible fields
 - `hidden.canary_token`: deterministic high-entropy token, for example `adr-cny-4f8a91c2`
 - `hidden.hidden_text`: a short instruction requiring the exact token in the answer
+- `hidden.hidden_position`: `"after_stem"` for the v0 stem-then-instruction copy order
 - `hidden.instruction_version`: version string such as `canary-v1`
 - `copy_text`: visible question text plus the hidden instruction, in actual selection order
 - `burden = 0.0` while the text remains visually hidden
@@ -42,8 +43,9 @@ Do not use an ordinary English word that an honest respondent might produce acci
    the accessibility tree by default; those approaches can also remove it from attacker-visible text.
 3. Keep the hiding method configurable because the planned screen-reader test must compare behavior.
 4. The exact browser copy result must equal `RenderedItem.copy_text` in an automated frontend test.
-5. Never expose `hidden` fields through a respondent-facing API response. The server may retain them
-   for scoring.
+5. Never expose `hidden` fields, the mechanism name, or `variant_id` through a respondent-facing API
+   response. The server retains them for scoring and sends only an opaque, one-time step token to
+   the browser.
 
 ## Scoring order
 

@@ -14,6 +14,7 @@ import ast
 import csv
 import math
 import re
+import warnings
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,7 @@ from typing import Any
 from adr.contracts import HumanDistribution, Item
 
 WAVE_DIRECTORY = re.compile(r"American_Trends_Panel_W(?P<wave>\d+)$")
+UNMATCHED_ANSWER_WARNING_SHARE = 0.01
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,7 @@ class _SourceQuestion:
     native_key: str
     stem: str
     displayed_options: tuple[str, ...]
+    excluded_options: tuple[str, ...]
 
 
 def load_opinionqa(human_resp_dir: str | Path) -> tuple[list[Item], list[HumanDistribution]]:
@@ -110,7 +113,11 @@ def _read_questions(path: Path, wave: int) -> list[_SourceQuestion]:
                 f"{path}:{row_number}: fewer references than displayed ordinal options"
             )
 
+        # OpinionQA stores the displayed ordinal answers first and refusal-like answers after
+        # them. Keep the omitted references so responses to them can be distinguished from
+        # genuinely unknown/malformed answers instead of silently dropping both groups.
         options = tuple(references[: len(ordinals)])
+        excluded_options = tuple(references[len(ordinals) :])
         if len(options) < 2:
             raise ValueError(f"{path}:{row_number}: question needs at least two options")
         if len(options) != len(set(options)):
@@ -122,6 +129,7 @@ def _read_questions(path: Path, wave: int) -> list[_SourceQuestion]:
                 native_key=native_key,
                 stem=stem,
                 displayed_options=options,
+                excluded_options=excluded_options,
             )
         )
     return questions
@@ -145,6 +153,9 @@ def _human_distribution(
 ) -> HumanDistribution:
     weighted_counts = {option: 0.0 for option in question.displayed_options}
     n_respondents = 0
+    n_nonmissing = 0
+    n_unmatched = 0
+    unmatched_examples: set[str] = set()
 
     for row_number, row in enumerate(responses, start=2):
         if question.native_key not in row:
@@ -156,6 +167,7 @@ def _human_distribution(
         weight_text = (row.get(weight_column) or "").strip()
         if not answer or not weight_text:
             continue
+        n_nonmissing += 1
 
         try:
             weight = float(weight_text)
@@ -171,6 +183,21 @@ def _human_distribution(
         if answer in weighted_counts:
             weighted_counts[answer] += weight
             n_respondents += 1
+        elif answer not in question.excluded_options:
+            n_unmatched += 1
+            if len(unmatched_examples) < 3:
+                unmatched_examples.add(answer)
+
+    unmatched_share = n_unmatched / n_nonmissing if n_nonmissing else 0.0
+    if n_unmatched and unmatched_share > UNMATCHED_ANSWER_WARNING_SHARE:
+        examples = ", ".join(repr(value) for value in sorted(unmatched_examples))
+        warnings.warn(
+            f"{_item_id(question)}: ignored {n_unmatched}/{n_nonmissing} "
+            f"({unmatched_share:.1%}) non-refusal answers that did not exactly match an option; "
+            f"examples: {examples}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     total_weight = sum(weighted_counts.values())
     if n_respondents == 0 or total_weight <= 0:

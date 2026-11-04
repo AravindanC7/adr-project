@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from pathlib import Path
+from typing import Self
 
 from adr.contracts import (
     HumanDistribution,
@@ -43,10 +45,32 @@ class OpinionTrapMechanism:
         if isinstance(distributions, Mapping):
             store = dict(distributions)
         else:
-            store = {distribution.key: distribution for distribution in distributions}
-        if len(store) != len(set(store)):
-            raise ValueError("human distribution keys must be unique")
+            store = {}
+            for distribution in distributions:
+                if distribution.key in store:
+                    raise ValueError(
+                        f"human distribution keys must be unique: {distribution.key!r}"
+                    )
+                store[distribution.key] = distribution
         self.distributions = store
+
+    @classmethod
+    def from_opinionqa(
+        cls,
+        human_resp_dir: str | Path,
+        *,
+        implausible_max_probability: float = 0.05,
+    ) -> Self:
+        """Load OpinionQA data and return a configured mechanism for runs or generation."""
+
+        # Local import avoids making dataset loading a requirement merely to import mechanisms.
+        from adr.data.loaders.opinionqa import load_opinionqa
+
+        _, distributions = load_opinionqa(human_resp_dir)
+        return cls(
+            distributions,
+            implausible_max_probability=implausible_max_probability,
+        )
 
     def applies_to(self, item: Item) -> bool:
         return (
@@ -90,10 +114,10 @@ class OpinionTrapMechanism:
         threshold = rendered.hidden["implausible_max_probability"]
 
         # A missing or unparsable answer is not evidence from the opinion distribution itself.
-        if not isinstance(answer, int):
+        if type(answer) is not int:
             return "plausible"
         if not 0 <= answer < len(probabilities):
-            return "implausible"
+            return "plausible"
         if probabilities[answer] <= threshold:
             return "implausible"
         return "plausible"
