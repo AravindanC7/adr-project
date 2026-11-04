@@ -5,7 +5,7 @@ import re
 import pytest
 from pypdf import PdfReader
 
-from adr.contracts import Assessment, read_outcomes
+from adr.contracts import Assessment, Item, RenderedItem, read_outcomes
 from adr.harness.copy_paste import plain_variant
 from adr.harness.doc_upload import DocUploadConfig, build_documents, run_doc_upload, split_answers
 from adr.harness.llm_client import (
@@ -18,6 +18,7 @@ from adr.harness.llm_client import (
     openai_messages,
 )
 from adr.harness.pdf_render import render_assessment_pdf
+from adr.harness.prompts import copy_text
 from tests.stubs import ITEMS, ITEMS_BY_ID, StubCanary, StubDecoy
 
 
@@ -106,6 +107,22 @@ def test_hidden_text_is_extractable_but_drawn_invisibly():
     visible = [s for s, mode in drawn if mode == 0]
     assert q1.stem in visible and "4. Mars" in visible and s1.stem in visible
     assert not any(h in s for s, _ in drawn if _ == 0 for h in hidden)
+
+
+@pytest.mark.parametrize("position", ["before_stem", "after_stem", "after_options"])
+def test_pdf_places_passage_and_hidden_text_like_copy_text(position):
+    item = Item(item_id="arc:p1", source="arc", assessment_type="test", item_type="mcq",
+                passage="Bees", stem="Bees are insects. Why?", options=["Wings", "Legs"],
+                correct_option=1, eligible_mechanisms=["decoy"])
+    v = RenderedItem(item_id=item.item_id, mechanism="decoy", variant_id="arc:p1|decoy|0",
+                     visible={"stem": item.stem, "options": item.options},
+                     hidden={"hidden_text": "HIDDEN", "hidden_position": position})
+    for plain in (item, item.model_copy(update={"passage": None})):
+        data, _ = render_assessment_pdf([plain], [v])
+        shown = [(s, m) for s, m in shown_strings(data)[1:] if s != "Q1. "]   # skip title, label
+        expected = [(t, 3 if t == "HIDDEN" else 0)
+                    for t in copy_text(v, plain).split("\n") if t]
+        assert shown == expected
 
 
 def test_pdf_is_deterministic_and_rejects_mismatched_variants():

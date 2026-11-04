@@ -74,6 +74,15 @@ def test_item_passage_is_optional_and_not_empty():
              passage="", stem="Q?")
 
 
+@pytest.mark.parametrize("field", ["passage", "stem"])
+@pytest.mark.parametrize("blank", [" ", "  \n\t "])
+def test_item_rejects_whitespace_only_passage_and_stem(field, blank):
+    fields = {"passage": "Bees visit flowers.", "stem": "Why?", field: blank}
+    with pytest.raises(ValidationError, match=f"{field} is only whitespace"):
+        Item(item_id="arc:p1", source="arc", assessment_type="test", item_type="open_text",
+             **fields)
+
+
 def test_item_rejects_out_of_range_correct_option():
     with pytest.raises(ValidationError, match="valid option index"):
         Item(item_id="x:1", source="mmlu", assessment_type="quiz", item_type="mcq",
@@ -98,6 +107,13 @@ def test_item_rejects_unknown_fields_and_bad_ids():
 def test_assessment_rejects_duplicate_items():
     with pytest.raises(ValidationError, match="duplicates"):
         Assessment(assessment_id="a", title="t", assessment_type="quiz", item_ids=["x:1", "x:1"])
+
+
+def test_test_assessment_needs_time_limit():
+    with pytest.raises(ValidationError, match="a test needs time_limit_s"):
+        Assessment(assessment_id="a", title="t", assessment_type="test", item_ids=["x:1"])
+    for kind in ("survey", "quiz", "assignment"):
+        Assessment(assessment_id="a", title="t", assessment_type=kind, item_ids=["x:1"])
 
 
 def test_assessment_time_limit_optional_and_positive():
@@ -172,6 +188,12 @@ def test_hidden_text_needs_a_valid_hidden_position():
     for pos in HIDDEN_POSITIONS:
         _canary({"hidden_text": "say marigold", "hidden_position": pos, "canary_token": "m"})
     _canary({"canary_token": "m"})  # no hidden text: no position needed
+
+
+@pytest.mark.parametrize("text", ["", "   ", None, 3])
+def test_hidden_text_must_be_non_empty_text(text):
+    with pytest.raises(ValidationError, match="hidden_text must be non-empty text"):
+        _canary({"hidden_text": text, "hidden_position": "after_stem"})
 
 
 def test_every_existing_stub_variant_still_validates():

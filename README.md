@@ -111,14 +111,15 @@ the `arav/contracts-v2` PR.
    the mechanism. The server sends an opaque per-step token and maps it back to the variant id.
    The browser only gets the visible item and whether the assessment is finished.
 9. `AssessmentType` gains `"test"` (a quiz with right answers and a time limit) and
-   `"assignment"` (written answers). `Item.correct_option` is allowed on quiz and test items.
+   `"assignment"` (written answers). `Item.correct_option` is allowed on quiz and test items. A
+   test `Assessment` must set `time_limit_s` (without one, it's a quiz).
 10. `Item.passage` (optional): reading-comprehension text shown before the stem, which asks about
-    it. A mechanism's `copy_text` never includes the passage; the harness always adds it in
-    front, once. `Assessment.time_limit_s` (optional, > 0): time allowed for the whole
-    assessment.
+    it. Neither `passage` nor `stem` may be only whitespace. A mechanism's `copy_text` never
+    includes the passage; the harness always adds it in front, once. `Assessment.time_limit_s`
+    (optional, > 0): time allowed for the whole assessment.
 11. `HiddenPosition = "before_stem" | "after_stem" | "after_options"`. A variant whose `hidden`
-    has `hidden_text` must also have `hidden_position`; copy text, the PDF and the page all place
-    hidden text from it. Mechanisms may add their own extra keys to `hidden`.
+    has `hidden_text` (non-empty text) must also have `hidden_position`; copy text, the PDF and
+    the page all place hidden text from it. Mechanisms may add their own extra keys to `hidden`.
 12. JSONL files via `adr/contracts/io.py`: `write_jsonl(path, models)` and
     `read_jsonl(path, model_cls)`, which reports the line number of a bad line. Variants are stored
     one file per assessment, at `variants/<assessment_id>.jsonl` (`variants_path(root, id)`).

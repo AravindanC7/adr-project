@@ -65,7 +65,7 @@ class RenderedItem(BaseModel):
 
     Standard keys in `hidden` (each mechanism may add its own extra keys):
       hidden_text:     text that is in the page, the copied text and the PDF text layer, but
-                       not visible to a human reader.
+                       not visible to a human reader. Non-empty text.
       hidden_position: where hidden_text goes: "before_stem", "after_stem" or "after_options".
                        Required whenever hidden_text is set.
     """
@@ -110,6 +110,11 @@ class RenderedItem(BaseModel):
             raise ValueError("passive mechanisms (behaviour, style) don't make variants")
         if "stem" not in self.visible:
             raise ValueError("visible must include 'stem'")
+        hidden_text = self.hidden.get("hidden_text")
+        if "hidden_text" in self.hidden and (
+            not isinstance(hidden_text, str) or not hidden_text.strip()
+        ):
+            raise ValueError(f"{self.variant_id}: hidden_text must be non-empty text")
         if "hidden_text" in self.hidden and "hidden_position" not in self.hidden:
             raise ValueError(
                 f"{self.variant_id}: hidden_text needs hidden_position, one of {HIDDEN_POSITIONS}"

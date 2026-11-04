@@ -72,6 +72,10 @@ class Item(BaseModel):
     def _check_consistency(self) -> Item:
         if ":" not in self.item_id:
             raise ValueError(f'item_id must look like "<source>:<native id>", got {self.item_id!r}')
+        if not self.stem.strip():
+            raise ValueError(f"{self.item_id}: stem is only whitespace")
+        if self.passage is not None and not self.passage.strip():
+            raise ValueError(f"{self.item_id}: passage is only whitespace")
         if self.item_type in OPTION_TYPES:
             if not self.options or len(self.options) < 2:
                 raise ValueError(f"{self.item_id}: {self.item_type} items need at least 2 options")
@@ -109,6 +113,10 @@ class Assessment(BaseModel):
     def _unique_items(self) -> Assessment:
         if len(set(self.item_ids)) != len(self.item_ids):
             raise ValueError(f"{self.assessment_id}: item_ids has duplicates")
+        if self.assessment_type == "test" and self.time_limit_s is None:
+            raise ValueError(
+                f"{self.assessment_id}: a test needs time_limit_s (without one, it's a quiz)"
+            )
         return self
 
 
