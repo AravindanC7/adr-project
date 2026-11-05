@@ -52,9 +52,15 @@ python scripts/router_synthetic_demo.py --passive     # also observe behaviour o
 ```
 
 ```bash
-# Respondent web page (#11 skeleton): stub items, plain variants only, no data saved to disk
+# Respondent web page (#11, #19): stub items, no data saved to disk
 pip install -e ".[server]"
 uvicorn server.app:app --reload                       # then open http://127.0.0.1:8000
+ADR_STUB_MECHANISMS=1 uvicorn server.app:app          # with the stub decoy + canary injected
+# Settings (all in server/app.py): ADR_PICK=all|router, ADR_HIDE=clip|clear|clip_aria
+
+# Browser test that copied text equals copy_text (needs a ~150 MB Chromium, once):
+pip install -e ".[browser]" && python -m playwright install chromium
+pytest tests/test_frontend_copy.py                    # skipped if Playwright isn't installed
 ```
 
 Outputs: `results/outcomes/<run_id>.parquet` (the outcome table) and

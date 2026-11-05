@@ -51,7 +51,10 @@ function renderChoice(area, item, onChange) {
   item.options.forEach((text, i) => {
     const input = el("input", { type: "radio", name: "choice", value: String(i) });
     input.addEventListener("change", onChange);
-    group.append(el("label", {}, input, el("span", { textContent: text })));
+    // "1. Venus" as one run of text, so copying the question gives numbered options, the
+    // same format the attacker harness pastes into a model.
+    const label = el("span", {}, el("b", { className: "num", textContent: `${i + 1}.` }), ` ${text}`);
+    group.append(el("label", {}, input, label));
   });
   area.append(group);
   return () => {
@@ -118,6 +121,20 @@ function renderOpenText(area, item, onChange) {
   return () => (box.value.trim() !== "" ? box.value : null);
 }
 
+// Text for automated readers: in the page, in copied text and in the accessibility tree, but
+// not visible. Never display:none / visibility:hidden / [hidden], which would drop it from all
+// three (adr/mechanisms/CANARY_SPEC.md). The server picks the hiding style; see style.css.
+function placeAux(aux) {
+  if (!aux) return;
+  // A div, not a p: Chrome copies a p with a blank line after it, which breaks copy_text.
+  const node = el("div", { className: aux.style === "clear" ? "aux aux-clear" : "aux aux-clip",
+                           textContent: aux.text });
+  if (aux.style === "clip_aria") node.setAttribute("aria-hidden", "true");
+  if (aux.at === "before_stem") $("stem").before(node);
+  else if (aux.at === "after_options") $("answer").after(node);
+  else $("stem").after(node);   // after_stem
+}
+
 const RENDERERS = {
   mcq: renderChoice,
   likert: renderChoice,
@@ -154,7 +171,9 @@ function render(step) {
   card.classList.add("enter");
   const area = $("answer");
   area.replaceChildren();
+  for (const old of document.querySelectorAll("#item .aux")) old.remove();
   getAnswer = renderer(area, current, refresh);
+  placeAux(current.aux);
   refresh();
   show("question");
   $("stem").focus();
