@@ -1,0 +1,97 @@
+"""Replay one simulated respondent through any Router, using logged outcomes (step #27).
+
+Owner: Arav. Uses only the Router protocol (start -> next -> update), so the SPRT router and every
+baseline are evaluated by exactly the same code.
+
+Each item the router serves:
+  - plain variant: update with outcome "none" (no evidence).
+  - a check: ask the donor what this respondent got, and update with it.
+  - passive checks (e.g. behaviour, style) are observed on every item shown.
+NoObservation (nothing to score, or no data anywhere) means no observation: the router gets no
+evidence from it. For a passive check that is simply skipped. For an active check the item was
+still shown, so the router is told it was shown plain (outcome "none", zero evidence); otherwise
+it would offer the same item again forever.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from adr.contracts import (
+    PASSIVE_MECHANISMS,
+    Assessment,
+    NoObservation,
+    Router,
+    SessionState,
+    make_variant_id,
+)
+from adr.replay.donors import Donor, Group
+
+
+@dataclass
+class ReplayResult:
+    group: Group
+    donor_session: str | None
+    final: SessionState
+    items_shown: int
+    checks_run: int                # active checks served (a skipped one still counts: it was shown)
+    items_to_decision: int | None  # items shown when the status first became review or cleared
+    fallbacks: int                 # outcomes taken from another session of the same group
+    synthetic: int                 # outcomes drawn from the failure map: no logged row
+    skipped: int                   # NoObservation: no evidence given to the router
+
+    @property
+    def kind(self) -> str:
+        return self.group.kind
+
+
+def replay_session(
+    router: Router,
+    assessment: Assessment,
+    donor: Donor,
+    passive: tuple[str, ...] = (),
+    seed: int = 0,
+) -> ReplayResult:
+    for p in passive:
+        if p not in PASSIVE_MECHANISMS:
+            raise ValueError(f"{p!r} is not a passive mechanism")
+    session_id = f"replay:{donor.group.label}:{seed}"
+    state, choice = router.start(assessment, session_id, seed)
+    shown = checks = skipped = 0
+    decided_at = None
+    while choice is not None:
+        shown += 1
+        if shown > len(assessment.item_ids):
+            raise RuntimeError(f"{type(router).__name__} served more items than the assessment has")
+        if choice.mechanism is None:
+            state = router.update(state, choice.variant_id, "none")
+        else:
+            checks += 1
+            try:
+                state = router.update(
+                    state, choice.variant_id, donor.outcome(choice.item_id, choice.mechanism)
+                )
+            except NoObservation:
+                skipped += 1
+                state = router.update(state, make_variant_id(choice.item_id, None), "none")
+        for p in passive:
+            try:
+                outcome = donor.outcome(choice.item_id, p)
+            except NoObservation:
+                skipped += 1
+                continue
+            state = router.update(state, make_variant_id(choice.item_id, p), outcome)
+        if decided_at is None and state.status in ("review", "cleared"):
+            decided_at = shown
+        choice = router.next(state)
+    return ReplayResult(
+        group=donor.group,
+        donor_session=donor.session_id,
+        final=state,
+        items_shown=shown,
+        checks_run=checks,
+        items_to_decision=decided_at,
+        fallbacks=donor.fallbacks,
+        synthetic=donor.synthetic,
+        skipped=skipped,
+    )

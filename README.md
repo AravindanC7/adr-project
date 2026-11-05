@@ -29,10 +29,10 @@ pytest                                                    # all tests should pas
 | Document-upload attacker (#20) | `adr/harness/doc_upload.py`, `pdf_render.py` | Whole assessment as one PDF, traps in the invisible text layer. Anthropic, OpenAI, Google only. |
 | Router prototype (#13) | `adr/router/` | SPRT score, Chernoff-rule check selection, burden and false-flag penalties, per-mechanism cap, escalation, random tie-breaks. |
 | Early baselines | `adr/baselines/simple.py` | Random check per item; single fixed mechanism. |
+| Replay on logged outcomes (#27) | `adr/replay/` | Each simulated respondent copies one real logged session; fallbacks and map draws are counted. Metrics with bootstrap CIs. Uses a **temporary** quick map until #34. |
 | Synthetic test data | `adr/router/synthetic.py` | **Invented numbers** for developing the router. Never report these. |
 
-Not started: browser agent (#22), replay on real outcomes (#27),
-the other baselines, and everything Archana and Harshini own.
+Not started: browser agent (#22), the other baselines, and everything Archana and Harshini own.
 
 ## Try it
 
@@ -49,6 +49,10 @@ python scripts/run_doc_upload.py --stub --fake
 # Router vs early baselines on SYNTHETIC data (about 20 s):
 python scripts/router_synthetic_demo.py
 python scripts/router_synthetic_demo.py --passive     # also observe behaviour on every item
+
+# Replay the router and baselines on logged outcomes (a smoke test on our 4 items so far):
+python scripts/run_replay.py --stub \
+    --outcomes results/outcomes/first-real-L0.parquet results/outcomes/first-real-du-L0.parquet
 ```
 
 ```bash
