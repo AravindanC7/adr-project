@@ -1,0 +1,85 @@
+{
+  "_note": "STUB ITEMS for the front-end skeleton (step #11). Not real data. The first four match tests/stubs.py; the rest cover ranking, numeric and long open text. Replace with Archana's loader output once it lands.",
+  "items": [
+    {
+      "item_id": "handwritten:q1",
+      "source": "handwritten",
+      "assessment_type": "quiz",
+      "item_type": "mcq",
+      "stem": "Which planet is closest to the Sun?",
+      "options": ["Venus", "Mercury", "Earth", "Mars"],
+      "correct_option": 1,
+      "eligible_mechanisms": ["decoy"]
+    },
+    {
+      "item_id": "handwritten:q2",
+      "source": "handwritten",
+      "assessment_type": "quiz",
+      "item_type": "mcq",
+      "stem": "What is 7 x 8?",
+      "options": ["54", "56", "64", "48"],
+      "correct_option": 1,
+      "eligible_mechanisms": ["decoy"]
+    },
+    {
+      "item_id": "handwritten:q3",
+      "source": "handwritten",
+      "assessment_type": "quiz",
+      "item_type": "numeric",
+      "stem": "How many continents are there?"
+    },
+    {
+      "item_id": "handwritten:s1",
+      "source": "handwritten",
+      "assessment_type": "survey",
+      "item_type": "open_text",
+      "stem": "In a sentence or two, what do you like most about your job?",
+      "eligible_mechanisms": ["canary"]
+    },
+    {
+      "item_id": "handwritten:s2",
+      "source": "handwritten",
+      "assessment_type": "survey",
+      "item_type": "likert",
+      "stem": "I enjoy working in teams.",
+      "options": ["Strongly disagree", "Disagree", "Neutral", "Agree", "Strongly agree"],
+      "eligible_mechanisms": ["opinion_trap"]
+    },
+    {
+      "item_id": "handwritten:s3",
+      "source": "handwritten",
+      "assessment_type": "survey",
+      "item_type": "ranking",
+      "stem": "Rank these from most to least important to you when choosing a job.",
+      "options": ["Salary", "Location", "The team", "Work-life balance"]
+    },
+    {
+      "item_id": "handwritten:s4",
+      "source": "handwritten",
+      "assessment_type": "survey",
+      "item_type": "numeric",
+      "stem": "About how many hours did you work last week?"
+    },
+    {
+      "item_id": "handwritten:s5",
+      "source": "handwritten",
+      "assessment_type": "survey",
+      "item_type": "open_text",
+      "stem": "Describe a time you changed your mind about something important at work. What made you change it?"
+    }
+  ],
+  "assessments": [
+    {
+      "assessment_id": "stub-quiz",
+      "title": "Stub quiz",
+      "assessment_type": "quiz",
+      "item_ids": ["handwritten:q1", "handwritten:q2", "handwritten:q3"]
+    },
+    {
+      "assessment_id": "stub-survey",
+      "title": "Stub survey",
+      "assessment_type": "survey",
+      "item_ids": ["handwritten:s1", "handwritten:s2", "handwritten:s3", "handwritten:s4", "handwritten:s5"]
+    }
+  ]
+}

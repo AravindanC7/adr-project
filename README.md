@@ -51,6 +51,12 @@ python scripts/router_synthetic_demo.py
 python scripts/router_synthetic_demo.py --passive     # also observe behaviour on every item
 ```
 
+```bash
+# Respondent web page (#11 skeleton): stub items, plain variants only, no data saved to disk
+pip install -e ".[server]"
+uvicorn server.app:app --reload                       # then open http://127.0.0.1:8000
+```
+
 Outputs: `results/outcomes/<run_id>.parquet` (the outcome table) and
 `results/runs/<run_id>/` (config, every parsed response, any errors).
 

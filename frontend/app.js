@@ -1,0 +1,225 @@
+// Respondent page (step #11 skeleton). Shows whatever item the server sends, one at a time,
+// and posts back the answer with that question's opaque token. The server keeps every id,
+// check name and score to itself (AGENTS.md 6.5) and builds the contract Response.
+//
+// All item text goes in with textContent, never innerHTML: stems and options are plain text.
+// Hidden spans for the checks come later, from the variant's hidden data (step #19).
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+
+let sessionId = null;
+let current = null;           // the ShownItem being answered
+let shownAt = 0;              // performance.now() when it was drawn
+let getAnswer = () => null;   // current answer, or null while unanswered
+
+async function api(path, body) {
+  const init = body === undefined ? {} : {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
+  const res = await fetch(path, init);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(typeof data.detail === "string" ? data.detail : `Server error ${res.status}`);
+  }
+  return data;
+}
+
+function show(screen) {
+  for (const id of ["start", "question", "done"]) $(id).hidden = id !== screen;
+}
+
+function setError(message) {
+  $("error").textContent = message || "";
+}
+
+function el(tag, props = {}, ...children) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children);
+  return node;
+}
+
+// ------------------------------------------------------------------ one renderer per item type
+// Each draws into `area` and returns a function giving the current answer (or null).
+
+function renderChoice(area, item, onChange) {
+  const group = el("div", { className: item.item_type === "likert" ? "choices likert" : "choices" });
+  group.setAttribute("role", "radiogroup");
+  group.setAttribute("aria-labelledby", "stem");
+  item.options.forEach((text, i) => {
+    const input = el("input", { type: "radio", name: "choice", value: String(i) });
+    input.addEventListener("change", onChange);
+    group.append(el("label", {}, input, el("span", { textContent: text })));
+  });
+  area.append(group);
+  return () => {
+    const checked = group.querySelector("input:checked");
+    return checked ? Number(checked.value) : null;
+  };
+}
+
+function renderRanking(area, item, onChange) {
+  const order = item.options.map((_, i) => i);   // option indexes, first = ranked highest
+  const list = el("ol", { className: "ranking" });
+  const announce = el("p", { className: "sr-only" });
+  announce.setAttribute("aria-live", "polite");
+
+  function move(pos, delta) {
+    const to = pos + delta;
+    [order[pos], order[to]] = [order[to], order[pos]];
+    draw();
+    const moved = list.children[to];
+    const same = moved.querySelector(delta < 0 ? ".up" : ".down");
+    (same.disabled ? moved.querySelector(delta < 0 ? ".down" : ".up") : same).focus();
+    announce.textContent = `${item.options[order[to]]} is now number ${to + 1}`;
+    onChange();
+  }
+
+  function draw() {
+    list.replaceChildren();
+    order.forEach((opt, pos) => {
+      const text = item.options[opt];
+      const up = el("button", { type: "button", className: "up", textContent: "↑", disabled: pos === 0 });
+      const down = el("button", {
+        type: "button", className: "down", textContent: "↓", disabled: pos === order.length - 1,
+      });
+      up.setAttribute("aria-label", `Move ${text} up`);
+      down.setAttribute("aria-label", `Move ${text} down`);
+      up.addEventListener("click", () => move(pos, -1));
+      down.addEventListener("click", () => move(pos, +1));
+      list.append(el("li", {}, el("span", { textContent: text }), up, down));
+    });
+  }
+
+  draw();
+  area.append(el("p", { className: "hint", textContent: "Use the arrows to reorder. The top is first." }), list, announce);
+  return () => order.slice();   // the starting order is a valid answer too
+}
+
+function renderNumeric(area, item, onChange) {
+  const input = el("input", { type: "number", step: "any", inputMode: "decimal" });
+  input.setAttribute("aria-labelledby", "stem");
+  input.addEventListener("input", onChange);
+  area.append(input);
+  return () => {
+    const raw = input.value.trim();
+    const n = Number(raw);
+    return raw !== "" && Number.isFinite(n) ? n : null;
+  };
+}
+
+function renderOpenText(area, item, onChange) {
+  const box = el("textarea", { rows: 5 });
+  box.setAttribute("aria-labelledby", "stem");
+  box.addEventListener("input", onChange);
+  area.append(box);
+  return () => (box.value.trim() !== "" ? box.value : null);
+}
+
+const RENDERERS = {
+  mcq: renderChoice,
+  likert: renderChoice,
+  ranking: renderRanking,
+  numeric: renderNumeric,
+  open_text: renderOpenText,
+};
+
+// ------------------------------------------------------------------ flow
+
+function refresh() {
+  $("next").disabled = getAnswer() === null;
+}
+
+function render(step) {
+  sessionId = step.session_id;
+  if (step.finished) {   // finished (or paused for review; the respondent sees the same page)
+    current = null;
+    $("bar").style.width = "100%";
+    show("done");
+    $("again").focus();
+    return;
+  }
+  current = step.item;
+  const renderer = RENDERERS[current.item_type];
+  if (!renderer) throw new Error(`Can't show item type ${current.item_type}`);
+
+  $("progress").textContent = `Question ${current.position} of ${current.total}`;
+  $("bar").style.width = `${(100 * (current.position - 1)) / current.total}%`;
+  $("stem").textContent = current.stem;
+  const card = $("form");
+  card.classList.remove("enter");
+  void card.offsetWidth;   // restart the entrance animation for each new question
+  card.classList.add("enter");
+  const area = $("answer");
+  area.replaceChildren();
+  getAnswer = renderer(area, current, refresh);
+  refresh();
+  show("question");
+  $("stem").focus();
+  shownAt = performance.now();
+}
+
+async function begin(assessmentId, title) {
+  setError("");
+  $("brand").textContent = title;
+  try {
+    render(await api("/session/start", { assessment_id: assessmentId }));
+  } catch (e) {
+    setError(e.message);
+  }
+}
+
+async function submit(event) {
+  event.preventDefault();
+  const answer = getAnswer();
+  if (answer === null || !current) return;
+  $("next").disabled = true;
+  const body = {
+    token: current.token,   // opaque: the page never learns which item or check this is
+    answer,
+    // Time on item only. Paste, focus and keystroke counts come with step #23.
+    telemetry: { time_on_item_ms: Math.round(performance.now() - shownAt) },
+  };
+  try {
+    render(await api(`/session/${encodeURIComponent(sessionId)}/respond`, body));
+    setError("");
+  } catch (e) {
+    setError(e.message);
+    refresh();
+  }
+}
+
+async function loadAssessments() {
+  const list = $("assessments");
+  list.replaceChildren();
+  for (const a of await api("/assessments")) {
+    const button = el(
+      "button",
+      { type: "button", className: "pick" },
+      el("span", { className: "chip", textContent: ICONS[a.assessment_type] || "✦" }),
+      el(
+        "span",
+        {},
+        el("span", { className: "pick-title", textContent: a.title }),
+        el("span", { className: "pick-meta", textContent: `${a.n_items} questions · ${a.assessment_type}` }),
+      ),
+      el("span", { className: "pick-go", textContent: "→" }),
+    );
+    button.querySelector(".chip").setAttribute("aria-hidden", "true");
+    button.querySelector(".pick-go").setAttribute("aria-hidden", "true");
+    button.addEventListener("click", () => begin(a.assessment_id, a.title));
+    list.append(el("li", {}, button));
+  }
+}
+
+const ICONS = { quiz: "🧠", survey: "💬" };
+
+$("form").addEventListener("submit", submit);
+$("again").addEventListener("click", () => {
+  setError("");
+  $("brand").textContent = "Quick Questions";
+  show("start");
+});
+loadAssessments().catch((e) => setError(e.message));
