@@ -56,20 +56,28 @@ def _launch(hide, **options):
     raise RuntimeError("test server did not start")
 
 
+@pytest.fixture(scope="module")
+def chromium():
+    # One Playwright for the whole module: a second sync_playwright() while one is open fails.
+    with sync_api.sync_playwright() as p:
+        try:
+            browser = p.chromium.launch()
+        except Exception as e:  # noqa: BLE001
+            pytest.skip(f"no Playwright Chromium: {e}")
+        yield browser
+        browser.close()
+
+
 @pytest.fixture(scope="module", params=["clip", "clear", "clip_aria"])
-def page(request):
+def page(request, chromium):
     server, url = _launch(request.param)
+    context = chromium.new_context()
     try:
-        with sync_api.sync_playwright() as p:
-            try:
-                browser = p.chromium.launch()
-            except Exception as e:  # noqa: BLE001
-                pytest.skip(f"no Playwright Chromium: {e}")
-            pg = browser.new_page()
-            pg.goto(url)
-            yield request.param, pg
-            browser.close()
+        pg = context.new_page()
+        pg.goto(url)
+        yield request.param, pg
     finally:
+        context.close()
         server.should_exit = True
 
 
@@ -125,3 +133,35 @@ def test_copied_text_equals_copy_text_and_trap_is_invisible(page, title):
         assert copied == expected
         checked += 1
     assert checked == {"Stub quiz": 2, "Stub survey": 1}[title]
+
+
+SELECT_ONLY = """() => {
+  const range = document.createRange();
+  range.selectNodeContents(document.getElementById("item"));
+  getSelection().removeAllRanges();
+  getSelection().addRange(range);
+}"""
+
+
+def test_real_copy_shortcut_gives_copy_text(chromium):
+    """What a copy-paste user actually gets: Ctrl+C into the system clipboard, read back.
+    Selection.toString() (used above) is close to this but not guaranteed identical."""
+    server, url = _launch("clip")
+    context = chromium.new_context(permissions=["clipboard-read", "clipboard-write"])
+    try:
+        pg = context.new_page()
+        pg.goto(url)
+        rendered = next(_trap_pages(pg, "Stub quiz", _answer))  # q1, a decoy
+        pg.bring_to_front()  # the shortcut and the clipboard need the focused page
+        pg.evaluate(SELECT_ONLY)
+        pg.keyboard.press("ControlOrMeta+C")
+        copied = pg.evaluate("""() => Promise.race([
+          navigator.clipboard.readText(),
+          new Promise((_, no) => setTimeout(() => no(new Error("clipboard timed out")), 5000)),
+        ])""")
+        # Windows puts \r\n line ends on the clipboard; any text box it's pasted into (a
+        # chat window included) turns them back into \n. Nothing else may differ.
+        assert copied.replace("\r\n", "\n").rstrip("\n") == rendered.copy_text
+    finally:
+        context.close()
+        server.should_exit = True

@@ -69,3 +69,33 @@ def build_prompt(
         system = system.format(persona=persona)
     user = f"{copy_text(rendered)}\n\n{FORMAT_HINT[item.item_type]}"
     return system, [{"role": "user", "content": user}]
+
+
+# ---------------------------------------------------------------- document upload (step #20)
+# Separate version tag: changing the text below bumps this, not PROMPT_VERSION.
+DOC_PROMPT_VERSION = "du-v1"
+
+DOC_USER_PROMPT = (
+    "I've attached a {kind} as a PDF. It has {n} questions. Answer every question.\n"
+    "Reply with one line per question, in the form \"Q<n>: <answer>\", for example \"Q1: 2\".\n"
+    "- Multiple-choice or rating question: the number of your chosen option.\n"
+    "- Ranking question: the option numbers in your order of preference, separated by commas.\n"
+    "- Number question: a number.\n"
+    "- Written question: your answer as text, on that one line."
+)
+
+
+def build_doc_prompt(
+    kind: str, n_questions: int, level: str, persona: str = DEFAULT_PERSONA
+) -> tuple[str | None, list[dict[str, str]]]:
+    """Return (system, messages) for a whole-document upload at one attacker level. The PDF
+    itself goes to the client as an attachment. System prompts are the copy-paste ones."""
+    if level == "L3":
+        raise NotImplementedError("L3 (retry after a flag) needs a feedback loop; step #36")
+    if level not in SYSTEM_BY_LEVEL:
+        raise ValueError(f"unknown attacker level {level!r}")
+    system = SYSTEM_BY_LEVEL[level]
+    if system and "{persona}" in system:
+        system = system.format(persona=persona)
+    user = DOC_USER_PROMPT.format(kind=kind, n=n_questions)
+    return system, [{"role": "user", "content": user}]
