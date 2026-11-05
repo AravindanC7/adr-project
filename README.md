@@ -54,7 +54,10 @@ python scripts/router_synthetic_demo.py --passive     # also observe behaviour o
 python scripts/run_replay.py --stub \
     --outcomes results/outcomes/first-real-L0.parquet results/outcomes/first-real-du-L0.parquet
 # add --compare to run the router and baselines 1-4 on the same respondents and write
-# comparison.csv / comparison.md
+# comparison.csv / comparison.md / budget_curve.csv; then plot the budget curve:
+python scripts/run_replay.py --synthetic quiz --compare --n 500 --run-id budget-synthetic-quiz
+pip install -e ".[plot]"
+python scripts/plot_budget_curve.py results/runs/budget-synthetic-quiz/budget_curve.csv
 ```
 
 ```bash

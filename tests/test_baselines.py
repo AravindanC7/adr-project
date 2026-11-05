@@ -1,3 +1,5 @@
+import itertools
+
 import pandas as pd
 import pytest
 
@@ -18,7 +20,7 @@ from adr.contracts import (
     make_variant_id,
     rows_to_frame,
 )
-from adr.replay.compare import compare, comparison_table, write_comparison
+from adr.replay.compare import BETAS, budget_curve, compare, comparison_table, write_comparison
 from adr.replay.donors import Donors, Group
 from adr.replay.quick_map import quick_failure_map
 from adr.router.core import RouterConfig, SPRTRouter
@@ -217,3 +219,27 @@ def test_compare_on_synthetic_data_router_needs_fewer_checks_than_all_checks(tmp
     csv_path, md_path = write_comparison(table, tmp_path)
     assert len(pd.read_csv(csv_path)) == len(COMPARE)
     assert md_path.read_text().count("\n| ") == len(COMPARE) + 1  # header + one row per policy
+
+
+def test_router_noclear_never_clears():
+    a, items, variants = _bank()
+    cfg = RouterConfig(lower=-0.5, mech_cap=None)
+    trace, state = _trace(make_policy("router_noclear", a, items, variants, FMAP, cfg), a,
+                          HUMAN.get)
+    assert all(status != "cleared" for _, _, status in trace) and state.status != "cleared"
+    assert trace[-1][1] <= cfg.lower                      # its score went below the usual B
+
+
+@pytest.mark.parametrize("kind", ["quiz", "survey"])
+def test_higher_beta_never_gives_more_checks_per_honest_person(kind):
+    assessment, items, variants = synthetic_bank(assessment_type=kind)
+    donors = Donors(pd.DataFrame(columns=rows_to_frame([]).columns), items, fallback_map=FMAP,
+                    extra_groups=(Group.ai("synthetic", "copy_paste", "L0"),
+                                  Group.human("synthetic")))
+    curve = budget_curve(assessment, items, variants, FMAP, donors, n=150, seed=0,
+                         baselines={}, n_boot=20)
+    router = curve[curve["policy"] == "router"].sort_values("beta")
+    assert list(router["beta"]) == list(BETAS)
+    checks = list(router["checks_per_honest_person"])
+    assert all(later <= earlier for earlier, later in itertools.pairwise(checks)), checks
+    assert checks[0] > checks[-1]                         # and the budget really moves

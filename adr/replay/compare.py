@@ -7,15 +7,20 @@ table come from the policies, not from who happened to be sampled.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from adr.contracts import Assessment, Router
+from adr.contracts import Assessment, FailureMap, Item, RenderedItem, Router
 from adr.replay.donors import Donors, Group
 from adr.replay.metrics import METRICS, evaluate
 from adr.replay.simulate import ReplayResult, replay_session
+from adr.router.core import RouterConfig, SPRTRouter
+
+BETAS = (0.01, 0.02, 0.05, 0.1, 0.2)
+CURVE_METRICS = ("tpr_at_1pct_fpr", "tpr_at_5pct_fpr", "checks_per_honest_person")
 
 
 def run_policy(
@@ -104,3 +109,44 @@ def write_comparison(table: pd.DataFrame, run_dir: str | Path) -> tuple[Path, Pa
     md_path.write_text("Metrics with 95% bootstrap intervals [lo, hi].\n\n" + "\n".join(lines)
                        + "\n")
     return csv_path, md_path
+
+
+def _curve_row(policy: str, beta: float | None, m: dict[str, Any]) -> dict[str, Any]:
+    row: dict[str, Any] = {"policy": policy, "beta": beta}
+    for metric in CURVE_METRICS:
+        ci = m["ci95"][metric]
+        row[metric] = m[metric]
+        row[f"{metric}_lo"], row[f"{metric}_hi"] = ci if ci else (None, None)
+    return row
+
+
+def budget_curve(
+    assessment: Assessment,
+    items: dict[str, Item],
+    variants: dict[str, list[RenderedItem]],
+    fmap: FailureMap,
+    donors: Donors,
+    n: int,
+    seed: int,
+    baselines: dict[str, dict[str, Any]],
+    betas: tuple[float, ...] = BETAS,
+    cfg: RouterConfig | None = None,
+    passive: tuple[str, ...] = (),
+    n_boot: int = 1000,
+) -> pd.DataFrame:
+    """Detection vs checks per honest person: the router at each beta (its target miss rate),
+    on the same respondents, plus one row per baseline from `baselines` (compare() output).
+
+    A larger beta raises the clearing threshold B, so honest people are cleared sooner and get
+    fewer checks; it also lowers A a little. The curve shows what each extra check buys.
+    """
+    cfg = cfg or RouterConfig()
+    groups = donors.groups("ai") + donors.groups("human")
+    rows = []
+    for beta in betas:
+        router = SPRTRouter(items, variants, fmap, replace(cfg, beta=beta))
+        runs = run_policy(router, assessment, donors, groups, n, seed, passive)
+        rows.append(_curve_row("router", beta, summarize(runs, n_boot, seed)["overall"]))
+    for name, res in baselines.items():
+        rows.append(_curve_row(name, None, res["overall"]))
+    return pd.DataFrame(rows)

@@ -13,9 +13,14 @@ Real use:
         --items data/processed/items.jsonl --variants data/processed/variants/quiz-slice.jsonl \
         --compare --n 500 --seed 0
 
-Policies (--policies, comma list): router, best_single, all_checks, fixed_plan, random,
-single:<mechanism> (see adr/baselines/policies.py). --compare runs router and baselines 1-4 on
-the same respondents and also writes comparison.csv and comparison.md.
+Policies (--policies, comma list): router, router_noclear, best_single, all_checks,
+fixed_plan, random, single:<mechanism> (see adr/baselines/policies.py). --compare runs all of
+them except single:* on the same respondents and also writes comparison.csv, comparison.md and
+budget_curve.csv (the router at each --betas value, plus one row per other policy). Plot it with
+scripts/plot_budget_curve.py.
+
+SYNTHETIC check of the whole pipeline (invented numbers, never results):
+    python scripts/run_replay.py --synthetic quiz --compare --n 500
 
 The failure map is fitted on train rows only (--map to use a saved one instead). Evaluation
 uses held-out rows (held-out model or held-out survey) when there are any; otherwise it
@@ -39,10 +44,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from adr.baselines.plans import best_single_mechanism, multi_check_items
 from adr.baselines.policies import COMPARE, make_policy
-from adr.contracts import Assessment, FailureMap, Item, RenderedItem, read_jsonl, read_outcomes
+from adr.contracts import (
+    COLUMNS,
+    Assessment,
+    FailureMap,
+    Item,
+    RenderedItem,
+    read_jsonl,
+    read_outcomes,
+)
 from adr.contracts.outcome import utc_now
 from adr.harness.copy_paste import _git_commit, plain_variant
-from adr.replay.compare import compare, comparison_table, write_comparison
+from adr.replay.compare import BETAS, budget_curve, compare, comparison_table, write_comparison
 from adr.replay.donors import Donors, Group
 from adr.replay.quick_map import quick_failure_map, train_eval_split
 from adr.router.core import RouterConfig
@@ -75,31 +88,8 @@ def load_bank(args) -> tuple[Assessment, dict[str, Item], dict[str, list[Rendere
     return assessments[0], items, dict(variants)
 
 
-def loud(msg: str) -> None:
-    bar = "!" * 78
-    print(f"\n{bar}\n!! {msg}\n{bar}\n")
-
-
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
-    ap.add_argument("--outcomes", nargs="+", required=True, help="outcome-table files or folders")
-    ap.add_argument("--stub", action="store_true", help="the 4 handwritten items and stub traps")
-    ap.add_argument("--assessment"), ap.add_argument("--assessment-id")
-    ap.add_argument("--items"), ap.add_argument("--variants")
-    ap.add_argument("--map", help="a saved FailureMap JSON; default: TEMPORARY quick map")
-    ap.add_argument("--policies", default=",".join(COMPARE))
-    ap.add_argument("--compare", action="store_true",
-                    help=f"run {', '.join(COMPARE)} and write comparison.csv / .md")
-    ap.add_argument("--passive", default="", help="comma list, e.g. behaviour,style")
-    ap.add_argument("--n", type=int, default=200, help="simulated respondents per group")
-    ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--boot", type=int, default=1000, help="bootstrap draws for the 95%% CIs")
-    ap.add_argument("--results-dir", default="results")
-    ap.add_argument("--run-id")
-    args = ap.parse_args()
-    run_id = args.run_id or f"replay-{datetime.now():%Y%m%d-%H%M%S}"
-    passive = tuple(p for p in args.passive.split(",") if p)
-
+def load_logged(args, warnings: list[str]):
+    """Logged outcome rows: map from train rows, evaluation on held-out rows (see module doc)."""
     paths = []
     for p in args.outcomes:
         path = Path(p)
@@ -110,7 +100,6 @@ def main() -> None:
     if table.empty:
         raise SystemExit("no outcome rows for this assessment's items")
 
-    warnings: list[str] = []
     fit, held, same_data = train_eval_split(table)
     fmap = FailureMap.load(args.map) if args.map else quick_failure_map(table)
     if not args.map:
@@ -131,9 +120,74 @@ def main() -> None:
         warnings.append("NO HUMAN ROWS AT ALL: every honest respondent is drawn from the map's "
                         "p_human, so FPR-based numbers say nothing about real people.")
     donors = Donors(pd.concat([eval_ai, humans]), items, fallback_map=fmap, extra_groups=extra)
-    ai_groups, human_groups = donors.groups("ai"), donors.groups("human")
-    if not ai_groups:
+    if not donors.groups("ai"):
         raise SystemExit("no AI rows to evaluate on")
+    info = {
+        "outcome_files": [str(p) for p in paths],
+        "source_run_ids": sorted(table["run_id"].unique()),
+        "map": args.map or "quick (TEMPORARY, adr/replay/quick_map.py)",
+        "n_rows_fit": len(fit),
+        "n_rows_eval_ai": len(eval_ai),
+        "n_rows_human": len(humans),
+        "evaluated_on_fit_rows": same_data,
+    }
+    return assessment, items, variants, fmap, donors, info
+
+
+def load_synthetic(kind: str, warnings: list[str]):
+    """SYNTHETIC: the synthetic bank, and every outcome drawn from synthetic_failure_map."""
+    from adr.router.synthetic import synthetic_bank, synthetic_failure_map
+
+    assessment, items, variants = synthetic_bank(assessment_type=kind)
+    fmap = synthetic_failure_map()
+    donors = Donors(pd.DataFrame(columns=COLUMNS), items, fallback_map=fmap,
+                    extra_groups=(Group.ai("synthetic", "copy_paste", "L0"),
+                                  Group.human("synthetic")))
+    warnings.append(f"SYNTHETIC {kind}: invented numbers from adr/router/synthetic.py. "
+                    "Never report these as results.")
+    info = {"synthetic": kind, "map": "synthetic_failure_map (INVENTED)",
+            "evaluated_on_fit_rows": True}
+    return assessment, items, variants, fmap, donors, info
+
+
+def loud(msg: str) -> None:
+    bar = "!" * 78
+    print(f"\n{bar}\n!! {msg}\n{bar}\n")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    ap.add_argument("--outcomes", nargs="+", help="outcome-table files or folders")
+    ap.add_argument("--synthetic", choices=["quiz", "survey"],
+                    help="SYNTHETIC bank and map instead of logged rows (invented numbers)")
+    ap.add_argument("--stub", action="store_true", help="the 4 handwritten items and stub traps")
+    ap.add_argument("--assessment"), ap.add_argument("--assessment-id")
+    ap.add_argument("--items"), ap.add_argument("--variants")
+    ap.add_argument("--map", help="a saved FailureMap JSON; default: TEMPORARY quick map")
+    ap.add_argument("--policies", default=",".join(COMPARE))
+    ap.add_argument("--compare", action="store_true",
+                    help=f"run {', '.join(COMPARE)}; write comparison.csv / .md and "
+                         "budget_curve.csv (router at each --betas)")
+    ap.add_argument("--betas", default=",".join(str(b) for b in BETAS),
+                    help="router betas for the budget curve (with --compare)")
+    ap.add_argument("--passive", default="", help="comma list, e.g. behaviour,style")
+    ap.add_argument("--n", type=int, default=200, help="simulated respondents per group")
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--boot", type=int, default=1000, help="bootstrap draws for the 95%% CIs")
+    ap.add_argument("--results-dir", default="results")
+    ap.add_argument("--run-id")
+    args = ap.parse_args()
+    run_id = args.run_id or f"replay-{datetime.now():%Y%m%d-%H%M%S}"
+    passive = tuple(p for p in args.passive.split(",") if p)
+
+    warnings: list[str] = []
+    if args.synthetic:
+        assessment, items, variants, fmap, donors, info = load_synthetic(args.synthetic, warnings)
+    elif args.outcomes:
+        assessment, items, variants, fmap, donors, info = load_logged(args, warnings)
+    else:
+        raise SystemExit("give --outcomes (logged rows) or --synthetic quiz|survey")
+    ai_groups, human_groups = donors.groups("ai"), donors.groups("human")
     for w in warnings:
         loud(w)
 
@@ -183,28 +237,31 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "metrics.json").write_text(json.dumps({
         "warnings": warnings,
-        "evaluated_on_fit_rows": same_data,
+        "evaluated_on_fit_rows": info["evaluated_on_fit_rows"],
         "best_single": best_single,
         "results": results,
         "outcome_sources": draws,
     }, indent=2))
+    betas = tuple(float(b) for b in args.betas.split(",") if b)
     if args.compare:
         _, md_path = write_comparison(comparison_table(results), run_dir)
         print(f"\n{md_path.read_text()}")
+        curve = budget_curve(assessment, items, variants, fmap, donors, args.n, args.seed,
+                             {n: s for n, s in summaries.items() if n != "router"}, betas, cfg,
+                             passive, args.boot)
+        curve.to_csv(run_dir / "budget_curve.csv", index=False)
+        print("Budget curve (router at each beta, then the baselines):")
+        print(curve[["policy", "beta", "tpr_at_1pct_fpr", "tpr_at_5pct_fpr",
+                     "checks_per_honest_person"]].round(3).to_string(index=False))
+        print(f"Plot it: python scripts/plot_budget_curve.py {run_dir / 'budget_curve.csv'}")
     (run_dir / "config.yaml").write_text(yaml.safe_dump({
         "run_id": run_id,
         "mode": "replay",
-        "outcome_files": [str(p) for p in paths],
-        "source_run_ids": sorted(table["run_id"].unique()),
+        **info,
         "assessment_id": assessment.assessment_id,
         "n_items": len(assessment.item_ids),
-        "map": args.map or "quick (TEMPORARY, adr/replay/quick_map.py)",
         "map_version": fmap.version,
         "map_source_run_ids": fmap.source_run_ids,
-        "n_rows_fit": len(fit),
-        "n_rows_eval_ai": len(eval_ai),
-        "n_rows_human": len(humans),
-        "evaluated_on_fit_rows": same_data,
         "groups": {g.label: len(donors.sessions(g)) for g in ai_groups + human_groups},
         "policies": list(policies),
         "router_config": cfg.__dict__,
@@ -216,10 +273,11 @@ def main() -> None:
         "n_per_group": args.n,
         "seed": args.seed,
         "n_boot": args.boot,
+        "budget_curve_betas": list(betas) if args.compare else None,
         "git_commit": _git_commit(),
         "created_at": utc_now(),
     }, sort_keys=False))
-    extra_files = ", comparison.csv, comparison.md" if args.compare else ""
+    extra_files = ", comparison.csv, comparison.md, budget_curve.csv" if args.compare else ""
     print(f"\nSaved {run_dir / 'metrics.json'}, config.yaml{extra_files}")
 
 
