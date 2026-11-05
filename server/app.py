@@ -39,7 +39,7 @@ Settings (environment variables):
   ADR_DEBUG_STATE=1       GET /session/{id} returns the SessionState, for the demo (#47) and
                           logging. Never enable it in a session real people take.
 
-Not here yet: telemetry beyond time on item (#23); a real failure map for ADR_PICK=router (#28).
+Not here yet: a real failure map for ADR_PICK=router (#28).
 Responses and outcomes stay in memory only; #39 writes them to the outcome table.
 
 Run from the repo root:   uvicorn server.app:app --reload      then open http://127.0.0.1:8000
@@ -85,7 +85,6 @@ PILOT_DIR = ROOT / "docs" / "pilot"
 # Mechanisms that change what the page shows. Opinion traps, behaviour and style only look at
 # answers (passive), so the page has nothing to inject for them; glitch tokens are out for now.
 INJECTED = ("decoy", "canary")
-HIDDEN_POSITIONS = ("before_stem", "after_stem", "after_options")
 Pick = Literal["all", "router"]
 Hide = Literal["clip", "clear", "clip_aria"]
 
@@ -224,21 +223,9 @@ def build_variants(
         vs = [plain_variant(item)]
         for name, mech in mechanisms.items():
             if name in item.eligible_mechanisms and mech.applies_to(item):
-                vs.append(check_hidden(mech.generate(item, seed)))
+                vs.append(mech.generate(item, seed))  # contracts check hidden_position
         variants[item_id] = vs
     return variants
-
-
-def check_hidden(rendered: RenderedItem) -> RenderedItem:
-    """The page can only place hidden text at a known position. Until contracts v2 (#5) makes
-    hidden_position required, a variant without one is treated as "after_stem", which is where
-    every current mechanism puts it in copy_text."""
-    if "hidden_text" not in rendered.hidden:
-        return rendered
-    position = rendered.hidden.setdefault("hidden_position", "after_stem")
-    if position not in HIDDEN_POSITIONS:
-        raise ValueError(f"{rendered.variant_id}: unknown hidden_position {position!r}")
-    return rendered
 
 
 @dataclass

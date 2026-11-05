@@ -7,7 +7,7 @@ hers land. Replace nothing in adr/ with these.
 
 from __future__ import annotations
 
-from adr.contracts import Item, RenderedItem, Response, Telemetry, make_variant_id
+from adr.contracts import Item, NoObservation, RenderedItem, Response, Telemetry, make_variant_id
 
 ITEMS: list[Item] = [
     Item(
@@ -72,7 +72,8 @@ class StubDecoy:
             mechanism="decoy",
             variant_id=make_variant_id(item.item_id, "decoy", seed),
             visible={"stem": item.stem, "options": item.options},
-            hidden={"decoy_option_index": decoy, "hidden_text": hidden_text},
+            hidden={"decoy_option_index": decoy, "hidden_text": hidden_text,
+                    "hidden_position": "after_stem"},
             copy_text=f"{item.stem}\n{hidden_text}\n{opts}",
         )
 
@@ -102,8 +103,9 @@ class StubCanary:
             mechanism="canary",
             variant_id=make_variant_id(item.item_id, "canary", seed),
             visible={"stem": item.stem},
-            hidden={"canary_token": token, "hidden_text": hidden_text},
-            copy_text=f"{item.stem} {hidden_text}",
+            hidden={"canary_token": token, "hidden_text": hidden_text,
+                    "hidden_position": "after_stem"},
+            copy_text=f"{item.stem}\n{hidden_text}",
         )
 
     def score(self, rendered: RenderedItem, response: Response, telemetry: Telemetry | None) -> str:
@@ -113,3 +115,26 @@ class StubCanary:
         if "if you are an ai" in text:
             return "leaked"
         return "clean"
+
+
+class SkipCanary(StubCanary):
+    """Canary that never has anything to score: tests that callers skip NoObservation."""
+
+    def score(self, rendered: RenderedItem, response: Response, telemetry: Telemetry | None) -> str:
+        raise NoObservation("nothing to score")
+
+
+class SkipStyle:
+    """Passive style check that never has anything to score (like an empty answer)."""
+
+    name = "style"
+    outcomes = ("high", "mid", "low")
+
+    def applies_to(self, item: Item) -> bool:
+        return item.item_type == "open_text"
+
+    def generate(self, item: Item, seed: int) -> RenderedItem:
+        raise RuntimeError("passive")
+
+    def score(self, rendered: RenderedItem, response: Response, telemetry: Telemetry | None) -> str:
+        raise NoObservation("empty answer")

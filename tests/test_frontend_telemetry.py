@@ -14,6 +14,7 @@ from tests.test_frontend_copy import _launch
 
 CONTRACT_FIELDS = {
     "time_on_item_ms", "paste_events", "focus_loss_count", "keystroke_count", "mean_interkey_ms",
+    "first_key_ms", "away_ms", "pasted_chars", "edit_keys",
 }
 SECRET = "my secret answer"
 
@@ -58,10 +59,12 @@ def test_typing_is_counted_not_recorded(survey):
     survey.wait_for_timeout(200)
     body = submit(survey)
     t = body["telemetry"]
-    assert set(t) == CONTRACT_FIELDS  # the extra fields are not sent until the contract has them
+    assert set(t) == CONTRACT_FIELDS
     assert t["keystroke_count"] == len(SECRET)
     assert 40 <= t["mean_interkey_ms"] <= 250
     assert t["paste_events"] == 0 and t["focus_loss_count"] == 0
+    assert t["pasted_chars"] == 0 and t["edit_keys"] == 0 and t["away_ms"] == 0
+    assert 0 <= t["first_key_ms"] <= t["time_on_item_ms"]
     assert t["time_on_item_ms"] >= 60 * (len(SECRET) - 1)
     # The answer itself is sent (that's the response); the telemetry carries no text at all.
     assert body["answer"] == SECRET and SECRET not in str(t)
@@ -78,7 +81,20 @@ def test_paste_is_counted(survey):
     }""")
     t = submit(survey)["telemetry"]
     assert t["paste_events"] == 1
+    assert t["pasted_chars"] == len("An answer copied from somewhere else.")  # length, not text
     assert t["keystroke_count"] == 0 and t["mean_interkey_ms"] is None
+    assert t["first_key_ms"] is None
+    assert "copied" not in str(t)
+
+
+def test_edit_keys_are_counted(survey):
+    survey.click("#answer textarea")
+    survey.keyboard.type("helo", delay=20)
+    survey.keyboard.press("Backspace")
+    survey.keyboard.press("Backspace")
+    survey.keyboard.type("lo", delay=20)
+    t = submit(survey)["telemetry"]
+    assert t["edit_keys"] == 2
 
 
 def test_leaving_the_page_counts_once_per_absence(survey):

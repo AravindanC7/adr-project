@@ -2,7 +2,7 @@
 //
 // Records HOW a question was answered, never WHAT was typed: only counts and timings. No key
 // values, no pasted text and no answer text are stored or sent (AGENTS.md rule 7). Pasted text
-// is measured for its length only, and that number is not sent yet (see EXTRA below).
+// is measured for its length only.
 //
 // Sent to the server as the contract Telemetry (adr/contracts/mechanism.py):
 //   time_on_item_ms   question shown -> answer submitted
@@ -11,17 +11,13 @@
 //                     per absence even though browsers fire both blur and visibilitychange
 //   keystroke_count   key presses inside the answer (auto-repeat not counted)
 //   mean_interkey_ms  mean gap between consecutive key presses, null with fewer than 2
-//
-// Measured but NOT sent until the group adds them to the contract (proposal for #25):
-//   first_key_ms      question shown -> first key press in the answer
+//   first_key_ms      question shown -> first key press in the answer, null if none
 //   away_ms           total time spent away from the page
 //   pasted_chars      total length of pasted text
 //   edit_keys         Backspace / Delete presses
 "use strict";
 
 const ItemTelemetry = (() => {
-  const SEND_EXTRA = false;   // flip once the contract has the extra fields
-
   let t = null;               // counters for the question on screen
   let answerArea = null;
 
@@ -91,20 +87,17 @@ const ItemTelemetry = (() => {
       if (!t) return { time_on_item_ms: 0 };
       back();   // submitting means they're here
       const at = now();
-      const out = {
+      return {
         time_on_item_ms: Math.round(at - t.shownAt),
         paste_events: t.pastes,
         focus_loss_count: t.leaves,
         keystroke_count: t.keys,
         mean_interkey_ms: t.keys >= 2 ? Math.round(t.gapSum / (t.keys - 1)) : null,
-      };
-      const extra = {
         first_key_ms: t.firstKeyAt === null ? null : Math.round(t.firstKeyAt - t.shownAt),
         away_ms: Math.round(t.awayMs),
         pasted_chars: t.pastedChars,
         edit_keys: t.editKeys,
       };
-      return SEND_EXTRA ? { ...out, ...extra } : out;
     },
   };
 })();

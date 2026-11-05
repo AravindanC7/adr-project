@@ -6,7 +6,7 @@ pytest.importorskip("fastapi")  # pip install -e ".[server]"
 from fastapi.testclient import TestClient
 
 from adr.contracts import Item
-from server.app import DEFAULT_BANK, check_answer, check_hidden, create_app, load_bank
+from server.app import DEFAULT_BANK, check_answer, create_app, load_bank
 from tests.stubs import StubCanary, StubDecoy
 
 # One valid answer per item type, for the stub bank.
@@ -149,15 +149,6 @@ def test_bad_settings_fail_at_startup():
         create_app(mechanisms={}, hide="display_none")
 
 
-def test_hidden_position_defaults_until_contracts_v2_and_must_be_known():
-    rendered = StubDecoy().generate(ITEMS["handwritten:q1"], 0)
-    rendered.hidden.pop("hidden_position", None)
-    assert check_hidden(rendered).hidden["hidden_position"] == "after_stem"
-    rendered.hidden["hidden_position"] = "in_the_footer"
-    with pytest.raises(ValueError, match="hidden_position"):
-        check_hidden(rendered)
-
-
 def test_tokens_are_one_time_and_unguessable(client):
     step = client.post("/session/start", json={"assessment_id": "stub-quiz"}).json()
     assert respond(client, step, 1, token="handwritten:q1|plain|0").status_code == 409
@@ -182,7 +173,12 @@ def test_full_telemetry_is_kept_and_unknown_fields_are_refused(traps):
     telemetry = {"time_on_item_ms": 5000, "paste_events": 1, "focus_loss_count": 2,
                  "keystroke_count": 0, "mean_interkey_ms": None}
     sid = step["session_id"]
-    extra = dict(telemetry, first_key_ms=300)  # not in the contract yet (proposal for #25)
+    full = dict(telemetry, first_key_ms=300, away_ms=0, pasted_chars=40, edit_keys=3)
+    r = traps.post(f"/session/{sid}/respond",
+                   json={"token": step["item"]["token"], "answer": 1, "telemetry": full})
+    assert r.status_code == 200
+    step = r.json()
+    extra = dict(telemetry, pasted_text="hello")  # content is never accepted
     r = traps.post(f"/session/{sid}/respond",
                    json={"token": step["item"]["token"], "answer": 1, "telemetry": extra})
     assert r.status_code == 422
