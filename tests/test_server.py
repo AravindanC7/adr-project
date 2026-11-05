@@ -102,6 +102,19 @@ def test_every_eligible_question_carries_its_check(traps):
     assert "decoy_option_index" not in json.dumps(quiz) and "canary_token" not in json.dumps(survey)
 
 
+# Mechanism names, as the registry and variant ids spell them. An agent reading the page must
+# not learn which check a question carries, and the leak test above blanks aux.text first.
+MECHANISM_NAMES = ["decoy", "canary", "opinion_trap", "opinion trap", "glitch", "behaviour"]
+
+
+@pytest.mark.parametrize("assessment_id", ["stub-quiz", "stub-survey"])
+def test_hidden_text_never_names_its_own_check(traps, assessment_id):
+    for b in walk(traps, assessment_id):
+        if b["item"] and b["item"]["aux"]:
+            text = b["item"]["aux"]["text"].lower()
+            assert [name for name in MECHANISM_NAMES if name in text] == []
+
+
 def test_answers_are_scored_by_the_check_they_carried(traps):
     step = traps.post("/session/start", json={"assessment_id": "stub-quiz"}).json()
     decoy = int(step["item"]["aux"]["text"].split("option ")[1].rstrip(".]")) - 1
