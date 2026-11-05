@@ -46,14 +46,30 @@ FORMAT_HINT = {
 }
 
 
-def copy_text(rendered: RenderedItem) -> str:
-    """The text a person gets by selecting and copying the item on the page."""
+def copy_text(rendered: RenderedItem, item: Item | None = None) -> str:
+    """The text a person gets by selecting and copying the item on the page.
+
+    The item's reading passage (if any) comes first, exactly once: it is added here and never
+    by the mechanism (RenderedItem.copy_text leaves it out). Then the mechanism's own `copy_text`
+    if it set one; otherwise stem and numbered options, with hidden text placed by hidden_position.
+    """
+    passage = item.passage if item is not None else None
     if rendered.copy_text:
-        return rendered.copy_text
+        body = rendered.copy_text
+        return f"{passage}\n\n{body}" if passage is not None else body
     stem = rendered.visible["stem"]
-    options = rendered.visible.get("options") or []
-    lines = [stem] + [f"{i + 1}. {o}" for i, o in enumerate(options)]
-    return "\n".join(lines)
+    options = [f"{i + 1}. {o}" for i, o in enumerate(rendered.visible.get("options") or [])]
+    hidden = rendered.hidden.get("hidden_text")
+    position = rendered.hidden.get("hidden_position")
+    lines = [
+        *([hidden] if hidden and position == "before_stem" else []),
+        stem,
+        *([hidden] if hidden and position == "after_stem" else []),
+        *options,
+        *([hidden] if hidden and position == "after_options" else []),
+    ]
+    body = "\n".join(lines)
+    return f"{passage}\n\n{body}" if passage is not None else body
 
 
 def build_prompt(
@@ -67,7 +83,7 @@ def build_prompt(
     system = SYSTEM_BY_LEVEL[level]
     if system and "{persona}" in system:
         system = system.format(persona=persona)
-    user = f"{copy_text(rendered)}\n\n{FORMAT_HINT[item.item_type]}"
+    user = f"{copy_text(rendered, item)}\n\n{FORMAT_HINT[item.item_type]}"
     return system, [{"role": "user", "content": user}]
 
 
