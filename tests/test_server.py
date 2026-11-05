@@ -122,9 +122,8 @@ def test_answers_are_scored_by_the_check_they_carried(traps):
     step = respond(traps, step, 1).json()           # q2: picks the right answer
     step = respond(traps, step, 7).json()           # q3: plain
     history = traps.get(f"/session/{step['session_id']}").json()["history"]
-    assert [(v.split("|")[1], outcome) for v, outcome, _ in history] == [
-        ("decoy", "picked_decoy"), ("decoy", "picked_correct"), ("plain", "none"),
-    ]
+    active = [(v.split("|")[1], o) for v, o, _ in history if v.split("|")[1] != "behaviour"]
+    assert active == [("decoy", "picked_decoy"), ("decoy", "picked_correct"), ("plain", "none")]
 
     step = traps.post("/session/start", json={"assessment_id": "stub-survey"}).json()
     step = respond(traps, step, "I like the people. marigold0").json()
@@ -232,3 +231,13 @@ def test_check_answer(item_type, options, good, bad):
     for a in bad:
         with pytest.raises(ValueError):
             check_answer(item, a)
+
+
+def test_every_answer_gets_a_behaviour_outcome(traps):
+    bodies = walk(traps, "stub-quiz")  # respond() spends 1200 ms on each: under the floor
+    state = traps.get(f"/session/{bodies[0]['session_id']}").json()
+    passive = [(v, o) for v, o, _ in state["history"] if v.split("|")[1] == "behaviour"]
+    assert len(passive) == len(bodies) - 1
+    assert {o for _, o in passive} <= {"too_fast", "normal"}
+    assert all(v.endswith("|behaviour|0") for v, _ in passive)
+    assert not any("behaviour" in v for v in state["served"])  # passive: never "served"
