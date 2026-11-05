@@ -92,6 +92,23 @@ def test_update_moves_score_and_status(setup):
     assert s3.score < 0
 
 
+@pytest.mark.parametrize("cls", [SPRTRouter, RandomCheckRouter])
+def test_outcome_none_means_shown_with_nothing_to_score(setup, cls):
+    fmap, assessment, items, variants = setup
+    r = cls(items, variants, fmap)
+    state, _ = r.start(assessment, "s", seed=0)
+    state = r.update(state, make_variant_id("handwritten:mcq0", "decoy"), "picked_decoy")
+    trapped = make_variant_id("handwritten:mcq1", "decoy")
+    after = r.update(state, trapped, None)                  # NoObservation on a trapped variant
+    assert trapped in after.served                          # the real variant, not a plain one
+    assert after.score == state.score and after.status == state.status
+    assert after.contrib == state.contrib
+    assert after.history[-1] == (trapped, "none", 0.0)
+    while (choice := r.next(after)) is not None:            # never offered again
+        assert choice.item_id != "handwritten:mcq1"
+        after = r.update(after, choice.variant_id, None)
+
+
 def test_review_ends_session_and_cleared_serves_plain(setup):
     fmap, assessment, items, variants = setup
     r = SPRTRouter(items, variants, fmap, RouterConfig(mech_cap=None, beta=0.2))

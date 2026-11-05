@@ -7,10 +7,9 @@ Each item the router serves:
   - plain variant: update with outcome "none" (no evidence).
   - a check: ask the donor what this respondent got, and update with it.
   - passive checks (e.g. behaviour, style) are observed on every item shown.
-NoObservation (nothing to score, or no data anywhere) means no observation: the router gets no
-evidence from it. For a passive check that is simply skipped. For an active check the item was
-still shown, so the router is told it was shown plain (outcome "none", zero evidence); otherwise
-it would offer the same item again forever.
+NoObservation (nothing to score, or no data anywhere) means no evidence. For a passive check it
+is simply skipped. For an active check the variant was still shown, so the router gets
+update(state, variant_id, None): "shown, nothing to score" (served, delta 0, status unchanged).
 """
 
 from __future__ import annotations
@@ -73,7 +72,7 @@ def replay_session(
                 )
             except NoObservation:
                 skipped += 1
-                state = router.update(state, make_variant_id(choice.item_id, None), "none")
+                state = router.update(state, choice.variant_id, None)
         for p in passive:
             try:
                 outcome = donor.outcome(choice.item_id, p)

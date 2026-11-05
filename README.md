@@ -109,8 +109,8 @@ Never send `state.score` to the browser.
 ## Contract changes beyond the Oct 17 draft
 
 These go beyond the Oct 17 draft in AGENTS.md section 6. **Items 1–8 are agreed by the team.**
-Items 9–12 (contracts v2) were agreed on Nov 2; items 13–15 were added on Nov 3. All land with
-the `arav/contracts-v2` PR.
+Items 9–12 (contracts v2) were agreed on Nov 2; items 13–15 were added on Nov 3 with the
+`arav/contracts-v2` PR (#5). Item 16 lands with the replay PR (#9).
 
 1. `RenderedItem.copy_text`: the exact text a select-and-copy of the item yields, hidden spans
    included. The mechanism sets it, because only it knows where hidden text goes.
@@ -150,3 +150,8 @@ the `arav/contracts-v2` PR.
 15. `Response.answer` is strict: kept exactly as given. `True`/`False` are rejected, `"1"`
     stays the text `"1"` (never option 1), `3.0` stays a float, and a ranking must be a list
     of ints. Whether the type fits the item is checked by the caller and the mechanism.
+16. `router.update(state, variant_id, None)` means "shown, nothing to score": the active
+    check raised `NoObservation`. The real `variant_id` goes into `served` (so it isn't offered
+    again), with no evidence: delta 0, status unchanged, history `(variant_id, "none", 0.0)`.
+    Plain variants still use outcome `"none"`. A passive check with nothing to score is
+    skipped. Replay uses this; the server should do the same.

@@ -124,9 +124,11 @@ def test_no_observation_is_skipped_and_never_scored():
 
     donor = _NoData(donor.inner, blind="decoy")           # an active check with no data
     res = replay_session(router, assessment, donor, seed=1)
-    decoys = [v for v, _, _ in res.final.history if "|decoy|" in v]
-    assert res.skipped >= 1 and decoys == []               # no decoy evidence ever recorded
-    assert all(d == 0.0 for v, _, d in res.final.history if v.endswith("|plain|0"))
+    decoys = [h for h in res.final.history if "|decoy|" in h[0]]
+    assert res.skipped == len(decoys) >= 1
+    assert all(out == "none" and d == 0.0 for _, out, d in decoys)  # shown, nothing to score
+    assert {v for v, _, _ in decoys} <= set(res.final.served)       # the trapped ids, served
+    assert "decoy" not in res.final.contrib
 
 
 # ---------- quick map ----------
