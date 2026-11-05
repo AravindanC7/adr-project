@@ -11,7 +11,11 @@ Real use:
     python scripts/run_replay.py --outcomes results/outcomes/ \
         --assessment data/processed/assessments.jsonl --assessment-id quiz-slice \
         --items data/processed/items.jsonl --variants data/processed/variants/quiz-slice.jsonl \
-        --policies router,random,single:decoy --n 500 --seed 0
+        --compare --n 500 --seed 0
+
+Policies (--policies, comma list): router, best_single, all_checks, fixed_plan, random,
+single:<mechanism> (see adr/baselines/policies.py). --compare runs router and baselines 1-4 on
+the same respondents and also writes comparison.csv and comparison.md.
 
 The failure map is fitted on train rows only (--map to use a saved one instead). Evaluation
 uses held-out rows (held-out model or held-out survey) when there are any; otherwise it
@@ -33,15 +37,15 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from adr.baselines.simple import RandomCheckRouter, SingleMechanismRouter
+from adr.baselines.plans import best_single_mechanism, multi_check_items
+from adr.baselines.policies import COMPARE, make_policy
 from adr.contracts import Assessment, FailureMap, Item, RenderedItem, read_jsonl, read_outcomes
 from adr.contracts.outcome import utc_now
 from adr.harness.copy_paste import _git_commit, plain_variant
+from adr.replay.compare import compare, comparison_table, write_comparison
 from adr.replay.donors import Donors, Group
-from adr.replay.metrics import evaluate
 from adr.replay.quick_map import quick_failure_map, train_eval_split
-from adr.replay.simulate import replay_session
-from adr.router.core import RouterConfig, SPRTRouter
+from adr.router.core import RouterConfig
 
 
 def load_bank(args) -> tuple[Assessment, dict[str, Item], dict[str, list[RenderedItem]]]:
@@ -71,22 +75,6 @@ def load_bank(args) -> tuple[Assessment, dict[str, Item], dict[str, list[Rendere
     return assessments[0], items, dict(variants)
 
 
-def make_policies(names: list[str], items, variants, fmap: FailureMap) -> dict:
-    cfg = RouterConfig()
-    out = {}
-    for name in names:
-        if name == "router":
-            out[name] = SPRTRouter(items, variants, fmap, cfg)
-        elif name == "random":
-            out[name] = RandomCheckRouter(items, variants, fmap, cfg)
-        elif name.startswith("single:"):
-            out[name] = SingleMechanismRouter(items, variants, fmap, cfg,
-                                              mechanism=name.split(":", 1)[1])
-        else:
-            raise SystemExit(f"unknown policy {name!r}: use router, random or single:<mechanism>")
-    return out
-
-
 def loud(msg: str) -> None:
     bar = "!" * 78
     print(f"\n{bar}\n!! {msg}\n{bar}\n")
@@ -99,7 +87,9 @@ def main() -> None:
     ap.add_argument("--assessment"), ap.add_argument("--assessment-id")
     ap.add_argument("--items"), ap.add_argument("--variants")
     ap.add_argument("--map", help="a saved FailureMap JSON; default: TEMPORARY quick map")
-    ap.add_argument("--policies", default="router,random,single:decoy")
+    ap.add_argument("--policies", default=",".join(COMPARE))
+    ap.add_argument("--compare", action="store_true",
+                    help=f"run {', '.join(COMPARE)} and write comparison.csv / .md")
     ap.add_argument("--passive", default="", help="comma list, e.g. behaviour,style")
     ap.add_argument("--n", type=int, default=200, help="simulated respondents per group")
     ap.add_argument("--seed", type=int, default=0)
@@ -147,32 +137,27 @@ def main() -> None:
     for w in warnings:
         loud(w)
 
-    policies = make_policies(args.policies.split(","), items, variants, fmap)
+    names = list(COMPARE) if args.compare else [p for p in args.policies.split(",") if p]
+    cfg = RouterConfig()
+    try:  # fmap is fitted on train rows only, so the baselines' choices never see held-out data
+        policies = {n: make_policy(n, assessment, items, variants, fmap, cfg) for n in names}
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
+    best_single = None
+    if "best_single" in names:
+        best_single = dict(zip(("mechanism", "expected_evidence"),
+                               best_single_mechanism(fmap, assessment, items, variants)))
+        print(f"best_single: {best_single['mechanism']} (expected evidence per mechanism, "
+              f"train map: {best_single['expected_evidence']})")
+    multi = multi_check_items(assessment, items, variants)
     print(f"run {run_id}: {len(assessment.item_ids)} items, map {fmap.version}, "
           f"{args.n} respondents per group, seed {args.seed}")
     print("groups: " + ", ".join(f"{g.label} ({len(donors.sessions(g))} sessions)"
                                  for g in ai_groups + human_groups))
-    results: dict = {}
-    draws: dict = {}
-    for name, router in policies.items():
-        runs = {g: [replay_session(router, assessment, donors.respondent(g, args.seed + i),
-                                   passive, seed=args.seed + i) for i in range(args.n)]
-                for g in ai_groups + human_groups}
-        honest = [r for g in human_groups for r in runs[g]]
-        ai_all = [r for g in ai_groups for r in runs[g]]
-        results[name] = {
-            "overall": evaluate(ai_all, honest, n_boot=args.boot, seed=args.seed),
-            "by_group": {g.label: evaluate(runs[g], honest, n_boot=args.boot, seed=args.seed)
-                         for g in ai_groups},
-        }
-        draws[name] = {g.label: {
-            "respondents": len(runs[g]),
-            "donor_sessions_used": len({r.donor_session for r in runs[g]} - {None}),
-            "fallbacks": sum(r.fallbacks for r in runs[g]),
-            "synthetic_draws": sum(r.synthetic for r in runs[g]),
-            "skipped_no_observation": sum(r.skipped for r in runs[g]),
-            "checks_run": sum(r.checks_run for r in runs[g]),
-        } for g in ai_groups + human_groups}
+    summaries = compare(policies, assessment, donors, args.n, args.seed, passive, args.boot)
+    results = {n: {"overall": s["overall"], "by_group": s["by_group"]}
+               for n, s in summaries.items()}
+    draws = {n: s["sources"] for n, s in summaries.items()}
 
     def fmt(value, spec):
         return "-" if value is None else format(value, spec)
@@ -199,9 +184,13 @@ def main() -> None:
     (run_dir / "metrics.json").write_text(json.dumps({
         "warnings": warnings,
         "evaluated_on_fit_rows": same_data,
+        "best_single": best_single,
         "results": results,
         "outcome_sources": draws,
     }, indent=2))
+    if args.compare:
+        _, md_path = write_comparison(comparison_table(results), run_dir)
+        print(f"\n{md_path.read_text()}")
     (run_dir / "config.yaml").write_text(yaml.safe_dump({
         "run_id": run_id,
         "mode": "replay",
@@ -218,7 +207,11 @@ def main() -> None:
         "evaluated_on_fit_rows": same_data,
         "groups": {g.label: len(donors.sessions(g)) for g in ai_groups + human_groups},
         "policies": list(policies),
-        "router_config": RouterConfig().__dict__,
+        "router_config": cfg.__dict__,
+        "best_single": best_single["mechanism"] if best_single else None,
+        # all_checks runs one active check per item; these items had more than one eligible
+        "n_items_multi_check": len(multi),
+        "items_multi_check": multi,
         "passive": list(passive),
         "n_per_group": args.n,
         "seed": args.seed,
@@ -226,7 +219,8 @@ def main() -> None:
         "git_commit": _git_commit(),
         "created_at": utc_now(),
     }, sort_keys=False))
-    print(f"\nSaved {run_dir / 'metrics.json'} and config.yaml")
+    extra_files = ", comparison.csv, comparison.md" if args.compare else ""
+    print(f"\nSaved {run_dir / 'metrics.json'}, config.yaml{extra_files}")
 
 
 if __name__ == "__main__":
