@@ -102,9 +102,11 @@ choice = router.next(state)    # None = finished, or paused for review
 
 Never send `state.score` to the browser.
 
-## Proposed contract changes to agree at the next sync
+## Contract changes beyond the Oct 17 draft
 
-These go beyond the Oct 17 draft in AGENTS.md section 6:
+These go beyond the Oct 17 draft in AGENTS.md section 6. **Items 1–8 are agreed by the team.**
+Items 9–12 (contracts v2) were agreed on Nov 2; items 13–15 were added on Nov 3. All land with
+the `arav/contracts-v2` PR.
 
 1. `RenderedItem.copy_text`: the exact text a select-and-copy of the item yields, hidden spans
    included. The mechanism sets it, because only it knows where hidden text goes.
@@ -120,3 +122,27 @@ These go beyond the Oct 17 draft in AGENTS.md section 6:
    history), `Choice.mechanism` and every `variant_id` never reach the browser; variant ids name
    the mechanism. The server sends an opaque per-step token and maps it back to the variant id.
    The browser only gets the visible item and whether the assessment is finished.
+9. `AssessmentType` gains `"test"` (a quiz with right answers and a time limit) and
+   `"assignment"` (written answers). `Item.correct_option` is allowed on quiz and test items. A
+   test `Assessment` must set `time_limit_s` (without one, it's a quiz).
+10. `Item.passage` (optional): reading-comprehension text shown before the stem, which asks about
+    it. Neither `passage` nor `stem` may be only whitespace. A mechanism's `copy_text` never
+    includes the passage; the harness always adds it in front, once. `Assessment.time_limit_s`
+    (optional, > 0): time allowed for the whole assessment.
+11. `HiddenPosition = "before_stem" | "after_stem" | "after_options"`. A variant whose `hidden`
+    has `hidden_text` (non-empty text) must also have `hidden_position`; copy text, the PDF and
+    the page all place hidden text from it. Mechanisms may add their own extra keys to `hidden`.
+12. JSONL files via `adr/contracts/io.py`: `write_jsonl(path, models)` and
+    `read_jsonl(path, model_cls)`, which reports the line number of a bad line. Variants are stored
+    one file per assessment, at `variants/<assessment_id>.jsonl` (`variants_path(root, id)`).
+13. `Telemetry` gains four optional counts and timings (all >= 0, default None = not
+    measured): `first_key_ms` (time until the first keystroke), `away_ms` (total time away
+    from the tab), `pasted_chars` (length of pasted text, never the text) and `edit_keys`
+    (Backspace/Delete count). Telemetry never holds content. Older telemetry still validates.
+14. `NoObservation` (exception): a mechanism's `score()` raises it when there is nothing to
+    score, e.g. an empty answer. Callers skip that observation: it never becomes an outcome
+    row or a router update. The harness counts skips per mechanism in `config.yaml`
+    (`skipped_observations`); the server and replay must skip them the same way.
+15. `Response.answer` is strict: kept exactly as given. `True`/`False` are rejected, `"1"`
+    stays the text `"1"` (never option 1), `3.0` stays a float, and a ranking must be a list
+    of ints. Whether the type fits the item is checked by the caller and the mechanism.

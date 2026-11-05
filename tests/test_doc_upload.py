@@ -5,7 +5,7 @@ import re
 import pytest
 from pypdf import PdfReader
 
-from adr.contracts import Assessment, read_outcomes
+from adr.contracts import Assessment, Item, RenderedItem, read_outcomes
 from adr.harness.copy_paste import plain_variant
 from adr.harness.doc_upload import DocUploadConfig, build_documents, run_doc_upload, split_answers
 from adr.harness.llm_client import (
@@ -18,7 +18,8 @@ from adr.harness.llm_client import (
     openai_messages,
 )
 from adr.harness.pdf_render import render_assessment_pdf
-from tests.stubs import ITEMS, ITEMS_BY_ID, StubCanary, StubDecoy
+from adr.harness.prompts import copy_text
+from tests.stubs import ITEMS, ITEMS_BY_ID, SkipCanary, SkipStyle, StubCanary, StubDecoy
 
 
 def pdf_text(data: bytes) -> str:
@@ -108,6 +109,22 @@ def test_hidden_text_is_extractable_but_drawn_invisibly():
     assert not any(h in s for s, _ in drawn if _ == 0 for h in hidden)
 
 
+@pytest.mark.parametrize("position", ["before_stem", "after_stem", "after_options"])
+def test_pdf_places_passage_and_hidden_text_like_copy_text(position):
+    item = Item(item_id="arc:p1", source="arc", assessment_type="test", item_type="mcq",
+                passage="Bees", stem="Bees are insects. Why?", options=["Wings", "Legs"],
+                correct_option=1, eligible_mechanisms=["decoy"])
+    v = RenderedItem(item_id=item.item_id, mechanism="decoy", variant_id="arc:p1|decoy|0",
+                     visible={"stem": item.stem, "options": item.options},
+                     hidden={"hidden_text": "HIDDEN", "hidden_position": position})
+    for plain in (item, item.model_copy(update={"passage": None})):
+        data, _ = render_assessment_pdf([plain], [v])
+        shown = [(s, m) for s, m in shown_strings(data)[1:] if s != "Q1. "]   # skip title, label
+        expected = [(t, 3 if t == "HIDDEN" else 0)
+                    for t in copy_text(v, plain).split("\n") if t]
+        assert shown == expected
+
+
 def test_pdf_is_deterministic_and_rejects_mismatched_variants():
     q1, q2 = ITEMS_BY_ID["handwritten:q1"], ITEMS_BY_ID["handwritten:q2"]
     a, _ = render_assessment_pdf([q1], [plain_variant(q1)])
@@ -192,6 +209,21 @@ def test_naive_falls_for_decoy_and_rerun_hits_cache(tmp_path):
     rows2 = run_doc_upload(client, assessment, items, variants, mechs, cfg)
     assert fake.calls == calls
     assert [r.outcome for r in rows2] == [r.outcome for r in rows]
+
+
+def test_no_observation_is_skipped_and_counted(tmp_path):
+    import yaml
+
+    client, _ = make_client(tmp_path)
+    assessment, items, variants, mechs = _setup()
+    mechs = {**mechs, "canary": SkipCanary(), "style": SkipStyle()}
+    cfg = DocUploadConfig(run_id="du-skip", models=["fake-a"], results_dir=str(tmp_path))
+    rows = run_doc_upload(client, assessment, items, variants, mechs, cfg)
+    assert len(rows) == 6                               # s1's canary row is gone in both docs
+    assert "canary" not in {r.mechanism for r in rows}
+    config = yaml.safe_load((tmp_path / "runs" / "du-skip" / "config.yaml").read_text())
+    assert config["n_skipped_observations"] == 4
+    assert config["skipped_observations"] == {"canary": 2, "style": 2}
 
 
 def test_warned_attacker_avoids_decoy(tmp_path):

@@ -8,7 +8,7 @@ from adr.harness.copy_paste import CopyPasteConfig, plain_variant, run_copy_past
 from adr.harness.llm_client import FakeProvider, LLMClient, ModelSpec, SpendCapExceeded
 from adr.harness.parse import parse_answer, parse_option
 from adr.harness.prompts import build_prompt
-from tests.stubs import ITEMS, ITEMS_BY_ID, StubCanary, StubDecoy
+from tests.stubs import ITEMS, ITEMS_BY_ID, SkipCanary, SkipStyle, StubCanary, StubDecoy
 
 
 def naive_model(system, messages):
@@ -143,6 +143,22 @@ def test_copy_paste_end_to_end(tmp_path):
     calls = fake.calls
     run_copy_paste(client, assessment, items, variants, mechs, cfg)
     assert fake.calls == calls
+
+
+def test_no_observation_is_skipped_and_counted(tmp_path):
+    import yaml
+
+    client, _ = make_client(tmp_path)
+    assessment, items, variants, mechs = _setup()
+    mechs = {**mechs, "canary": SkipCanary(), "style": SkipStyle()}
+    cfg = CopyPasteConfig(run_id="t-skip", models=["fake-a", "fake-held"],
+                          results_dir=str(tmp_path))
+    rows = run_copy_paste(client, assessment, items, variants, mechs, cfg)
+    assert len(rows) == 8                               # the 2 canary rows are gone, no style rows
+    assert {r.mechanism for r in rows} == {"decoy", None}
+    config = yaml.safe_load((tmp_path / "runs" / "t-skip" / "config.yaml").read_text())
+    assert config["n_skipped_observations"] == 4
+    assert config["skipped_observations"] == {"canary": 2, "style": 2}
 
 
 def test_warned_attacker_avoids_traps(tmp_path):
