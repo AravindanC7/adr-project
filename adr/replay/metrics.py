@@ -48,10 +48,26 @@ def detection_at_fpr(
     raise AssertionError("unreachable: the max human score always qualifies")
 
 
+def _cluster_keys(results: Sequence[Any]) -> list[Any]:
+    """Which logged session each simulated respondent copied. Respondents with no donor session
+    (synthetic groups, or SessionResult from adr/router/synthetic.py) are their own cluster."""
+    keys: list[Any] = []
+    for i, r in enumerate(results):
+        session = getattr(r, "donor_session", None)
+        group = getattr(r, "group", None)
+        keys.append((getattr(group, "label", group), session) if session is not None else ("own", i))
+    return keys
+
+
 class _Arrays:
-    """One respondent per array position, so a bootstrap draw is just a list of indexes."""
+    """One respondent per array position, so a bootstrap draw is just a list of indexes.
+    `clusters` holds, per donor session, the positions of the respondents that copied it."""
 
     def __init__(self, results: Sequence[Any]):
+        by_key: dict[Any, list[int]] = {}
+        for i, key in enumerate(_cluster_keys(results)):
+            by_key.setdefault(key, []).append(i)
+        self.clusters = [np.array(v, dtype=int) for _, v in sorted(by_key.items(), key=str)]
         self.score = np.array([r.final.score for r in results], dtype=float)
         self.review = np.array([r.final.status == "review" for r in results], dtype=float)
         self.checks = np.array([r.checks_run for r in results], dtype=float)
@@ -88,9 +104,13 @@ def evaluate(
 ) -> dict[str, Any]:
     """Point estimates plus 95% bootstrap intervals.
 
-    The bootstrap resamples respondents, AI and honest separately and with replacement, and
-    recomputes every metric each time. The interval is the 2.5th and 97.5th percentile of those
-    draws, or None if a metric was undefined in more than half of them.
+    The bootstrap resamples donor sessions, not simulated respondents: many respondents copy the
+    same logged session, so resampling them one by one would make the intervals shrink as --n
+    grows although no new real data was added. Each draw picks logged sessions with replacement
+    (AI and honest separately) and takes every respondent that copied each one, then recomputes
+    every metric. The interval is the 2.5th and 97.5th percentile of those draws, or None if a
+    metric was undefined in more than half of them. `n_ai_sessions` / `n_human_sessions` say how
+    many independent units the intervals rest on.
     """
     ai, hu = _Arrays(ai_results), _Arrays(human_results)
     n_ai, n_hu = len(ai_results), len(human_results)
@@ -98,8 +118,8 @@ def evaluate(
     rng = np.random.default_rng(seed)
     draws: dict[str, list[float]] = {m: [] for m in METRICS}
     for _ in range(n_boot):
-        ia = rng.integers(0, n_ai, n_ai) if n_ai else np.arange(0)
-        ih = rng.integers(0, n_hu, n_hu) if n_hu else np.arange(0)
+        ia = _resample(ai.clusters, rng)
+        ih = _resample(hu.clusters, rng)
         for name, value in _metrics(ai, hu, ia, ih).items():
             if value is not None:
                 draws[name].append(value)
@@ -111,5 +131,13 @@ def evaluate(
             ci[name] = (float(lo), float(hi))
         else:
             ci[name] = None
-    return {"n_ai": n_ai, "n_human": n_hu, **point, "ci95": ci, "n_boot": n_boot,
-            "boot_seed": seed}
+    return {"n_ai": n_ai, "n_human": n_hu, "n_ai_sessions": len(ai.clusters),
+            "n_human_sessions": len(hu.clusters), **point, "ci95": ci, "n_boot": n_boot,
+            "boot_seed": seed, "boot_unit": "donor_session"}
+
+
+def _resample(clusters: list[np.ndarray], rng: np.random.Generator) -> np.ndarray:
+    if not clusters:
+        return np.arange(0)
+    picks = rng.integers(0, len(clusters), len(clusters))
+    return np.concatenate([clusters[k] for k in picks])

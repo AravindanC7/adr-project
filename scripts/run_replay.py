@@ -22,10 +22,16 @@ scripts/plot_budget_curve.py.
 SYNTHETIC check of the whole pipeline (invented numbers, never results):
     python scripts/run_replay.py --synthetic quiz --compare --n 500
 
-The failure map is fitted on train rows only (--map to use a saved one instead). Evaluation
-uses held-out rows (held-out model or held-out survey) when there are any; otherwise it
-evaluates on the map's own rows and says so loudly. Writes results/runs/<run_id>/metrics.json
-and config.yaml.
+Three splits (adr/replay/quick_map.py):
+  train        fits the failure map (--map to use a saved one instead)
+  calibration  --calibration-frac of the non-held-out items (default 30%, by item type, fixed
+               --split-seed). The DEFAULT evaluation: development runs, and where thresholds
+               and the per-mechanism cap are calibrated (#42). The replay serves only these
+               items, so sessions are shorter than the real thing.
+  held-out     the held-out model and the held-out survey. Read ONLY with --final, which prints
+               a banner: report those numbers, never tune on them (AGENTS.md section 8).
+If the evaluated rows have no AI respondents, only the honest-side metrics (false flags,
+burden) are computed. Writes results/runs/<run_id>/metrics.json and config.yaml.
 """
 
 from __future__ import annotations
@@ -42,7 +48,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from adr.baselines.plans import best_single_mechanism, multi_check_items
+from adr.baselines.plans import multi_check_items
 from adr.baselines.policies import COMPARE, make_policy
 from adr.contracts import (
     COLUMNS,
@@ -57,7 +63,13 @@ from adr.contracts.outcome import utc_now
 from adr.harness.copy_paste import _git_commit, plain_variant
 from adr.replay.compare import BETAS, budget_curve, compare, comparison_table, write_comparison
 from adr.replay.donors import Donors, Group
-from adr.replay.quick_map import quick_failure_map, train_eval_split
+from adr.replay.quick_map import (
+    CALIBRATION_FRAC,
+    SPLIT_SEED,
+    fit_rows,
+    quick_failure_map,
+    split_rows,
+)
 from adr.router.core import RouterConfig
 
 
@@ -89,7 +101,12 @@ def load_bank(args) -> tuple[Assessment, dict[str, Item], dict[str, list[Rendere
 
 
 def load_logged(args, warnings: list[str]):
-    """Logged outcome rows: map from train rows, evaluation on held-out rows (see module doc)."""
+    """Logged outcome rows: map from train rows; evaluation on the calibration split, or on the
+    held-out rows with --final (see module doc). Returns the assessment as evaluated: only its
+    calibration items unless --final."""
+    final = getattr(args, "final", False)
+    frac = getattr(args, "calibration_frac", CALIBRATION_FRAC)
+    split_seed = getattr(args, "split_seed", SPLIT_SEED)
     paths = []
     for p in args.outcomes:
         path = Path(p)
@@ -100,38 +117,59 @@ def load_logged(args, warnings: list[str]):
     if table.empty:
         raise SystemExit("no outcome rows for this assessment's items")
 
-    fit, held, same_data = train_eval_split(table)
-    fmap = FailureMap.load(args.map) if args.map else quick_failure_map(table)
+    splits = split_rows(table, frac, split_seed)
+    fmap = FailureMap.load(args.map) if args.map else quick_failure_map(splits.train)
     if not args.map:
         warnings.append(f"map: {fmap.note}")
-    eval_ai = (fit if same_data else held).query("respondent_kind == 'ai'")
-    if same_data:
-        warnings.append("EVALUATING ON THE SAME ROWS THE MAP WAS FIT ON: numbers are optimistic. "
-                        "Add held-out-model or held-out-survey rows for a fair evaluation.")
-    humans = held.query("respondent_kind == 'human'") if not same_data else pd.DataFrame()
-    if humans.empty:
-        humans = fit.query("respondent_kind == 'human'")
-        if not humans.empty and not same_data:
-            warnings.append("no held-out human rows: honest respondents reuse the map's own "
-                            "human rows, so false-flag rates are optimistic.")
+    if final:
+        loud("FINAL EVALUATION ON HELD-OUT DATA (--final). Report these numbers; never tune "
+             "prompts, thresholds, caps or features on them (AGENTS.md section 8).")
+        if splits.heldout.empty:
+            raise SystemExit("--final: there are no held-out rows (held-out model or survey)")
+        evaluated_on, eval_rows, eval_assessment = "heldout", splits.heldout, assessment
+    else:
+        ids = [i for i in assessment.item_ids if i in splits.calibration_item_ids]
+        if not ids:
+            raise SystemExit("no calibration items in this assessment: raise --calibration-frac")
+        evaluated_on, eval_rows = "calibration", splits.calibration
+        eval_assessment = assessment.model_copy(update={"item_ids": ids})
+        print(f"Development evaluation on the calibration split: {len(ids)} of "
+              f"{len(assessment.item_ids)} items. Held-out rows are not read (use --final).")
+    eval_ai = eval_rows.query("respondent_kind == 'ai'")
+    humans = eval_rows.query("respondent_kind == 'human'")
+    if humans.empty and final:
+        humans = fit_rows(table).query("respondent_kind == 'human'")
+        if not humans.empty:
+            warnings.append("no held-out human rows: honest respondents reuse the non-held-out "
+                            "human rows (including the map's own), so false-flag rates are "
+                            "optimistic.")
     extra: tuple[Group, ...] = ()
     if humans.empty:
         extra = (Group.human("synthetic"),)
-        warnings.append("NO HUMAN ROWS AT ALL: every honest respondent is drawn from the map's "
+        warnings.append("NO HUMAN ROWS: every honest respondent is drawn from the map's "
                         "p_human, so FPR-based numbers say nothing about real people.")
+    if eval_ai.empty:
+        warnings.append(f"NO AI ROWS IN THE {evaluated_on.upper()} ROWS: only the honest-side "
+                        "metrics (false flags, burden) are computed; TPR is blank.")
     donors = Donors(pd.concat([eval_ai, humans]), items, fallback_map=fmap, extra_groups=extra)
-    if not donors.groups("ai"):
-        raise SystemExit("no AI rows to evaluate on")
     info = {
         "outcome_files": [str(p) for p in paths],
         "source_run_ids": sorted(table["run_id"].unique()),
         "map": args.map or "quick (TEMPORARY, adr/replay/quick_map.py)",
-        "n_rows_fit": len(fit),
+        "evaluated_on": evaluated_on,
+        "final": final,
+        "n_items_assessment": len(assessment.item_ids),
+        "eval_item_ids": list(eval_assessment.item_ids),
+        "calibration_frac": frac,
+        "split_seed": split_seed,
+        "calibration_item_ids": sorted(splits.calibration_item_ids),
+        "n_rows_train": len(splits.train),
+        "n_rows_calibration": len(splits.calibration),
+        "n_rows_heldout_read": len(splits.heldout) if final else 0,
         "n_rows_eval_ai": len(eval_ai),
         "n_rows_human": len(humans),
-        "evaluated_on_fit_rows": same_data,
     }
-    return assessment, items, variants, fmap, donors, info
+    return eval_assessment, items, variants, fmap, donors, info
 
 
 def load_synthetic(kind: str, warnings: list[str]):
@@ -146,7 +184,7 @@ def load_synthetic(kind: str, warnings: list[str]):
     warnings.append(f"SYNTHETIC {kind}: invented numbers from adr/router/synthetic.py. "
                     "Never report these as results.")
     info = {"synthetic": kind, "map": "synthetic_failure_map (INVENTED)",
-            "evaluated_on_fit_rows": True}
+            "evaluated_on": "synthetic", "final": False}
     return assessment, items, variants, fmap, donors, info
 
 
@@ -174,6 +212,11 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=200, help="simulated respondents per group")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--boot", type=int, default=1000, help="bootstrap draws for the 95%% CIs")
+    ap.add_argument("--final", action="store_true",
+                    help="FINAL evaluation on the held-out rows (never tune on its numbers)")
+    ap.add_argument("--calibration-frac", type=float, default=CALIBRATION_FRAC,
+                    help="share of non-held-out items set aside for calibration (default 0.3)")
+    ap.add_argument("--split-seed", type=int, default=SPLIT_SEED)
     ap.add_argument("--results-dir", default="results")
     ap.add_argument("--run-id")
     args = ap.parse_args()
@@ -198,13 +241,14 @@ def main() -> None:
     except ValueError as e:
         raise SystemExit(str(e)) from e
     best_single = None
-    if "best_single" in names:
-        best_single = dict(zip(("mechanism", "expected_evidence"),
-                               best_single_mechanism(fmap, assessment, items, variants)))
+    if "best_single" in names:  # the policy's own choice (attack-mode aware), not a recompute
+        bs = policies["best_single"]
+        best_single = {"mechanism": bs.mechanism, "expected_evidence": bs.expected_evidence}
         print(f"best_single: {best_single['mechanism']} (expected evidence per mechanism, "
               f"train map: {best_single['expected_evidence']})")
     multi = multi_check_items(assessment, items, variants)
-    print(f"run {run_id}: {len(assessment.item_ids)} items, map {fmap.version}, "
+    print(f"run {run_id}: {len(assessment.item_ids)} items ({info['evaluated_on']}), "
+          f"map {fmap.version}, "
           f"{args.n} respondents per group, seed {args.seed}")
     print("groups: " + ", ".join(f"{g.label} ({len(donors.sessions(g))} sessions)"
                                  for g in ai_groups + human_groups))
@@ -237,15 +281,16 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "metrics.json").write_text(json.dumps({
         "warnings": warnings,
-        "evaluated_on_fit_rows": info["evaluated_on_fit_rows"],
+        "evaluated_on": info["evaluated_on"],
+        "final": info["final"],
         "best_single": best_single,
         "results": results,
         "outcome_sources": draws,
-    }, indent=2))
+    }, indent=2), encoding="utf-8")
     betas = tuple(float(b) for b in args.betas.split(",") if b)
     if args.compare:
         _, md_path = write_comparison(comparison_table(results), run_dir)
-        print(f"\n{md_path.read_text()}")
+        print(f"\n{md_path.read_text(encoding='utf-8')}")
         curve = budget_curve(assessment, items, variants, fmap, donors, args.n, args.seed,
                              {n: s for n, s in summaries.items() if n != "router"}, betas, cfg,
                              passive, args.boot)
@@ -276,7 +321,7 @@ def main() -> None:
         "budget_curve_betas": list(betas) if args.compare else None,
         "git_commit": _git_commit(),
         "created_at": utc_now(),
-    }, sort_keys=False))
+    }, sort_keys=False, allow_unicode=True), encoding="utf-8")
     extra_files = ", comparison.csv, comparison.md, budget_curve.csv" if args.compare else ""
     print(f"\nSaved {run_dir / 'metrics.json'}, config.yaml{extra_files}")
 
