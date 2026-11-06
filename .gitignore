@@ -26,3 +26,5 @@ pilot_data/
 .idea/
 # pilot question bank: contains dataset questions, rebuilt by scripts/build_pilot_bank.py
 server/pilot_items.json
+# teammate dry run answers (#35): never in git
+dry_run_data/
