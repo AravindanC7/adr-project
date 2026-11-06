@@ -12,13 +12,18 @@ Outcomes, first match wins (AGENTS.md section 6.2):
                 * a paste of at least MIN_PASTE_CHARS characters, or
                 * an open-text answer much longer than the keys pressed plus the characters
                   pasted (text set by a script, drag-and-drop, an extension filling the box).
-  focus_loss  left the page (another tab or window) for at least MIN_AWAY_MS in total.
+  focus_loss  left the page (another tab or window) for at least MIN_AWAY_MS in total. Needs a
+              measured away_ms: older telemetry without it can't tell a brief blur from a
+              look-up, so a blur of unknown length is not counted (it falls through).
   too_fast    answered faster than anyone can read the question, or typed faster than a person
               types.
   normal      none of the above.
 
 It uses counts and timings only (AGENTS.md rule 7). The answer is used for its length, never
 its content.
+
+The reading floor counts the item's passage, which is not in RenderedItem.visible (the harness
+and the page add it in front of the stem). Pass it as `passage=item.passage`; the server does.
 
 THRESHOLDS ARE PROVISIONAL. They are set from typical human reading and typing speeds so that
 an honest person almost never trips them. The pilot (#35) measures how often people do, and
@@ -60,10 +65,12 @@ MIN_KEYS_FOR_SPEED = 10
 _WORD = re.compile(r"\S+")
 
 
-def reading_floor_ms(rendered: RenderedItem) -> int:
-    """The least time a person needs to read the passage and question and answer."""
-    v = rendered.visible
-    words = sum(len(_WORD.findall(str(v.get(k) or ""))) for k in ("passage", "stem"))
+def reading_floor_ms(rendered: RenderedItem, passage: str | None = None) -> int:
+    """The least time a person needs to read the passage and question and answer.
+
+    `passage` is Item.passage: variants never carry it, so the caller passes it in.
+    """
+    words = sum(len(_WORD.findall(text or "")) for text in (passage, rendered.visible["stem"]))
     return ANSWER_MS + READ_MS_PER_WORD * words
 
 
@@ -77,7 +84,15 @@ class BehaviourMechanism:
     def generate(self, item: Item, seed: int) -> RenderedItem:
         raise TypeError("behaviour is passive: it observes answers and makes no variants")
 
-    def score(self, rendered: RenderedItem, response: Response, telemetry: Telemetry | None) -> str:
+    def score(
+        self,
+        rendered: RenderedItem,
+        response: Response,
+        telemetry: Telemetry | None,
+        *,
+        passage: str | None = None,
+    ) -> str:
+        """One outcome for this answer. `passage` is the item's passage (Item.passage), if any."""
         if telemetry is None:
             raise NoObservation("no telemetry for this answer")
         t = telemetry
@@ -91,10 +106,11 @@ class BehaviourMechanism:
             if length >= UNTYPED_MIN_CHARS and covered < UNTYPED_COVERAGE * length:
                 return "paste"
 
-        if t.focus_loss_count > 0 and (t.away_ms is None or t.away_ms >= MIN_AWAY_MS):
+        # away_ms None (older telemetry): the length is unknown, so not proof of MIN_AWAY_MS.
+        if t.focus_loss_count > 0 and t.away_ms is not None and t.away_ms >= MIN_AWAY_MS:
             return "focus_loss"
 
-        if t.time_on_item_ms < reading_floor_ms(rendered):
+        if t.time_on_item_ms < reading_floor_ms(rendered, passage):
             return "too_fast"
         if (
             t.mean_interkey_ms is not None

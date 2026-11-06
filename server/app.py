@@ -442,7 +442,9 @@ def create_app(
         s.outcomes.append((scored_id, outcome))
         s.state = router.update(s.state, scored_id, outcome)
         try:
-            seen = BEHAVIOUR.score(rendered, response, req.telemetry)
+            seen = BEHAVIOUR.score(
+                rendered, response, req.telemetry, passage=items[choice.item_id].passage
+            )
         except NoObservation:
             seen = None
         if seen is not None:
