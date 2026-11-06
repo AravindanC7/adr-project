@@ -16,6 +16,7 @@ Everything is explained on the debrief screen, which also lets them remove their
 Approval: Prof. Vivek Gupta approved a small classmate pilot (in class, step #24, and by
 email), and the study has IRB approval. If the IRB approved a specific consent text, the
 On screen section must match it: check any change here against the approved version.
+Prof. Gupta approved the final wording and said his contact doesn't need to be added (Nov 5).
 
 Data kept after December 2026: only the totals printed in the report. The raw answers and
 everything worked out from them (#39 outcome rows) are deleted then.
@@ -32,4 +33,4 @@ We don't ask for your name, email or ASU ID. Please don't write anything that id
 
 Taking part is voluntary and has nothing to do with your grade in any course. You can stop at any time with the Stop button, which removes everything you've answered. At the end we explain the study in full, and you can still remove your answers then.
 
-Questions or concerns? Contact Harshini at hbalamu1@asu.edu or Prof. Vivek Gupta at <PROF_GUPTA_EMAIL>.
+Questions or concerns? Contact Harshini at hbalamu1@asu.edu.

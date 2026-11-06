@@ -121,8 +121,7 @@ outcome rows built from it. Only the totals printed in the report are kept (cons
 
 - **Hosting:** done, ngrok from Harshini's laptop (see Running it); tested from a phone on
   mobile data on Nov 5.
-- **Prof. Gupta's email** goes in consent.md and debrief.md (`<PROF_GUPTA_EMAIL>`); the start
-  script won't run until it's filled in.
+- **Consent wording:** approved by Prof. Gupta (Nov 5); no second contact needed.
 - **Saving data:** done (`ADR_DATA_DIR`, see Running it).
 - **ngrok sees visitors' IP addresses** as part of carrying the traffic (we never store them).
   The consent screen says *we* don't record IPs, which stays true; tell the group if asked.
