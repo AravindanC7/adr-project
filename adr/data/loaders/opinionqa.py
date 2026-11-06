@@ -120,8 +120,11 @@ def _read_questions(path: Path, wave: int) -> list[_SourceQuestion]:
         excluded_options = tuple(references[len(ordinals) :])
         if len(options) < 2:
             raise ValueError(f"{path}:{row_number}: question needs at least two options")
-        if len(options) != len(set(options)):
-            raise ValueError(f"{path}:{row_number}: displayed options contain duplicates")
+        normalized_references = [_normalize_answer(reference) for reference in references]
+        if len(normalized_references) != len(set(normalized_references)):
+            raise ValueError(
+                f"{path}:{row_number}: references contain duplicates after answer normalization"
+            )
 
         questions.append(
             _SourceQuestion(
@@ -152,6 +155,8 @@ def _human_distribution(
     weight_column: str,
 ) -> HumanDistribution:
     weighted_counts = {option: 0.0 for option in question.displayed_options}
+    displayed_answers = {_normalize_answer(option): option for option in question.displayed_options}
+    excluded_answers = {_normalize_answer(option) for option in question.excluded_options}
     n_respondents = 0
     n_nonmissing = 0
     n_unmatched = 0
@@ -180,10 +185,11 @@ def _human_distribution(
                 f"responses.csv:{row_number}: respondent weight must be finite and non-negative"
             )
 
-        if answer in weighted_counts:
-            weighted_counts[answer] += weight
+        normalized_answer = _normalize_answer(answer)
+        if normalized_answer in displayed_answers:
+            weighted_counts[displayed_answers[normalized_answer]] += weight
             n_respondents += 1
-        elif answer not in question.excluded_options:
+        elif normalized_answer not in excluded_answers:
             n_unmatched += 1
             if len(unmatched_examples) < 3:
                 unmatched_examples.add(answer)
@@ -193,7 +199,7 @@ def _human_distribution(
         examples = ", ".join(repr(value) for value in sorted(unmatched_examples))
         warnings.warn(
             f"{_item_id(question)}: ignored {n_unmatched}/{n_nonmissing} "
-            f"({unmatched_share:.1%}) non-refusal answers that did not exactly match an option; "
+            f"({unmatched_share:.1%}) non-refusal answers that did not match an option; "
             f"examples: {examples}",
             RuntimeWarning,
             stacklevel=2,
@@ -254,6 +260,12 @@ def _parse_string_list(path: Path, row_number: int, field: str, value: str) -> l
     if not parsed or not all(isinstance(entry, str) and entry.strip() for entry in parsed):
         raise ValueError(f"{path}:{row_number}: {field} must contain non-empty strings")
     return [entry.strip() for entry in parsed]
+
+
+def _normalize_answer(value: str) -> str:
+    """Normalize harmless response-export variants without changing answer meaning."""
+
+    return value.strip().casefold().rstrip(".").rstrip()
 
 
 def _wave_number(path: Path) -> int:

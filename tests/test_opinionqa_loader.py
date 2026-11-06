@@ -92,7 +92,7 @@ def test_rejects_invalid_weights(tmp_path: Path) -> None:
         load_opinionqa(tmp_path)
 
 
-def test_warns_when_non_refusal_answers_do_not_match_options(tmp_path: Path) -> None:
+def test_normalizes_case_and_trailing_periods_before_matching(tmp_path: Path) -> None:
     wave = _synthetic_wave(tmp_path)
     _write_csv(
         wave / "responses.csv",
@@ -105,7 +105,25 @@ def test_warns_when_non_refusal_answers_do_not_match_options(tmp_path: Path) -> 
         ],
     )
 
-    with pytest.warns(RuntimeWarning, match="ignored 2/4.*non-refusal answers"):
+    _, distributions = load_opinionqa(tmp_path)
+
+    assert distributions[0].n_respondents == 3
+    assert distributions[0].option_probs == pytest.approx([2 / 3, 1 / 3])
+
+
+def test_warns_only_for_answers_unmatched_after_normalization(tmp_path: Path) -> None:
+    wave = _synthetic_wave(tmp_path)
+    _write_csv(
+        wave / "responses.csv",
+        ["WEIGHT_W26", "Q1", "Q2"],
+        [
+            {"WEIGHT_W26": "1", "Q1": "More trees", "Q2": "Often"},
+            {"WEIGHT_W26": "1", "Q1": "unknown answer", "Q2": "Often"},
+            {"WEIGHT_W26": "1", "Q1": "refused.", "Q2": "Often"},
+        ],
+    )
+
+    with pytest.warns(RuntimeWarning, match="ignored 1/3.*non-refusal answers"):
         _, distributions = load_opinionqa(tmp_path)
 
     assert distributions[0].n_respondents == 1

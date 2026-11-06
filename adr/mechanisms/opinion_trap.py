@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Self
 
 from adr.contracts import (
     HumanDistribution,
@@ -60,7 +59,7 @@ class OpinionTrapMechanism:
         human_resp_dir: str | Path,
         *,
         implausible_max_probability: float = 0.05,
-    ) -> Self:
+    ) -> OpinionTrapMechanism:
         """Load OpinionQA data and return a configured mechanism for runs or generation."""
 
         # Local import avoids making dataset loading a requirement merely to import mechanisms.
