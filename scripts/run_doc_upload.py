@@ -86,7 +86,7 @@ def main() -> None:
     else:
         if not (args.assessment and args.items and args.variants):
             raise SystemExit("give --assessment, --items and --variants (or use --stub)")
-        assessment = Assessment.model_validate_json(Path(args.assessment).read_text())
+        assessment = Assessment.model_validate_json(Path(args.assessment).read_text(encoding="utf-8"))
         items = {it.item_id: it for it in read_jsonl(args.items, Item)}
         variants = {}
         for v in read_jsonl(args.variants, RenderedItem):
@@ -114,7 +114,7 @@ def main() -> None:
     for (model, mech, outcome), n in sorted(counts.items()):
         print(f"  {model:14s} {mech:14s} {outcome:22s} {n}")
     err = Path("results/runs") / run_id / "errors.jsonl"
-    n_err = len(err.read_text().splitlines()) if err.exists() else 0
+    n_err = len(err.read_text(encoding="utf-8").splitlines()) if err.exists() else 0
     if n_err:
         print(f"  {n_err} failed calls or skipped questions; see {err}")
 

@@ -121,9 +121,9 @@ class FailureMap(BaseModel):
     def save(self, path: str | Path) -> Path:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.model_dump_json(indent=2))
+        path.write_text(self.model_dump_json(indent=2), encoding="utf-8")
         return path
 
     @classmethod
     def load(cls, path: str | Path) -> FailureMap:
-        return cls.model_validate(json.loads(Path(path).read_text()))
+        return cls.model_validate(json.loads(Path(path).read_text(encoding="utf-8")))
