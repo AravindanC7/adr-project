@@ -241,3 +241,18 @@ def test_every_answer_gets_a_behaviour_outcome(traps):
     assert {o for _, o in passive} <= {"too_fast", "normal"}
     assert all(v.endswith("|behaviour|0") for v, _ in passive)
     assert not any("behaviour" in v for v in state["served"])  # passive: never "served"
+
+
+class _NothingToScore(StubDecoy):
+    def score(self, rendered, response, telemetry):
+        from adr.contracts import NoObservation
+        raise NoObservation("empty answer")
+
+
+def test_an_unscorable_answer_counts_as_shown_with_no_evidence(monkeypatch):
+    monkeypatch.setenv("ADR_DEBUG_STATE", "1")
+    c = TestClient(create_app(mechanisms={"decoy": _NothingToScore()}))
+    bodies = walk(c, "stub-quiz")
+    assert bodies[-1]["finished"]  # no loop on the unscorable question
+    state = c.get(f"/session/{bodies[0]['session_id']}").json()
+    assert [v.split("|")[1] for v in state["served"]] == ["plain"] * 3

@@ -39,8 +39,13 @@ powershell -ExecutionPolicy Bypass -File scripts\run_pilot.ps1 -Domain delicious
 ```
 
 It sets `ADR_PILOT=1 ADR_DATA_DIR=pilot_data ADR_ITEMS=server/pilot_items.json`, listens on
-127.0.0.1 only (nothing but ngrok can reach it) and turns off uvicorn's access log, which
-behind a tunnel would print every visitor's real IP address.
+127.0.0.1 only (nothing but ngrok can reach it), turns off uvicorn's access log (behind a
+tunnel it would print every visitor's real IP address) and starts ngrok with
+`--inspect=false` (otherwise its inspector at 127.0.0.1:4040 keeps every request in full,
+answers and IPs included). It refuses to start if the consent or debrief text still has a
+`<PLACEHOLDER>`, or if the data folder is inside OneDrive, Dropbox or Google Drive: those keep
+deleted files in their recycle bin and history, so "Remove my answers" wouldn't really remove
+them. The repo is on `D:\Code`, which isn't synced.
 
 The laptop must stay **on, plugged in, awake and online** Nov 9–13: set Windows to never sleep
 when plugged in, and turn off automatic restarts for updates for that week. If it does restart,
@@ -57,15 +62,30 @@ with `ADR_DEBUG_STATE=1` or `ADR_STUB_MECHANISMS=1`.
 `pilot_data/<random id>.jsonl` as it happens (`server/store.py`), so a restart loses nothing
 already answered. Stop and "Remove my answers" delete the file. A file with no `finish` line
 is a partial session; #39 drops it. **Never commit `pilot_data/`**, and delete it in December
-2026 as the consent screen promises. Counting finished sessions each day:
-`grep -l '"finish"' pilot_data/*.jsonl | wc -l`.
+2026 as the consent screen promises. Counting finished sessions each day (PowerShell):
+
+```powershell
+(Get-ChildItem pilot_data -Filter *.jsonl | Select-String -List '"finish"').Count
+```
+
+No clock times are saved: the start record has the date only and later records have seconds
+since the session started, because with about ten classmates a time of day could identify
+someone. The start record also has `consent_version`, a hash of the consent text that person
+agreed to.
+
+**Removing someone later.** The done screen shows each person their random session code and
+asks them to email it if they want their answers removed. Then:
+
+```powershell
+.venv\Scripts\python.exe -m server.store remove <code>
+```
 
 ## Session script (remote checklist)
 
 **By Sun Nov 8**
 - [ ] #3 merged, pilot bank built (`server/pilot_items.json`, 20–25 items), and the whole
       session timed by a teammate at ≤ 25 min
-- [ ] Hosting decided and tested from a phone on mobile data (see open items)
+- [x] Hosting decided and tested from a phone on mobile data (Nov 5)
 - [ ] Group message sent; sign-up list kept separately from any data
 - [ ] Teammate dry run: Arav and Archana each do one full session; then delete those sessions
 
@@ -83,8 +103,15 @@ is a partial session; #39 drops it. **Never commit `pilot_data/`**, and delete i
 **Fri Nov 13 evening**: close the pilot, stop the server and copy the data for #39.
 Tell the group the pilot is over, so the hidden text is no longer a secret.
 
+**Before #39 uses the data**: read through the open-text answers for names, emails or anything
+else that identifies someone, and blank them out. Nothing leaves the laptop before that.
+
+**December 2026, after final grades**: delete `pilot_data/`, every copy of it, and the #39
+outcome rows built from it. Only the totals printed in the report are kept (consent.md says so).
+
 **If something goes wrong**
-- Someone used AI anyway, or says so: remove their session (it isn't honest-human data).
+- Someone used AI anyway, or says so: ask for their code from the done screen and remove their
+  session (it isn't honest-human data). Without the code we can't tell which file is theirs.
 - Someone asks during the session "is this checking for AI?": say "I'll explain everything
   on the last screen" and nothing more.
 - Server down: post in the group and extend by a day if needed. Never ask anyone to redo
@@ -92,8 +119,10 @@ Tell the group the pilot is over, so the hidden text is no longer a secret.
 
 ## Open items (for #35)
 
-- **Hosting:** decided, ngrok from Harshini's laptop (see Running it). Test the link from a
-  phone on mobile data before Nov 9.
+- **Hosting:** done, ngrok from Harshini's laptop (see Running it); tested from a phone on
+  mobile data on Nov 5.
+- **Prof. Gupta's email** goes in consent.md and debrief.md (`<PROF_GUPTA_EMAIL>`); the start
+  script won't run until it's filled in.
 - **Saving data:** done (`ADR_DATA_DIR`, see Running it).
 - **ngrok sees visitors' IP addresses** as part of carrying the traffic (we never store them).
   The consent screen says *we* don't record IPs, which stays true; tell the group if asked.

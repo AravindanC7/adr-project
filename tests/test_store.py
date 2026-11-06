@@ -100,3 +100,42 @@ def test_outside_the_pilot_saving_is_optional(tmp_path, monkeypatch):
     sid = client.post("/session/start", json={"assessment_id": "stub-quiz"}).json()["session_id"]
     first = json.loads((tmp_path / f"{sid}.jsonl").read_text(encoding="utf-8").splitlines()[0])
     assert first["pilot"] is False and first["consented"] is False
+
+
+def test_no_clock_times_are_saved(saved):
+    client, folder = saved
+    sid = finish(client, start(client).json())["session_id"]
+    records = read_session(folder / f"{sid}.jsonl")
+    assert len(records[0]["started_on"]) == 10  # a date, YYYY-MM-DD, no time of day
+    assert all("at" not in r for r in records)
+    assert all(isinstance(r["t"], int) and r["t"] >= 0 for r in records[1:])
+    assert all(":" not in json.dumps(r.get("started_on", "")) for r in records)
+
+
+def test_start_records_which_consent_text_was_agreed(saved):
+    client, folder = saved
+    sid = start(client).json()["session_id"]
+    version = read_session(folder / f"{sid}.jsonl")[0]["consent_version"]
+    assert len(version) == 12 and int(version, 16) >= 0
+
+
+def test_an_answer_after_withdrawing_never_recreates_the_file(tmp_path):
+    store = SessionStore(tmp_path)
+    sid = "a" * 32
+    store.start(sid, assessment_id="x")
+    assert store.delete(sid)
+    assert store.answer(sid, item_id="x:1") is False  # in flight when Stop was pressed
+    assert store.finish(sid) is False
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_remove_by_code_from_the_command_line(tmp_path, capsys):
+    from server.store import main
+
+    store = SessionStore(tmp_path)
+    sid = "b" * 32
+    store.start(sid, assessment_id="x")
+    assert main(["remove", sid.upper(), "--dir", str(tmp_path)]) == 0  # forgiving about case
+    assert "Removed" in capsys.readouterr().out
+    assert main(["remove", sid, "--dir", str(tmp_path)]) == 1
+    assert main(["remove", "not-a-code", "--dir", str(tmp_path)]) == 2

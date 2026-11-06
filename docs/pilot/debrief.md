@@ -21,4 +21,4 @@ Nothing you did today counts as cheating or is judged in any way. Your answers s
 
 Please don't tell classmates about the hidden text until the pilot ends on Friday, November 13, so their answers stay natural.
 
-If you'd rather we didn't use your answers, press "Remove my answers" below. Questions? Contact Harshini at hbalamu1@asu.edu.
+If you'd rather we didn't use your answers, press "Remove my answers" below. To remove them later, email Harshini (hbalamu1@asu.edu) the code shown below. Questions or concerns? Contact Harshini or Prof. Vivek Gupta at <PROF_GUPTA_EMAIL>.

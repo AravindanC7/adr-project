@@ -13,7 +13,12 @@ would change how they answer (some would go looking for it or copy the question 
 it), and the pilot exists to measure how often honest people trip those checks by accident.
 Everything is explained on the debrief screen, which also lets them remove their answers.
 
-Approval: Prof. Vivek Gupta approved a small classmate pilot in class (step #24).
+Approval: Prof. Vivek Gupta approved a small classmate pilot (in class, step #24, and by
+email), and the study has IRB approval. If the IRB approved a specific consent text, the
+On screen section must match it: check any change here against the approved version.
+
+Data kept after December 2026: only the totals printed in the report. The raw answers and
+everything worked out from them (#39 outcome rows) are deleted then.
 
 ## On screen
 
@@ -21,10 +26,10 @@ Thanks for helping with our CSE 576 class project. We are studying how people an
 
 Please answer on your own, the way you normally would. Don't use AI tools, search engines or help from anyone else. There are no wrong answers on the survey questions.
 
-What we record: your answers, and how you answered. That means time spent on each question and counts such as how many keys you pressed, how many times you pasted and how often you left the page. We never record which keys you pressed or what you pasted.
+What we record: your answers, and how you answered. That means time spent on each question and counts such as how many keys you pressed, how many times you pasted and how often you left the page. We never record which keys you pressed, and we don't record your clipboard separately. Any text in an answer you submit, typed or pasted, is saved as your answer.
 
-We don't ask for your name, email or ASU ID. Please don't write anything that identifies you in the text answers. Your answers are stored under a random code and are used only for this class project. They are deleted when the course ends in December 2026, and the report shows only totals across everyone.
+We don't ask for your name, email or ASU ID. Please don't write anything that identifies you in the text answers. Your answers are stored under a random code. They are used for this class project and possibly a research write-up; only totals across everyone are ever reported, never individual answers. Your answers and everything worked out from them are deleted when the course ends in December 2026.
 
 Taking part is voluntary and has nothing to do with your grade in any course. You can stop at any time with the Stop button, which removes everything you've answered. At the end we explain the study in full, and you can still remove your answers then.
 
-Questions? Contact Harshini at hbalamu1@asu.edu.
+Questions or concerns? Contact Harshini at hbalamu1@asu.edu or Prof. Vivek Gupta at <PROF_GUPTA_EMAIL>.

@@ -265,6 +265,8 @@ async function showDebrief() {
     paragraphs($("debrief"), texts);
     $("debrief").hidden = false;
     $("remove").hidden = false;
+    $("code").textContent = sessionId;  // random; the only way to find these answers later
+    $("code-note").hidden = false;
   } catch (e) {
     setError(e.message);
   }
@@ -276,7 +278,11 @@ function backToStart(message = "") {
   $("debrief").hidden = true;
   $("debrief").replaceChildren();
   $("remove").hidden = true;
+  $("code-note").hidden = true;
+  $("code").textContent = "";
   $("withdrawn").textContent = "";
+  disarm($("stop"));
+  disarm($("remove"));
   $("start-note").textContent = message;
   show("start");
 }
@@ -284,7 +290,28 @@ function backToStart(message = "") {
 $("agree").addEventListener("change", () => { $("consent-yes").disabled = !$("agree").checked; });
 $("consent-yes").addEventListener("click", () => begin(consentFor.assessment_id, consentFor.title, true));
 $("consent-no").addEventListener("click", () => backToStart("No problem, thanks for looking. You can close this page."));
+// Removing answers can't be undone, so it takes a second click (no pop-up dialog). The button
+// goes back to normal after a few seconds if the second click doesn't come.
+const CONFIRM = "Click again to remove everything you've answered";
+function disarm(button) {
+  if (button.dataset.label) button.textContent = button.dataset.label;
+  delete button.dataset.armed;
+  clearTimeout(Number(button.dataset.timer));
+}
+function confirmed(button) {
+  if (button.dataset.armed) {
+    disarm(button);
+    return true;
+  }
+  button.dataset.label = button.textContent;
+  button.dataset.armed = "1";
+  button.textContent = CONFIRM;
+  button.dataset.timer = String(setTimeout(() => disarm(button), 6000));
+  return false;
+}
+
 $("stop").addEventListener("click", async () => {
+  if (!confirmed($("stop"))) return;
   try {
     await withdraw();
     current = null;
@@ -294,9 +321,11 @@ $("stop").addEventListener("click", async () => {
   }
 });
 $("remove").addEventListener("click", async () => {
+  if (!confirmed($("remove"))) return;
   try {
     await withdraw();
     $("remove").hidden = true;
+    $("code-note").hidden = true;
     $("withdrawn").textContent = "Done: your answers have been removed. Thank you for taking part.";
   } catch (e) {
     setError(e.message);

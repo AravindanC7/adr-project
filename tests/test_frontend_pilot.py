@@ -60,6 +60,10 @@ def test_consent_gate_then_debrief_then_remove(site):
 
     pg.wait_for_selector("#debrief:not([hidden])")
     assert pg.inner_text("#debrief").split("\n\n")[0] == DEBRIEF[0]
+    code = pg.text_content("#code")
+    assert len(code) == 32 and pg.is_visible("#code-note")  # for removing answers later
+    pg.click("#remove")  # first click only asks
+    assert "Click again" in pg.text_content("#remove") and pg.is_visible("#remove")
     with pg.expect_response(lambda r: r.url.endswith("/withdraw")) as resp:
         pg.click("#remove")
     assert resp.value.ok
@@ -77,6 +81,8 @@ def test_no_thanks_and_stop(site):
     pg.check("#agree")
     pg.click("#consent-yes")
     pg.wait_for_selector("#question:not([hidden])")
+    pg.click("#stop")  # first click only asks
+    assert "Click again" in pg.text_content("#stop") and pg.is_visible("#question")
     with pg.expect_response(lambda r: r.url.endswith("/withdraw")) as resp:
         pg.click("#stop")
     assert resp.value.ok

@@ -50,6 +50,7 @@ Run from the repo root:   uvicorn server.app:app --reload      then open http://
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -273,6 +274,10 @@ def create_app(
     # Read at startup, so a broken file stops the server before anyone sees the page.
     consent = screen_text(PILOT_DIR / "consent.md") if pilot else None
     debrief = screen_text(PILOT_DIR / "debrief.md") if pilot else None
+    # Which consent wording each person agreed to, if it changes during the pilot.
+    consent_version = (
+        hashlib.sha256("\n\n".join(consent).encode()).hexdigest()[:12] if consent else None
+    )
 
     variants = build_variants(items, mechanisms)
     by_variant = {v.variant_id: v for vs in variants.values() for v in vs}
@@ -354,7 +359,8 @@ def create_app(
         )
         if store:
             store.start(session_id, assessment_id=assessment.assessment_id, pilot=pilot,
-                        consented=req.consent, seed=state.seed)
+                        consented=req.consent, consent_version=consent_version,
+                        seed=state.seed)
         s.current = next_choice(s)
         return step(s)
 
@@ -383,13 +389,16 @@ def create_app(
         # behaviour check (#25) then scores every answer from its telemetry. Style and the
         # opinion trap come with #28.
         rendered = by_variant[choice.variant_id]
-        outcome = (
-            mechanisms[rendered.mechanism].score(rendered, response, req.telemetry)
-            if rendered.mechanism
-            else "none"
-        )
-        s.outcomes.append((choice.variant_id, outcome))
-        s.state = router.update(s.state, choice.variant_id, outcome)
+        scored_id, outcome = choice.variant_id, "none"
+        if rendered.mechanism:
+            try:
+                outcome = mechanisms[rendered.mechanism].score(rendered, response, req.telemetry)
+            except NoObservation:
+                # Nothing to score (e.g. an empty answer): no evidence either way. The router
+                # still has to know the item was shown, so it is recorded as the plain variant.
+                scored_id = make_variant_id(choice.item_id, None)
+        s.outcomes.append((scored_id, outcome))
+        s.state = router.update(s.state, scored_id, outcome)
         try:
             seen = BEHAVIOUR.score(rendered, response, req.telemetry)
         except NoObservation:
@@ -399,7 +408,9 @@ def create_app(
             s.outcomes.append((passive_id, seen))
             s.state = router.update(s.state, passive_id, seen)
         s.current = next_choice(s)
-        if store:
+        # Someone may have pressed Stop while this answer was being scored: then the session
+        # is gone and nothing is written (the store also never re-creates a deleted file).
+        if store and session_id in sessions:
             store.answer(
                 session_id,
                 item_id=choice.item_id,
