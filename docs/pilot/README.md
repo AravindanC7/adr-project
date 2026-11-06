@@ -30,9 +30,25 @@ map (AGENTS.md sections 2.2 and 6.4, step #40). Rows go in with `data_origin = "
 
 ## Running it
 
-```bash
-ADR_PILOT=1 ADR_DATA_DIR=pilot_data ADR_ITEMS=server/pilot_items.json uvicorn server.app:app --host 0.0.0.0
+Hosting: **an ngrok tunnel from Harshini's laptop** (decided Nov 5), so the answers never leave
+the laptop except through the tunnel, and the free static domain keeps the link the same after
+any restart. One command starts the server and the tunnel:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run_pilot.ps1 -Domain <your-name>.ngrok-free.app
 ```
+
+It sets `ADR_PILOT=1 ADR_DATA_DIR=pilot_data ADR_ITEMS=server/pilot_items.json`, listens on
+127.0.0.1 only (nothing but ngrok can reach it) and turns off uvicorn's access log, which
+behind a tunnel would print every visitor's real IP address.
+
+The laptop must stay **on, plugged in, awake and online** Nov 9–13: set Windows to never sleep
+when plugged in, and turn off automatic restarts for updates for that week. If it does restart,
+run the command again; the link is the same and saved answers are kept. Anyone mid-session at
+that moment has to start again (their partial file is dropped in #39).
+
+Free ngrok shows visitors a one-time "You are about to visit" page; the link message tells
+them to click **Visit Site**.
 
 `ADR_PILOT=1` turns on the consent and debrief screens and the Stop button. Never combine it
 with `ADR_DEBUG_STATE=1` or `ADR_STUB_MECHANISMS=1`.
@@ -76,9 +92,9 @@ Tell the group the pilot is over, so the hidden text is no longer a secret.
 
 ## Open items (for #35)
 
-- **Hosting:** the server must be reachable from classmates' laptops for 5 days. Options: a
-  free host (Render or Azure App Service) or a tunnel from one of our laptops. Decide by Nov 7.
-  **The host's disk must survive restarts:** free tiers often wipe it on every redeploy or
-  sleep, which would lose `pilot_data/`. A tunnel from a laptop keeps the files local.
+- **Hosting:** decided, ngrok from Harshini's laptop (see Running it). Test the link from a
+  phone on mobile data before Nov 9.
 - **Saving data:** done (`ADR_DATA_DIR`, see Running it).
+- **ngrok sees visitors' IP addresses** as part of carrying the traffic (we never store them).
+  The consent screen says *we* don't record IPs, which stays true; tell the group if asked.
 - **Pilot bank:** build from the loaders once #3 merges.

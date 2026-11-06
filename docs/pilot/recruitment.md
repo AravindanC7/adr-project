@@ -30,7 +30,8 @@ link and a reminder; it is not linked to any session.
 >
 > Please use a laptop or desktop (not your phone), in Chrome, Edge or Firefox. Do it in one
 > go, on your own, without AI tools or search. It takes about 20 min. The first screen
-> explains everything. Thank you!! 🎉
+> explains everything. If you first see a page saying "You are about to visit", that's just
+> the free hosting: click **Visit Site**. Thank you!! 🎉
 
 ## Reminder (Thu Nov 12, only to people who said yes)
 
