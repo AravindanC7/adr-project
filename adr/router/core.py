@@ -57,6 +57,14 @@ class RouterConfig:
     lower: float | None = None     # override B
 
 
+def eligible_checks(item: Item, variants: list[RenderedItem]) -> list[RenderedItem]:
+    """The variants any policy may serve as a check on `item`: an active mechanism that the item
+    lists in eligible_mechanisms. The router and every baseline use this one rule, so a
+    comparison never gives one policy a check the others can't use."""
+    allowed = set(item.eligible_mechanisms) & set(ACTIVE_MECHANISMS)
+    return [v for v in variants if v.mechanism in allowed]
+
+
 class SPRTRouter:
     def __init__(
         self,
@@ -164,6 +172,10 @@ class SPRTRouter:
             return "escalated"
         return "active"
 
+    def checks(self, item_id: str) -> list[RenderedItem]:
+        """This item's servable checks (eligible_checks), in variant-file order."""
+        return eligible_checks(self.items[item_id], self.variants.get(item_id, []))
+
     def _plain(self, item_id: str) -> Choice:
         plain = [v for v in self.variants.get(item_id, []) if v.mechanism is None]
         vid = plain[0].variant_id if plain else make_variant_id(item_id, None)
@@ -179,9 +191,7 @@ class SPRTRouter:
         out: list[tuple[float, RenderedItem]] = []
         for item_id in pool:
             item = self.items[item_id]
-            for v in self.variants.get(item_id, []):
-                if v.mechanism not in ACTIVE_MECHANISMS:
-                    continue
+            for v in self.checks(item_id):
                 if self.mech_cap is not None and (
                     state.contrib.get(v.mechanism, 0.0) >= self.mech_cap
                 ):

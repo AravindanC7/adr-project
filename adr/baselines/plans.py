@@ -4,7 +4,8 @@
   AllChecksRouter           baseline 2: a check on every item
   FixedPlanRouter           baseline 3: the best check per item, chosen in advance
 
-All of these read only the failure map they are given. Pass the map fitted on the TRAIN rows
+Every policy serves only router.core.eligible_checks(): active mechanisms the item lists in
+eligible_mechanisms. All of these read only the failure map they are given. Pass the map fitted on the TRAIN rows
 (adr/replay/quick_map.py drops held-out rows, as will Archana's builder, #34): choosing a
 baseline's checks with held-out data would tune it on the evaluation set (AGENTS.md section 8).
 """
@@ -15,7 +16,6 @@ from collections import defaultdict
 
 from adr.baselines.simple import InOrderBaseline
 from adr.contracts import (
-    ACTIVE_MECHANISMS,
     Assessment,
     Choice,
     FailureMap,
@@ -23,6 +23,7 @@ from adr.contracts import (
     RenderedItem,
     SessionState,
 )
+from adr.router.core import eligible_checks
 from adr.router.selection import expected_evidence, utility
 
 PI_PLAN = 0.5  # no evidence yet: AI and human equally likely when a plan is made
@@ -42,7 +43,7 @@ def best_single_mechanism(
     totals: dict[str, float] = defaultdict(float)
     for item_id in assessment.item_ids:
         item = items[item_id]
-        for mech in {v.mechanism for v in variants.get(item_id, [])} & set(ACTIVE_MECHANISMS):
+        for mech in {v.mechanism for v in eligible_checks(item, variants.get(item_id, []))}:
             cell = fmap.lookup(mech, item.item_type, attack_mode)
             if cell is not None:
                 totals[mech] += expected_evidence(PI_PLAN, cell)
@@ -59,8 +60,7 @@ def multi_check_items(
     one of them, so this says how much "all checks" leaves out."""
     out = []
     for item_id in assessment.item_ids:
-        eligible = set(items[item_id].eligible_mechanisms) & set(ACTIVE_MECHANISMS)
-        mechs = {v.mechanism for v in variants.get(item_id, []) if v.mechanism in eligible}
+        mechs = {v.mechanism for v in eligible_checks(items[item_id], variants.get(item_id, []))}
         if len(mechs) > 1:
             out.append(item_id)
     return out
@@ -76,11 +76,11 @@ class AllChecksRouter(InOrderBaseline):
     """
 
     def _pick(self, state: SessionState, item_id: str) -> Choice:
-        eligible = self.items[item_id].eligible_mechanisms
-        for v in self.variants.get(item_id, []):
-            if v.mechanism in ACTIVE_MECHANISMS and v.mechanism in eligible:
-                return Choice(item_id=item_id, variant_id=v.variant_id, mechanism=v.mechanism)
-        return self._plain(item_id)
+        checks = self.checks(item_id)
+        if not checks:
+            return self._plain(item_id)
+        v = checks[0]
+        return Choice(item_id=item_id, variant_id=v.variant_id, mechanism=v.mechanism)
 
 
 class FixedPlanRouter(InOrderBaseline):
@@ -97,12 +97,10 @@ class FixedPlanRouter(InOrderBaseline):
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
         self.plan: dict[str, RenderedItem | None] = {}
-        for item_id, vs in self.variants.items():
+        for item_id in self.variants:
             item = self.items[item_id]
             best, best_u = None, 0.0
-            for v in vs:
-                if v.mechanism not in ACTIVE_MECHANISMS:
-                    continue
+            for v in self.checks(item_id):
                 cell = self.fmap.lookup(v.mechanism, item.item_type, self.cfg.attack_mode)
                 if cell is None:
                     continue

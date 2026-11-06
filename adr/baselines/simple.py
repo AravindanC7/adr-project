@@ -10,7 +10,8 @@ only the choice of check differs:
 
 Baseline 5 (published survey traps, #33) comes later.
 
-Every baseline goes through items in display order and, unlike the router, never clears a
+Every baseline serves only router.core.eligible_checks() (active mechanisms the item lists in
+eligible_mechanisms), the same rule as the router. Every baseline goes through items in display order and, unlike the router, never clears a
 respondent early: a low score does not stop the checks, so status never becomes "cleared". All
 of them still pause for review at the upper threshold A, like the router. update(), including
 update(..., None) for "shown, nothing to score", is the router's own.
@@ -49,16 +50,27 @@ class InOrderBaseline(SPRTRouter):
 
 
 class SingleMechanismRouter(InOrderBaseline):
-    """Baseline 1: always `mechanism` where the item has a variant for it, else plain."""
+    """Baseline 1: always `mechanism` where the item allows it, else plain.
 
-    def __init__(self, *args, mechanism: str, **kw):
+    No per-mechanism cap. The cap (RouterConfig.mech_cap_frac) limits how much one mechanism
+    adds next to the others, because evidence from one mechanism is correlated and the router
+    can keep choosing its strongest check. A single-mechanism policy has one mechanism by
+    definition: with the default cap below A (0.65 x A), it could never reach review at all,
+    so the baseline would measure the cap, not the mechanism. The other baselines keep the
+    router's cap. `expected_evidence` is what best_single_mechanism() chose it on, if it did.
+    """
+
+    def __init__(self, *args, mechanism: str, expected_evidence: dict[str, float] | None = None,
+                 **kw):
         super().__init__(*args, **kw)
         if mechanism not in ACTIVE_MECHANISMS:
             raise ValueError(f"{mechanism!r} is not an active mechanism")
         self.mechanism = mechanism
+        self.expected_evidence = expected_evidence
+        self.mech_cap = None  # one mechanism by definition: see the class docstring
 
     def _pick(self, state: SessionState, item_id: str) -> Choice:
-        for v in self.variants.get(item_id, []):
+        for v in self.checks(item_id):
             if v.mechanism == self.mechanism:
                 return Choice(item_id=item_id, variant_id=v.variant_id, mechanism=v.mechanism)
         return self._plain(item_id)
@@ -68,7 +80,7 @@ class RandomCheckRouter(InOrderBaseline):
     """Baseline 4: a random active variant of each item (seeded per session and step)."""
 
     def _pick(self, state: SessionState, item_id: str) -> Choice:
-        options = [v for v in self.variants.get(item_id, []) if v.mechanism in ACTIVE_MECHANISMS]
+        options = self.checks(item_id)
         if not options:
             return self._plain(item_id)
         rng = random.Random(f"{state.seed}:{state.session_id}:{len(state.served)}")

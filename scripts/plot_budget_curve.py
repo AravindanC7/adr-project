@@ -83,7 +83,7 @@ def plot(csv_path: Path, title: str | None = None) -> Path:
     baselines = df[df["policy"] != "router"].reset_index(drop=True)
     if title is None:
         cfg_path = csv_path.parent / "config.yaml"
-        cfg = yaml.safe_load(cfg_path.read_text()) if cfg_path.exists() else {}
+        cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
         what = f"SYNTHETIC {cfg['synthetic']} (invented numbers)" if cfg.get("synthetic") \
             else cfg.get("assessment_id", csv_path.parent.name)
         title = f"Budget curve: {what}"

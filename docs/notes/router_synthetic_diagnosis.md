@@ -1,6 +1,8 @@
 # Router diagnosis on the synthetic survey
 
-> **SYNTHETIC: method only, not results.** Every number here comes from `adr/router/synthetic.py` (invented failure-map values). It shows *how* to diagnose the router and what to look for on real data. Final values for the cap, thresholds and beta must be tuned on **held-out replay** in threshold calibration (#42), never on these numbers.
+> **SYNTHETIC: method only, not results.** Every number here comes from `adr/router/synthetic.py` (invented failure-map values). It shows *how* to diagnose the router and what to look for on real data. Final values for the cap, thresholds and beta are tuned in threshold calibration (#42) on the **calibration split**, never on these numbers and never on held-out data.
+
+> **Three splits** (`adr/replay/quick_map.py`, `split_rows`): **train** fits the failure map; **calibration** (30% of the non-held-out items by default, chosen per item type with a fixed seed) is where thresholds, the cap and β are calibrated and where development runs are evaluated; **held-out** (the held-out model and the held-out survey) is used only for the final evaluation (`run_replay.py --final`). Calibrate on the calibration split, never on held-out.
 
 Rerun with `python scripts/diagnose_router.py --synthetic survey`. For real data, use the same flags as `run_replay.py` (`--outcomes …`, `--assessment …`, `--items …`, `--variants …`).
 
@@ -68,7 +70,7 @@ The router gives AI sessions *higher* scores than `all_checks` does (median 4.33
 
 ## What limits the router (three points)
 
-1. **β is a burden knob, not a detection knob.** β moves the clearing threshold B. A smaller β makes the router keep checking people who were already heading toward "honest". Those extra checks go to the low end of the honest distribution, while detection at a fixed FPR depends only on the *top* of it, where suspicious-looking honest people never get near B. So on this bank, β trades honest burden (16 → 4 checks) for almost no detection (0.75 → 0.72). On real data, choose β for the burden we accept, then check detection on held-out replay.
+1. **β is a burden knob, not a detection knob.** β moves the clearing threshold B. A smaller β makes the router keep checking people who were already heading toward "honest". Those extra checks go to the low end of the honest distribution, while detection at a fixed FPR depends only on the *top* of it, where suspicious-looking honest people never get near B. So on this bank, β trades honest burden (16 → 4 checks) for almost no detection (0.75 → 0.72). On real data, choose β for the burden we accept, then check detection on the calibration split.
 
 2. **The cap decides whether one check can trigger review alone.** One followed canary is worth +3.34 nats, the cap is 0.65 × A = 2.99, and review needs A = 4.60. With cap < A, review needs corroboration from a second kind of evidence, and on this survey that can only come from weak opinion traps. Hence 51 of the 140 AI sessions with a capped canary end escalated but below A. Raising the cap to ≥ A lifts TPR@1% from 0.75 to 0.87. This is a design choice as much as a number:
    - **Keep cap < A**, if we want two independent kinds of evidence before pausing anyone, which guards against one correlated or broken check. Then the bank needs a second strong check (or passive behaviour evidence, once #25 exists).
@@ -76,14 +78,15 @@ The router gives AI sessions *higher* scores than `all_checks` does (median 4.33
 
    Either way the cap is now `mech_cap_frac × A`, so it moves with A when A is recalibrated.
 
-3. **Adaptivity raises the honest top tail, so calibrate A empirically.** The router chases honest people who happen to look suspicious with more of its strongest checks, and stops as soon as the evidence is enough. `all_checks` keeps checking everyone, so chance-high scores fall back. The router's honest scores are therefore more spread out at the top (99th percentile 2.23 vs 0.82). This is the optional-stopping / correlated-evidence effect from AGENTS.md section 7.1: Wald's A assumes independent observations and no adaptive stopping. **Set A from the held-out honest score distribution** (the value that pauses at most α of honest people in replay) rather than from `ln((1 − β)/α)`, and report detection at that calibrated A.
+3. **Adaptivity raises the honest top tail, so calibrate A empirically.** The router chases honest people who happen to look suspicious with more of its strongest checks, and stops as soon as the evidence is enough. `all_checks` keeps checking everyone, so chance-high scores fall back. The router's honest scores are therefore more spread out at the top (99th percentile 2.23 vs 0.82). This is the optional-stopping / correlated-evidence effect from AGENTS.md section 7.1: Wald's A assumes independent observations and no adaptive stopping. **Set A from the honest score distribution on the calibration split** (the value that pauses at most α of honest people in replay) rather than from `ln((1 − β)/α)`, and report detection at that calibrated A.
 
 Penalties are not the limiter. Few items go plain for lack of value, and that only happens for the glitch token after the canary is capped, which is reasonable.
 
-## What to do in #42 (on held-out replay, not here)
-- Calibrate **A** empirically from held-out honest sessions, per assessment type.
+## What to do in #42 (on the calibration split, not here and never on held-out)
+- Calibrate **A** empirically from honest sessions on the calibration split, per assessment type.
 - Tune **`mech_cap_frac`** together with A. Decide first whether one check may trigger review alone (frac ≥ 1) or not (frac < 1). Candidate range: 0.65–1.1.
-- Option: apply the cap only to mechanisms that repeat a per-person signal (passive style/behaviour, opinion_trap if it goes passive), not to per-item traps (decoy, canary), since per-item traps on different questions are closer to independent evidence. Test against the current all-mechanism cap on held-out replay.
+- Option: apply the cap only to mechanisms that repeat a per-person signal (passive style/behaviour, opinion_trap if it goes passive), not to per-item traps (decoy, canary), since per-item traps on different questions are closer to independent evidence. Test against the current all-mechanism cap on the calibration split.
 - Choose **β** for the honest burden we accept. If the real curve is also flat, a larger β (around 0.1) cuts burden at little cost.
 - Leave the **penalties** (`lambda_burden`, `lambda_fp`) as they are unless real data shows many items going plain.
-- Rerun `scripts/diagnose_router.py` on Archana's outcome tables, both with and without passive behaviour once it exists, and compare against these patterns.
+- Report the final numbers once, with `run_replay.py --final` on the held-out rows, after everything above is fixed.
+- Rerun `scripts/diagnose_router.py` on Archana's outcome tables (it reads the calibration split), both with and without passive behaviour once it exists, and compare against these patterns.

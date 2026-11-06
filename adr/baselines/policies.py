@@ -3,7 +3,8 @@
     router          the Adaptive Defense Router (adr/router/core.py)
     router_noclear  the router with clearing disabled (lower threshold B = -inf): it picks checks
                     adaptively but, like the baselines, never stops checking a low score
-    best_single     baseline 1: the best single mechanism for this assessment (train map)
+    best_single     baseline 1: the best single mechanism for this assessment (train map);
+                    like single:<mech>, it has no per-mechanism cap (see SingleMechanismRouter)
     all_checks      baseline 2: a check on every item
     fixed_plan      baseline 3: the best check per item, chosen before the session
     random          baseline 4: a random check per item
@@ -39,8 +40,8 @@ def make_policy(
     if name == "router_noclear":
         return SPRTRouter(items, variants, fmap, replace(cfg, lower=-math.inf))
     if name == "best_single":
-        mech, _ = best_single_mechanism(fmap, assessment, items, variants, cfg.attack_mode)
-        return SingleMechanismRouter(*args, mechanism=mech)
+        mech, totals = best_single_mechanism(fmap, assessment, items, variants, cfg.attack_mode)
+        return SingleMechanismRouter(*args, mechanism=mech, expected_evidence=totals)
     if name == "all_checks":
         return AllChecksRouter(*args)
     if name == "fixed_plan":

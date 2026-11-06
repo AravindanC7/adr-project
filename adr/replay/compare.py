@@ -107,7 +107,7 @@ def write_comparison(table: pd.DataFrame, run_dir: str | Path) -> tuple[Path, Pa
     for _, row in table.iterrows():
         lines.append(f"| {row['policy']} | " + " | ".join(cell(row, m) for m in METRICS) + " |")
     md_path.write_text("Metrics with 95% bootstrap intervals [lo, hi].\n\n" + "\n".join(lines)
-                       + "\n")
+                       + "\n", encoding="utf-8")
     return csv_path, md_path
 
 

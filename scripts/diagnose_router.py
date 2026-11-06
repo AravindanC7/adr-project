@@ -5,7 +5,8 @@
         --assessment data/processed/assessments.jsonl --assessment-id survey-slice \
         --items data/processed/items.jsonl --variants data/processed/variants/survey-slice.jsonl
 
-Data loading is exactly run_replay.py's (same flags; train map, held-out evaluation rows).
+Data loading is exactly run_replay.py's (same flags): train map, calibration-split rows. There
+is no --final here: diagnosing is tuning, and tuning never touches held-out data.
 Prints:
   0. the log-likelihood ratio of every outcome of every check in the bank
   1. the router's budget curve (TPR vs checks per honest person over --betas) at each
@@ -15,7 +16,8 @@ Prints:
      A, and (d) items the router serves plain before clearing: either no check is left (none
      with a map cell, or all capped) or the best check's utility is <= 0
   3. the honest score tail that sets the 1%-FPR threshold, router vs all_checks, per cap
-Diagnosis only: never tune final values on this. Tune on held-out replay (#42).
+Run it on the calibration split (the default), never on held-out data (AGENTS.md section 8).
+On --synthetic it shows the method only: never tune final values on synthetic numbers.
 """
 
 from __future__ import annotations
@@ -125,6 +127,8 @@ def main() -> None:
     ap.add_argument("--stub", action="store_true")
     ap.add_argument("--assessment"), ap.add_argument("--assessment-id")
     ap.add_argument("--items"), ap.add_argument("--variants"), ap.add_argument("--map")
+    ap.add_argument("--calibration-frac", type=float, default=0.3)
+    ap.add_argument("--split-seed", type=int, default=0)
     ap.add_argument("--cap-fracs", default="0.65,1.1,none",
                     help="mech_cap_frac values to compare (none = no cap)")
     ap.add_argument("--betas", default=",".join(str(b) for b in BETAS))
@@ -209,7 +213,7 @@ def main() -> None:
 
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
-        args.json.write_text(json.dumps(report, indent=2, default=str))
+        args.json.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
         print(f"\nSaved {args.json}")
 
 

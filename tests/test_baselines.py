@@ -243,3 +243,66 @@ def test_higher_beta_never_gives_more_checks_per_honest_person(kind):
     checks = list(router["checks_per_honest_person"])
     assert all(later <= earlier for earlier, later in itertools.pairwise(checks)), checks
     assert checks[0] > checks[-1]                         # and the budget really moves
+
+
+# ---------- one eligibility rule; no cap for single-mechanism baselines ----------
+def _bank_with_an_ineligible_variant():
+    """q1's decoy variant exists in the variant file, but q1 no longer lists decoy as eligible
+    (e.g. the item was re-tagged). No policy may serve it."""
+    a, items, variants = _bank()
+    items["handwritten:q1"] = items["handwritten:q1"].model_copy(
+        update={"eligible_mechanisms": []})
+    return a, items, variants
+
+
+@pytest.mark.parametrize("name", [*COMPARE, "single:decoy"])
+def test_every_policy_uses_the_same_eligibility_rule(name):
+    a, items, variants = _bank_with_an_ineligible_variant()
+    router = make_policy(name, a, items, variants, FMAP, RouterConfig(mech_cap_frac=None))
+    for seed in range(5):
+        served, _ = _walk(router, a, seed=seed)
+        assert ("handwritten:q1", "decoy") not in served
+        for item_id, mech in served:
+            assert mech is None or mech in items[item_id].eligible_mechanisms
+    assert router.checks("handwritten:q1") == []
+
+
+def test_best_single_and_eligibility_ignore_ineligible_variants():
+    a, items, variants = _bank_with_an_ineligible_variant()
+    _, totals = best_single_mechanism(FMAP, a, items, variants)
+    assert "decoy" not in totals
+    assert multi_check_items(a, items, variants) == ["handwritten:o1"]
+
+
+def test_single_mechanism_baselines_have_no_cap_but_the_others_keep_it():
+    a, items, variants = _bank()
+    cfg = RouterConfig()                                     # default cap: 0.65 x A
+    for name in ("best_single", "single:decoy"):
+        assert make_policy(name, a, items, variants, FMAP, cfg).mech_cap is None
+    for name in ("router", "router_noclear", "all_checks", "fixed_plan", "random"):
+        router = make_policy(name, a, items, variants, FMAP, cfg)
+        assert router.mech_cap == pytest.approx(0.65 * router.A)
+    # with the cap, one mechanism can never reach A; without it, it can
+    big = {f"handwritten:d{i}": Item(item_id=f"handwritten:d{i}", source="handwritten",
+                                     assessment_type="quiz", item_type="mcq", stem="Q?",
+                                     options=["A", "B", "C"], correct_option=0,
+                                     eligible_mechanisms=["decoy"]) for i in range(8)}
+    vis = {"stem": "Q?", "options": ["A", "B", "C"]}
+    bv = {i: [RenderedItem(item_id=i, mechanism="decoy", variant_id=make_variant_id(i, "decoy"),
+                           visible=vis)] for i in big}
+    ba = Assessment(assessment_id="d", title="D", assessment_type="quiz", item_ids=list(big))
+    single = make_policy("single:decoy", ba, big, bv, FMAP, cfg)
+    _, state = _walk(single, ba, outcome_for=lambda m: "picked_decoy")
+    assert state.status == "review"
+    capped = AllChecksRouter(big, bv, FMAP, cfg)
+    _, state = _walk(capped, ba, outcome_for=lambda m: "picked_decoy")
+    assert state.status != "review" and state.contrib["decoy"] == pytest.approx(capped.mech_cap)
+
+
+def test_best_single_policy_carries_its_own_choice():
+    """run_replay.py reports the policy's choice instead of computing it a second time."""
+    a, items, variants = _bank()
+    cfg = RouterConfig(attack_mode="copy_paste")
+    policy = make_policy("best_single", a, items, variants, FMAP, cfg)
+    assert (policy.mechanism, policy.expected_evidence) == best_single_mechanism(
+        FMAP, a, items, variants, "copy_paste")
