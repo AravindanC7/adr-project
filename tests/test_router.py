@@ -137,7 +137,7 @@ def test_mech_cap_bounds_one_checks_total(setup):
 
 
 def test_mech_cap_is_a_fraction_of_a_and_follows_the_upper_override(setup):
-    fmap, assessment, items, variants = setup
+    fmap, _, items, variants = setup
     default = SPRTRouter(items, variants, fmap)
     a, _ = wald_thresholds(0.01, 0.05)
     assert math.isclose(default.mech_cap, 0.65 * a)                  # ~2.96 at A = 4.55
