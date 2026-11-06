@@ -31,7 +31,7 @@ import re
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from adr.contracts import Assessment, Item
+from adr.contracts import Assessment, HumanDistribution, Item
 from adr.data.loaders import load_arc, load_ipip, load_mmlu, load_opinionqa
 from adr.mechanisms.decoy import DecoyMechanism
 
@@ -44,8 +44,57 @@ MMLU_SUBJECTS = [
     "high_school_psychology", "us_foreign_policy", "global_facts", "sociology",
 ]
 MAX_STEM_WORDS, MAX_OPTION_WORDS = 40, 10
-NEEDS_A_PICTURE = re.compile(r"\b(figure|diagram|graph|table|picture|image|shown|below)\bb",
+NEEDS_A_PICTURE = re.compile(r"\b(figure|diagram|graph|table|picture|image|shown|below)\b",
                              re.IGNORECASE)
+
+# Pew American Trends Panel Wave 41 (Dec 11-23, 2018; one of OpinionQA's waves), from Pew's
+# published topline: https://www.pewresearch.org/wp-content/uploads/sites/20/2019/03/
+# US-2050_topline-FINAL.pdf. Asked of all 2,524 adults. Percentages are Pew's weighted totals
+# with "No answer" left out (renormalized below); n is the unweighted sample, as in gss.py.
+# Used when the OpinionQA human_resp files aren't available. SOLVPROB is one row of a grid,
+# reworded to stand alone. Divisive topics (abortion, immigration, race) left out on purpose.
+PEW_W41_N = 2524
+PEW_W41 = [
+    ("OPTIMIST", ("Please think about what things will be like in 2050, about 30 years from now. "
+     "Thinking about the future of the United States, would you say you are …"),
+     [("Very optimistic", 12), ("Somewhat optimistic", 44), ("Somewhat pessimistic", 31),
+      ("Very pessimistic", 13)]),
+    ("AVGFAM", ("Over the next 30 years, do you think that the average American family will see "
+     "its standard of living …"),
+     [("Get better", 20), ("Stay about the same", 35), ("Get worse", 44)]),
+    ("ENVC", "By the year 2050, do you think the overall condition of the environment will be …",
+     [("Better than it is now", 16), ("Worse than it is now", 59),
+      ("About the same as it is now", 25)]),
+    ("ROBWRK", ("Overall, how likely do you think it is that 30 years from now robots and computers "
+     "will do much of the work currently done by humans? Do you think this will …"),
+     [("Definitely happen", 30), ("Probably happen", 52), ("Probably not happen", 16),
+      ("Definitely not happen", 2)]),
+    ("NATDEBT", ("Which do you think is most likely to occur over the next 30 years? "
+     "The national debt will …"),
+     [("Grow larger", 63), ("Stay about the same", 21), ("Be reduced", 14),
+      ("Be eliminated", 2)]),
+    ("SOLVPROB_a", ("In the future, what kind of impact do you think science and technology will "
+     "have in solving the biggest problems facing the country?"),
+     [("A very positive impact", 43), ("A somewhat positive impact", 44),
+      ("A somewhat negative impact", 8), ("A very negative impact", 3)]),
+]
+
+
+def pew_w41() -> tuple[list[Item], list[HumanDistribution]]:
+    items, dists = [], []
+    for key, stem, answers in PEW_W41:
+        item_id = f"opinionqa:w41:{key}"
+        total = sum(p for _, p in answers)
+        items.append(Item(
+            item_id=item_id, source="opinionqa", assessment_type="survey", item_type="mcq",
+            stem=stem, options=[o for o, _ in answers], eligible_mechanisms=["opinion_trap"],
+            human_dist_key=f"{item_id}:human",
+        ))
+        dists.append(HumanDistribution(
+            key=f"{item_id}:human", source="opinionqa",
+            option_probs=[p / total for _, p in answers], n_respondents=PEW_W41_N,
+        ))
+    return items, dists
 
 OPEN_TEXT = [
     Item(
@@ -129,14 +178,15 @@ def build(args: argparse.Namespace) -> dict:
     rng.shuffle(quiz)
 
     if args.opinionqa:
-        opinion_items, _ = load_opinionqa(args.opinionqa)
+        opinion_items, dists = load_opinionqa(args.opinionqa)
         opinion = pick(opinion_items, readable_opinion, N_OPINION, rng,
                        spread=lambda i: i.item_id.split(":")[1].split("_")[0])
     else:
-        print("No --opinionqa: the survey has no Pew questions yet. Rebuild once it's here.")
-        opinion = []
-    ipip_items = {it.item_id.split(":")[1]: it for it in load_ipip(args.ipip_data,
-                                                                  args.ipip_codebook)[0]}
+        print("No --opinionqa: using the 6 Pew Wave 41 questions from Pew's published topline.")
+        opinion, dists = pew_w41()
+    ipip_list, ipip_dists = load_ipip(args.ipip_data, args.ipip_codebook)
+    dists = list(dists) + list(ipip_dists)
+    ipip_items = {it.item_id.split(":")[1]: it for it in ipip_list}
     first_halves = [ipip_items[a.lower()] for a, _ in IPIP_PAIRS]
     second_halves = [ipip_items[b.lower()] for _, b in IPIP_PAIRS]
     # Survey order: the halves of a pair are kept apart, open text near the end.
@@ -144,6 +194,11 @@ def build(args: argparse.Namespace) -> dict:
 
     quiz_ids = [it.item_id for it in quiz]
     survey_ids = [it.item_id for it in survey]
+    # Human answer distributions for the survey items, so #39 can score the opinion trap.
+    wanted = {it.human_dist_key for it in survey if it.human_dist_key}
+    human = [d.model_dump() for d in dists if d.key in wanted]
+    if len(human) != len(wanted):
+        raise ValueError(f"missing human distributions: {wanted - {d['key'] for d in human}}")
     assessments = [
         Assessment(assessment_id="pilot-quiz", title="Quiz", assessment_type="quiz",
                    item_ids=quiz_ids),
@@ -157,6 +212,7 @@ def build(args: argparse.Namespace) -> dict:
         "items": [it.model_dump(exclude_defaults=True) | {"split": "train"}
                   for it in quiz + survey],
         "assessments": [a.model_dump(exclude_none=True) for a in assessments],
+        "human_distributions": human,  # the server ignores this; #39 reads it
     }
 
 
