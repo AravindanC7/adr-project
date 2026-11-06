@@ -16,7 +16,8 @@ data/processed/*
 cache/llm/*
 results/outcomes/*
 results/runs/*
-pilot_data/   # real pilot answers: never in git (docs/pilot/README.md)
+# real pilot answers: never in git (docs/pilot/README.md)
+pilot_data/
 !**/.gitkeep
 
 # OS / editors
