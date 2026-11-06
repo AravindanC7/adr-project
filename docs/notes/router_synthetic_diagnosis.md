@@ -83,6 +83,7 @@ Penalties are not the limiter. Few items go plain for lack of value, and that on
 ## What to do in #42 (on held-out replay, not here)
 - Calibrate **A** empirically from held-out honest sessions, per assessment type.
 - Tune **`mech_cap_frac`** together with A. Decide first whether one check may trigger review alone (frac ≥ 1) or not (frac < 1). Candidate range: 0.65–1.1.
+- Option: apply the cap only to mechanisms that repeat a per-person signal (passive style/behaviour, opinion_trap if it goes passive), not to per-item traps (decoy, canary), since per-item traps on different questions are closer to independent evidence. Test against the current all-mechanism cap on held-out replay.
 - Choose **β** for the honest burden we accept. If the real curve is also flat, a larger β (around 0.1) cuts burden at little cost.
 - Leave the **penalties** (`lambda_burden`, `lambda_fp`) as they are unless real data shows many items going plain.
 - Rerun `scripts/diagnose_router.py` on Archana's outcome tables, both with and without passive behaviour once it exists, and compare against these patterns.
