@@ -24,3 +24,5 @@ pilot_data/
 .DS_Store
 .vscode/
 .idea/
+# pilot question bank: contains dataset questions, rebuilt by scripts/build_pilot_bank.py
+server/pilot_items.json
