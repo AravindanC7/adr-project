@@ -6,9 +6,18 @@ adds confidence intervals and is the version the report uses. Nothing built here
 The held-out rule (AGENTS.md section 8) applies here as everywhere: the map is fitted ONLY on
 rows with split == "train" from non-held-out models. Rows from the held-out model or the
 held-out survey are dropped before counting, and if nothing is left we refuse to build a map.
+
+Three splits (split_rows):
+  train        fits the failure map
+  calibration  a fixed share of the non-held-out items (by item, fixed seed): development
+               evaluation, thresholds and the per-mechanism cap (#42). Never fits the map.
+  held-out     held-out model and held-out survey rows: final evaluation only (--final)
 """
 
 from __future__ import annotations
+
+import random
+from dataclasses import dataclass
 
 import pandas as pd
 
@@ -68,15 +77,46 @@ def quick_failure_map(
     )
 
 
-def train_eval_split(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, bool]:
-    """(rows to fit the map on, rows to evaluate on, same_data).
+CALIBRATION_FRAC = 0.3
+SPLIT_SEED = 0
 
-    Evaluation uses the held-out rows (held-out model or held-out survey) when there are any.
-    If there are none, it falls back to the fit rows and `same_data` is True: the numbers are
-    then optimistic, and callers must say so loudly.
-    """
-    held = df[heldout_mask(df)]
-    fit = fit_rows(df)
-    if held.empty:
-        return fit, fit, True
-    return fit, held, False
+
+def calibration_items(
+    df: pd.DataFrame, frac: float = CALIBRATION_FRAC, seed: int = SPLIT_SEED
+) -> set[str]:
+    """The non-held-out items set aside for calibration: about `frac` of them, chosen per item
+    type with a fixed seed, so every item type keeps at least one item for fitting the map.
+    The same rows and seed always give the same items."""
+    if not 0 <= frac < 1:
+        raise ValueError("calibration frac must be in [0, 1)")
+    rows = fit_rows(df)
+    out: set[str] = set()
+    for item_type, part in rows.groupby("item_type", sort=True):
+        ids = sorted(part["item_id"].unique())
+        k = min(round(frac * len(ids)), len(ids) - 1)
+        random.Random(f"{seed}:{item_type}").shuffle(ids)
+        out.update(ids[:k])
+    return out
+
+
+@dataclass(frozen=True)
+class Splits:
+    train: pd.DataFrame        # fits the map
+    calibration: pd.DataFrame  # development evaluation and thresholds (#42)
+    heldout: pd.DataFrame      # final evaluation only
+    calibration_item_ids: frozenset[str]
+
+
+def split_rows(
+    df: pd.DataFrame, frac: float = CALIBRATION_FRAC, seed: int = SPLIT_SEED
+) -> Splits:
+    """Split the outcome table into train / calibration / held-out rows (see module doc)."""
+    calib = calibration_items(df, frac, seed)
+    usable = fit_rows(df)
+    in_calib = usable["item_id"].isin(calib)
+    return Splits(
+        train=usable[~in_calib],
+        calibration=usable[in_calib],
+        heldout=df[heldout_mask(df)],
+        calibration_item_ids=frozenset(calib),
+    )

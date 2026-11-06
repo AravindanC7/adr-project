@@ -13,10 +13,15 @@ Real use:
         --items data/processed/items.jsonl --variants data/processed/variants/quiz-slice.jsonl \
         --policies router,random,single:decoy --n 500 --seed 0
 
-The failure map is fitted on train rows only (--map to use a saved one instead). Evaluation
-uses held-out rows (held-out model or held-out survey) when there are any; otherwise it
-evaluates on the map's own rows and says so loudly. Writes results/runs/<run_id>/metrics.json
-and config.yaml.
+Three splits (adr/replay/quick_map.py):
+  train        fits the failure map (--map to use a saved one instead)
+  calibration  --calibration-frac of the non-held-out items (default 30%, by item type, fixed
+               --split-seed). The DEFAULT evaluation: development runs and threshold tuning.
+               The replay serves only these items, so sessions are shorter than the real thing.
+  held-out     the held-out model and the held-out survey. Read ONLY with --final, which prints
+               a banner: report those numbers, never tune on them (AGENTS.md section 8).
+If the evaluated rows have no AI respondents, only the honest-side metrics (false flags,
+burden) are computed. Writes results/runs/<run_id>/metrics.json and config.yaml.
 """
 
 from __future__ import annotations
@@ -39,7 +44,13 @@ from adr.contracts.outcome import utc_now
 from adr.harness.copy_paste import _git_commit, plain_variant
 from adr.replay.donors import Donors, Group
 from adr.replay.metrics import evaluate
-from adr.replay.quick_map import quick_failure_map, train_eval_split
+from adr.replay.quick_map import (
+    CALIBRATION_FRAC,
+    SPLIT_SEED,
+    fit_rows,
+    quick_failure_map,
+    split_rows,
+)
 from adr.replay.simulate import replay_session
 from adr.router.core import RouterConfig, SPRTRouter
 
@@ -104,6 +115,11 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=200, help="simulated respondents per group")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--boot", type=int, default=1000, help="bootstrap draws for the 95%% CIs")
+    ap.add_argument("--final", action="store_true",
+                    help="FINAL evaluation on the held-out rows (never tune on its numbers)")
+    ap.add_argument("--calibration-frac", type=float, default=CALIBRATION_FRAC,
+                    help="share of non-held-out items set aside for calibration (default 0.3)")
+    ap.add_argument("--split-seed", type=int, default=SPLIT_SEED)
     ap.add_argument("--results-dir", default="results")
     ap.add_argument("--run-id")
     args = ap.parse_args()
@@ -121,41 +137,54 @@ def main() -> None:
         raise SystemExit("no outcome rows for this assessment's items")
 
     warnings: list[str] = []
-    fit, held, same_data = train_eval_split(table)
-    fmap = FailureMap.load(args.map) if args.map else quick_failure_map(table)
+    splits = split_rows(table, args.calibration_frac, args.split_seed)
+    fmap = FailureMap.load(args.map) if args.map else quick_failure_map(splits.train)
     if not args.map:
         warnings.append(f"map: {fmap.note}")
-    eval_ai = (fit if same_data else held).query("respondent_kind == 'ai'")
-    if same_data:
-        warnings.append("EVALUATING ON THE SAME ROWS THE MAP WAS FIT ON: numbers are optimistic. "
-                        "Add held-out-model or held-out-survey rows for a fair evaluation.")
-    humans = held.query("respondent_kind == 'human'") if not same_data else pd.DataFrame()
-    if humans.empty:
-        humans = fit.query("respondent_kind == 'human'")
-        if not humans.empty and not same_data:
-            warnings.append("no held-out human rows: honest respondents reuse the map's own "
-                            "human rows, so false-flag rates are optimistic.")
+    if args.final:
+        loud("FINAL EVALUATION ON HELD-OUT DATA (--final). Report these numbers; never tune "
+             "prompts, thresholds, caps or features on them (AGENTS.md section 8).")
+        if splits.heldout.empty:
+            raise SystemExit("--final: there are no held-out rows (held-out model or survey)")
+        evaluated_on, eval_rows, eval_assessment = "heldout", splits.heldout, assessment
+    else:
+        ids = [i for i in assessment.item_ids if i in splits.calibration_item_ids]
+        if not ids:
+            raise SystemExit("no calibration items in this assessment: raise --calibration-frac")
+        evaluated_on, eval_rows = "calibration", splits.calibration
+        eval_assessment = assessment.model_copy(update={"item_ids": ids})
+        print(f"Development evaluation on the calibration split: {len(ids)} of "
+              f"{len(assessment.item_ids)} items. Held-out rows are not read (use --final).")
+    eval_ai = eval_rows.query("respondent_kind == 'ai'")
+    humans = eval_rows.query("respondent_kind == 'human'")
+    if humans.empty and args.final:
+        humans = fit_rows(table).query("respondent_kind == 'human'")
+        if not humans.empty:
+            warnings.append("no held-out human rows: honest respondents reuse the non-held-out "
+                            "human rows (including the map's own), so false-flag rates are "
+                            "optimistic.")
     extra: tuple[Group, ...] = ()
     if humans.empty:
         extra = (Group.human("synthetic"),)
-        warnings.append("NO HUMAN ROWS AT ALL: every honest respondent is drawn from the map's "
+        warnings.append("NO HUMAN ROWS: every honest respondent is drawn from the map's "
                         "p_human, so FPR-based numbers say nothing about real people.")
+    if eval_ai.empty:
+        warnings.append(f"NO AI ROWS IN THE {evaluated_on.upper()} ROWS: only the honest-side "
+                        "metrics (false flags, burden) are computed; TPR is blank.")
     donors = Donors(pd.concat([eval_ai, humans]), items, fallback_map=fmap, extra_groups=extra)
     ai_groups, human_groups = donors.groups("ai"), donors.groups("human")
-    if not ai_groups:
-        raise SystemExit("no AI rows to evaluate on")
     for w in warnings:
         loud(w)
 
     policies = make_policies(args.policies.split(","), items, variants, fmap)
-    print(f"run {run_id}: {len(assessment.item_ids)} items, map {fmap.version}, "
+    print(f"run {run_id}: {len(eval_assessment.item_ids)} items ({evaluated_on}), map {fmap.version}, "
           f"{args.n} respondents per group, seed {args.seed}")
     print("groups: " + ", ".join(f"{g.label} ({len(donors.sessions(g))} sessions)"
                                  for g in ai_groups + human_groups))
     results: dict = {}
     draws: dict = {}
     for name, router in policies.items():
-        runs = {g: [replay_session(router, assessment, donors.respondent(g, args.seed + i),
+        runs = {g: [replay_session(router, eval_assessment, donors.respondent(g, args.seed + i),
                                    passive, seed=args.seed + i) for i in range(args.n)]
                 for g in ai_groups + human_groups}
         honest = [r for g in human_groups for r in runs[g]]
@@ -198,10 +227,11 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "metrics.json").write_text(json.dumps({
         "warnings": warnings,
-        "evaluated_on_fit_rows": same_data,
+        "evaluated_on": evaluated_on,
+        "final": args.final,
         "results": results,
         "outcome_sources": draws,
-    }, indent=2))
+    }, indent=2), encoding="utf-8")
     (run_dir / "config.yaml").write_text(yaml.safe_dump({
         "run_id": run_id,
         "mode": "replay",
@@ -209,13 +239,20 @@ def main() -> None:
         "source_run_ids": sorted(table["run_id"].unique()),
         "assessment_id": assessment.assessment_id,
         "n_items": len(assessment.item_ids),
+        "evaluated_on": evaluated_on,
+        "final": args.final,
+        "eval_item_ids": list(eval_assessment.item_ids),
+        "calibration_frac": args.calibration_frac,
+        "split_seed": args.split_seed,
+        "calibration_item_ids": sorted(splits.calibration_item_ids),
         "map": args.map or "quick (TEMPORARY, adr/replay/quick_map.py)",
         "map_version": fmap.version,
         "map_source_run_ids": fmap.source_run_ids,
-        "n_rows_fit": len(fit),
+        "n_rows_train": len(splits.train),
+        "n_rows_calibration": len(splits.calibration),
+        "n_rows_heldout_read": len(splits.heldout) if args.final else 0,
         "n_rows_eval_ai": len(eval_ai),
         "n_rows_human": len(humans),
-        "evaluated_on_fit_rows": same_data,
         "groups": {g.label: len(donors.sessions(g)) for g in ai_groups + human_groups},
         "policies": list(policies),
         "router_config": RouterConfig().__dict__,
@@ -225,7 +262,7 @@ def main() -> None:
         "n_boot": args.boot,
         "git_commit": _git_commit(),
         "created_at": utc_now(),
-    }, sort_keys=False))
+    }, sort_keys=False, allow_unicode=True), encoding="utf-8")
     print(f"\nSaved {run_dir / 'metrics.json'} and config.yaml")
 
 

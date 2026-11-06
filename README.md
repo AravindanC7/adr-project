@@ -29,7 +29,7 @@ pytest                                                    # all tests should pas
 | Document-upload attacker (#20) | `adr/harness/doc_upload.py`, `pdf_render.py` | Whole assessment as one PDF, traps in the invisible text layer. Anthropic, OpenAI, Google only. |
 | Router prototype (#13) | `adr/router/` | SPRT score, Chernoff-rule check selection, burden and false-flag penalties, per-mechanism cap, escalation, random tie-breaks. |
 | Early baselines | `adr/baselines/simple.py` | Random check per item; single fixed mechanism. |
-| Replay on logged outcomes (#27) | `adr/replay/` | Each simulated respondent copies one real logged session; fallbacks and map draws are counted. Metrics with bootstrap CIs. Uses a **temporary** quick map until #34. |
+| Replay on logged outcomes (#27) | `adr/replay/` | Each simulated respondent copies one real logged session; fallbacks and map draws are counted. Metrics with bootstrap CIs over donor sessions. Three splits: train (map), calibration (default evaluation, 30% of items), held-out (only with `--final`). Uses a **temporary** quick map until #34. |
 | Synthetic test data | `adr/router/synthetic.py` | **Invented numbers** for developing the router. Never report these. |
 
 Not started: browser agent (#22), the other baselines, and everything Archana and Harshini own.

@@ -7,7 +7,7 @@ import pytest
 from adr.contracts import NoObservation, OutcomeRow, make_variant_id, rows_to_frame
 from adr.replay.donors import Donors, Group
 from adr.replay.metrics import detection_at_fpr, evaluate
-from adr.replay.quick_map import quick_failure_map, train_eval_split
+from adr.replay.quick_map import calibration_items, quick_failure_map, split_rows
 from adr.replay.simulate import replay_session
 from adr.router.core import SPRTRouter
 from adr.router.synthetic import detection_at_fpr as old_detection_at_fpr
@@ -145,9 +145,29 @@ def test_quick_map_refuses_heldout_rows():
     assert pooled.counts_ai == {"picked_decoy": 0, "picked_correct": 1, "picked_other": 0}
     assert sum(pooled.counts_human.values()) == 0          # the held-out survey row is dropped
     assert "TEMPORARY" in fmap.note and "No human rows" in fmap.note
-    fit, ev, same = train_eval_split(mixed)
-    assert (len(fit), len(ev), same) == (1, 2, False)
-    assert train_eval_split(fit)[2] is True                # nothing held out: same data
+    sp = split_rows(mixed, frac=0.0)
+    assert (len(sp.train), len(sp.calibration), len(sp.heldout)) == (1, 0, 2)
+
+
+def test_three_splits_are_disjoint_by_item_and_never_touch_heldout():
+    rows = [_row(f"ai-{s}", f"x:{i}", "decoy", "picked_decoy") for s in range(2) for i in range(10)]
+    rows += [_row("hu", f"o:{i}", "canary", "clean", kind="human", item_type="open_text")
+             for i in range(10)]
+    rows += [_row("held", "x:0", "decoy", "picked_decoy", model="gemini-flash", heldout=True),
+             _row("hs", "h:1", "decoy", "picked_correct", kind="human", split="heldout_survey")]
+    df = rows_to_frame(rows)
+    sp = split_rows(df)                                    # default: 30%, seed 0
+    calib = sp.calibration_item_ids
+    assert len(calib & {f"x:{i}" for i in range(10)}) == 3     # 30% of each item type
+    assert len(calib & {f"o:{i}" for i in range(10)}) == 3
+    assert set(sp.train.item_id).isdisjoint(set(sp.calibration.item_id))
+    assert not sp.train.heldout_model.any() and not sp.calibration.heldout_model.any()
+    assert (sp.train.split == "train").all() and (sp.calibration.split == "train").all()
+    assert len(sp.heldout) == 2 and "h:1" not in calib
+    assert split_rows(df.sample(frac=1, random_state=1)).calibration_item_ids == calib  # stable
+    assert calibration_items(df, seed=1) != calib                                     # seeded
+    one = rows_to_frame([_row("a", "solo:1", "decoy", "picked_decoy")])
+    assert calibration_items(one, frac=0.9) == set()       # a lone item type stays in train
 
 
 # ---------- metrics ----------
@@ -174,6 +194,85 @@ def test_metrics_match_hand_computed_values():
     assert 0.0 <= lo <= 0.5 <= hi <= 1.0
     assert evaluate(ai, hu, n_boot=200, seed=0) == m        # fixed seed: same intervals
     assert evaluate(ai, [], n_boot=50)["tpr_at_1pct_fpr"] is None
+
+
+def test_bootstrap_resamples_donor_sessions_so_cis_do_not_shrink_with_n():
+    """6 AI and 6 honest logged sessions. Copying each 10x or 100x adds no real data, so the
+    interval must stay about as wide (respondent resampling would shrink it about 3x)."""
+    from types import SimpleNamespace
+
+    def copies(kind, scores, k):
+        g = SimpleNamespace(label=kind)
+        return [SimpleNamespace(final=SimpleNamespace(score=sc, status="active"), checks_run=1,
+                                items_to_decision=None, group=g, donor_session=f"{kind}-{j}")
+                for j, sc in enumerate(scores) for _ in range(k)]
+
+    ai_scores, hu_scores = [3, 2, 1, 0, -1, 4], [0, -1, -2, 1, -3, -1]
+    width = {}
+    for k in (10, 100):
+        m = evaluate(copies("ai", ai_scores, k), copies("hu", hu_scores, k), n_boot=300, seed=0)
+        assert (m["n_ai_sessions"], m["n_human_sessions"], m["boot_unit"]) == (6, 6, "donor_session")
+        lo, hi = m["ci95"]["tpr_at_5pct_fpr"]
+        width[k] = hi - lo
+    assert width[100] > 0.7 * width[10] > 0
+
+
+# ---------- run_replay.py: dev split by default, held-out only with --final ----------
+def _stub_table(tmp_path, heldout_rows):
+    from adr.contracts import write_outcomes
+
+    rows = []
+    for s, decoy in enumerate(["picked_decoy", "picked_decoy", "picked_correct"]):
+        for item in ("handwritten:q1", "handwritten:q2"):
+            rows.append(_row(f"ai-{s}", item, "decoy", decoy))
+    for s in range(3):
+        for item in ("handwritten:q1", "handwritten:q2"):
+            rows.append(_row(f"hu-{s}", item, "decoy", "picked_correct", kind="human"))
+    rows += heldout_rows
+    path = tmp_path / "t.parquet"
+    write_outcomes(rows, path)
+    return path
+
+
+def _run_replay(tmp_path, path, *extra):
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [sys.executable, str(root / "scripts" / "run_replay.py"), "--stub", "--outcomes",
+         str(path), "--n", "20", "--boot", "20", "--policies", "router",
+         "--results-dir", str(tmp_path), "--run-id", "r", *extra],
+        cwd=root, capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    metrics = json.loads((tmp_path / "runs" / "r" / "metrics.json").read_text(encoding="utf-8"))
+    return proc.stdout, metrics
+
+
+def test_run_replay_defaults_to_the_calibration_split_and_never_reads_heldout(tmp_path):
+    held = [_row("held-0", "handwritten:q1", "decoy", "picked_decoy", model="gemini-flash",
+                 heldout=True)]
+    out, m = _run_replay(tmp_path, _stub_table(tmp_path, held))
+    assert m["evaluated_on"] == "calibration" and m["final"] is False
+    assert "FINAL EVALUATION" not in out
+    groups = m["outcome_sources"]["router"]
+    assert all("gemini-flash" not in g for g in groups)            # held-out model never read
+    out, m = _run_replay(tmp_path, _stub_table(tmp_path, held), "--final")
+    assert "FINAL EVALUATION ON HELD-OUT DATA" in out and m["evaluated_on"] == "heldout"
+    assert any("gemini-flash" in g for g in m["outcome_sources"]["router"])
+
+
+def test_run_replay_final_with_human_only_heldout_rows_reports_honest_side(tmp_path):
+    held = [_row(f"hs-{s}", "handwritten:q1", "decoy", "picked_correct", kind="human",
+                 split="heldout_survey") for s in range(3)]
+    out, m = _run_replay(tmp_path, _stub_table(tmp_path, held), "--final")
+    overall = m["results"]["router"]["overall"]
+    assert "NO AI ROWS IN THE HELDOUT ROWS" in out
+    assert overall["n_ai"] == 0 and overall["tpr_at_1pct_fpr"] is None
+    assert overall["checks_per_honest_person"] is not None
 
 
 # ---------- sanity: replaying synthetic rows ~ simulating from the map ----------
