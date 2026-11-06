@@ -81,6 +81,7 @@ def readable_mcq(item: Item) -> bool:
         and words(item.stem) <= MAX_STEM_WORDS
         and all(0 < words(o) <= MAX_OPTION_WORDS for o in opts)
         and not NEEDS_A_PICTURE.search(item.stem)
+        and not any("�" in t for t in [item.stem, *opts])  # broken characters
         and DecoyMechanism().applies_to(item)
     )
 
@@ -127,13 +128,17 @@ def build(args: argparse.Namespace) -> dict:
     quiz = as_train(arc + mmlu, eligible_mechanisms=["decoy"])
     rng.shuffle(quiz)
 
-    opinion_items, _ = load_opinionqa(args.opinionqa)
-    opinion = pick(opinion_items, readable_opinion, N_OPINION, rng,
-                   spread=lambda i: i.item_id.split(":")[1].split("_")[0])
+    if args.opinionqa:
+        opinion_items, _ = load_opinionqa(args.opinionqa)
+        opinion = pick(opinion_items, readable_opinion, N_OPINION, rng,
+                       spread=lambda i: i.item_id.split(":")[1].split("_")[0])
+    else:
+        print("No --opinionqa: the survey has no Pew questions yet. Rebuild once it's here.")
+        opinion = []
     ipip_items = {it.item_id.split(":")[1]: it for it in load_ipip(args.ipip_data,
                                                                   args.ipip_codebook)[0]}
-    first_halves = [ipip_items[a] for a, _ in IPIP_PAIRS]
-    second_halves = [ipip_items[b] for _, b in IPIP_PAIRS]
+    first_halves = [ipip_items[a.lower()] for a, _ in IPIP_PAIRS]
+    second_halves = [ipip_items[b.lower()] for _, b in IPIP_PAIRS]
     # Survey order: the halves of a pair are kept apart, open text near the end.
     survey = as_train(opinion[:3] + first_halves + opinion[3:] + second_halves) + OPEN_TEXT
 
@@ -159,7 +164,7 @@ def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--arc", required=True, type=Path)
     p.add_argument("--mmlu", required=True, type=Path)
-    p.add_argument("--opinionqa", required=True, type=Path)
+    p.add_argument("--opinionqa", type=Path, help="OpinionQA human_resp dir (Pew)")
     p.add_argument("--ipip-data", required=True, type=Path)
     p.add_argument("--ipip-codebook", required=True, type=Path)
     p.add_argument("--out", type=Path, default=ROOT / "server" / "pilot_items.json")
