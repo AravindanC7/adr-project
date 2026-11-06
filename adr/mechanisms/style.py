@@ -8,7 +8,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from statistics import fmean, pstdev
 
-from adr.contracts import Item, RenderedItem, Response, Telemetry
+from adr.contracts import Item, NoObservation, RenderedItem, Response, Telemetry
 
 _WORD = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?")
 _SENTENCE_END = re.compile(r"[.!?]+")
@@ -23,12 +23,23 @@ class StyleProfile:
     mid_threshold: float
     high_threshold: float
     n_training: int
+    sources: tuple[str, ...]
 
 
-def fit_style_profile(texts: Iterable[str]) -> StyleProfile:
-    """Fit feature statistics and 80th/95th-percentile cutoffs from training text."""
+def fit_style_profile(samples: Iterable[tuple[Item, str]]) -> StyleProfile:
+    """Fit cutoffs from non-empty open-text responses on the training split only."""
 
-    rows = [_features(text) for text in texts if text and text.strip()]
+    rows: list[tuple[float, ...]] = []
+    sources: set[str] = set()
+    for item, text in samples:
+        if item.split != "train":
+            raise ValueError(f"style calibration cannot use {item.split} item {item.item_id}")
+        if item.item_type != "open_text":
+            raise ValueError(f"style calibration requires open-text items, got {item.item_id}")
+        if not text or not text.strip():
+            continue
+        rows.append(_features(text))
+        sources.add(item.source)
     if len(rows) < 20:
         raise ValueError("style calibration needs at least 20 non-empty training responses")
     columns = list(zip(*rows, strict=True))
@@ -41,6 +52,7 @@ def fit_style_profile(texts: Iterable[str]) -> StyleProfile:
         mid_threshold=_quantile(distances, 0.80),
         high_threshold=_quantile(distances, 0.95),
         n_training=len(rows),
+        sources=tuple(sorted(sources)),
     )
 
 
@@ -53,15 +65,20 @@ class StyleMechanism:
     def __init__(self, profile: StyleProfile | None = None) -> None:
         self.profile = profile
 
+    @classmethod
+    def from_training(cls, samples: Iterable[tuple[Item, str]]) -> StyleMechanism:
+        """Return a configured mechanism fitted from validated training responses."""
+
+        return cls(fit_style_profile(samples))
+
     def configure(self, profile: StyleProfile) -> None:
         self.profile = profile
 
     def applies_to(self, item: Item) -> bool:
-        return (
-            self.profile is not None
-            and item.item_type == "open_text"
-            and "style" in item.eligible_mechanisms
-        )
+        eligible = item.item_type == "open_text" and "style" in item.eligible_mechanisms
+        if eligible and self.profile is None:
+            raise RuntimeError("style mechanism must be configured from training responses")
+        return eligible
 
     def generate(self, item: Item, seed: int) -> RenderedItem:
         del item, seed
@@ -72,6 +89,8 @@ class StyleMechanism:
         if self.profile is None:
             raise RuntimeError("style mechanism must be configured with a training profile")
         text = str(response.raw_text if response.raw_text is not None else response.answer or "")
+        if not text.strip():
+            raise NoObservation("style cannot score an empty answer")
         distance = _distance(_features(text), self.profile.feature_means, self.profile.feature_stds)
         if distance >= self.profile.high_threshold:
             return "high"

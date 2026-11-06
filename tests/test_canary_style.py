@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from adr.contracts import Item, Response
+from adr.contracts import Item, NoObservation, Response
 from adr.mechanisms.canary import MECHANISM as CANARY
 from adr.mechanisms.style import StyleMechanism, fit_style_profile
 
@@ -28,13 +28,30 @@ def _response(variant_id: str, text: str) -> Response:
     )
 
 
+def _training_samples(count: int = 30) -> list[tuple[Item, str]]:
+    return [
+        (
+            _open_item().model_copy(update={"item_id": f"handwritten:train-{index}"}),
+            f"I value clear communication and thoughtful teamwork in project number {index}.",
+        )
+        for index in range(count)
+    ]
+
+
 def test_canary_is_deterministic_and_present_in_copy_text() -> None:
     first = CANARY.generate(_open_item(), seed=12)
     second = CANARY.generate(_open_item(), seed=12)
 
     assert first.hidden["canary_token"] == second.hidden["canary_token"]
+    assert (
+        first.hidden["canary_token"]
+        != CANARY.generate(_open_item(), seed=13).hidden["canary_token"]
+    )
     assert first.hidden["canary_token"] in first.copy_text
     assert first.hidden["hidden_position"] == "after_stem"
+    assert first.hidden["instruction_version"] == "canary-v1"
+    assert "canary" not in first.hidden["hidden_text"].casefold()
+    assert "hidden" not in first.hidden["hidden_text"].casefold()
     assert first.hidden["hidden_text"] not in first.visible["stem"]
 
 
@@ -47,11 +64,18 @@ def test_canary_scores_followed_leaked_and_clean() -> None:
         == "followed_instruction"
     )
     assert (
+        CANARY.score(rendered, _response(rendered.variant_id, token.upper()), None)
+        == "followed_instruction"
+    )
+    assert (
         CANARY.score(
-            rendered, _response(rendered.variant_id, "I noticed a hidden instruction."), None
+            rendered,
+            _response(rendered.variant_id, 'It said "keep the reference code unchanged."'),
+            None,
         )
         == "leaked"
     )
+    assert CANARY.score(rendered, _response(rendered.variant_id, f"x{token}y"), None) == "clean"
     assert (
         CANARY.score(
             rendered, _response(rendered.variant_id, "Supportive colleagues matter."), None
@@ -77,13 +101,21 @@ def test_canary_rejects_non_open_item() -> None:
 
 def test_style_profile_requires_training_data() -> None:
     with pytest.raises(ValueError, match="at least 20"):
-        fit_style_profile(["too little data"] * 19)
+        fit_style_profile(_training_samples(19))
+
+
+def test_style_profile_rejects_heldout_survey_data() -> None:
+    heldout = _open_item().model_copy(update={"split": "heldout_survey"})
+
+    with pytest.raises(ValueError, match="cannot use heldout_survey"):
+        fit_style_profile([(heldout, "A held-out response.")])
 
 
 def test_style_signal_is_inactive_until_calibrated() -> None:
     mechanism = StyleMechanism()
 
-    assert not mechanism.applies_to(_open_item())
+    with pytest.raises(RuntimeError, match="configured from training"):
+        mechanism.applies_to(_open_item())
     with pytest.raises(RuntimeError, match="configured"):
         mechanism.score(
             CANARY.generate(_open_item(), seed=1),
@@ -93,12 +125,9 @@ def test_style_signal_is_inactive_until_calibrated() -> None:
 
 
 def test_style_signal_uses_training_percentiles() -> None:
-    training = [
-        f"I value clear communication and thoughtful teamwork in project number {index}."
-        for index in range(30)
-    ]
-    profile = fit_style_profile(training)
-    mechanism = StyleMechanism(profile)
+    mechanism = StyleMechanism.from_training(_training_samples())
+    profile = mechanism.profile
+    assert profile is not None
     rendered = CANARY.generate(_open_item(), seed=2)
 
     ordinary = mechanism.score(
@@ -118,10 +147,27 @@ def test_style_signal_uses_training_percentiles() -> None:
     assert ordinary in {"low", "mid"}
     assert unusual == "high"
     assert profile.n_training == 30
+    assert profile.sources == ("handwritten",)
+
+
+@pytest.mark.parametrize(("answer", "raw_text"), [(None, None), ("", ""), ("   ", "   ")])
+def test_style_empty_answer_is_no_observation(answer: str | None, raw_text: str | None) -> None:
+    mechanism = StyleMechanism.from_training(_training_samples())
+    rendered = CANARY.generate(_open_item(), seed=2)
+    response = Response(
+        session_id="session-1",
+        item_id="handwritten:open-1",
+        variant_id=rendered.variant_id,
+        answer=answer,
+        raw_text=raw_text,
+    )
+
+    with pytest.raises(NoObservation, match="empty answer"):
+        mechanism.score(rendered, response, None)
 
 
 def test_style_never_generates_an_active_variant() -> None:
-    mechanism = StyleMechanism(fit_style_profile([f"Training answer {i}." for i in range(20)]))
+    mechanism = StyleMechanism.from_training(_training_samples(20))
 
     with pytest.raises(RuntimeError, match="passive"):
         mechanism.generate(_open_item(), seed=0)
