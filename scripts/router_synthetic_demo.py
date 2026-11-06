@@ -54,7 +54,7 @@ def main() -> None:
     fmap = synthetic_failure_map()
     cfg = RouterConfig()
     print(f"SYNTHETIC failure map ({fmap.version}). alpha={cfg.alpha}, beta={cfg.beta}, "
-          f"mech_cap={cfg.mech_cap}, passive={list(passive) or 'none'}\n")
+          f"mech_cap_frac={cfg.mech_cap_frac}, passive={list(passive) or 'none'}\n")
     out = {}
     for kind in ("quiz", "survey"):
         assessment, items, variants = synthetic_bank(assessment_type=kind)

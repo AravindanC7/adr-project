@@ -44,7 +44,11 @@ class RouterConfig:
     lambda_burden: float = 0.5     # penalty per unit of respondent burden
     lambda_fp: float = 0.05        # penalty per unit of honest-person false-flag risk
     escalated_burden_scale: float = 0.25  # when escalated, burden matters less: harder checks OK
-    mech_cap: float | None = 3.0   # max |total| any one mechanism may add (nats); None = no cap
+    # Max total any one mechanism may add, as a fraction of the review threshold A: cap = frac * A
+    # nats, so it moves with A when A is recalibrated (#42). 0.65 = the old fixed 3.0 at A = 4.60
+    # (2.96 at the default A = 4.55). Below 1, no single mechanism can trigger review on its own.
+    # None = no cap.
+    mech_cap_frac: float | None = 0.65
     objective: str = "kl"          # "kl" (Chernoff's rule) or "info_gain"; see selection.py
     tie_eps: float = 0.01          # candidates within this of the best are a tie
     allow_reorder: bool = True     # may serve items out of display order
@@ -68,6 +72,10 @@ class SPRTRouter:
         a, b = wald_thresholds(config.alpha, config.beta)
         self.A = config.upper if config.upper is not None else a
         self.B = config.lower if config.lower is not None else b
+        if config.mech_cap_frac is not None and config.mech_cap_frac <= 0:
+            raise ValueError("mech_cap_frac must be > 0 (or None for no cap)")
+        # Per-mechanism cap in nats, from A after any `upper` override.
+        self.mech_cap = None if config.mech_cap_frac is None else config.mech_cap_frac * self.A
         self._assessments: dict[str, Assessment] = {}
         self._variant_index: dict[str, RenderedItem] = {
             v.variant_id: v for vs in variants.values() for v in vs
@@ -116,7 +124,7 @@ class SPRTRouter:
             cell = self.fmap.lookup(mech, self.items[item_id].item_type, self.cfg.attack_mode)
             if cell is not None:
                 total = new.contrib.get(mech, 0.0)
-                delta = capped_delta(total, cell.llr(outcome), self.cfg.mech_cap)
+                delta = capped_delta(total, cell.llr(outcome), self.mech_cap)
                 new.contrib[mech] = total + delta
         new.score += delta
         new.history.append((variant_id, outcome, delta))
@@ -174,8 +182,8 @@ class SPRTRouter:
             for v in self.variants.get(item_id, []):
                 if v.mechanism not in ACTIVE_MECHANISMS:
                     continue
-                if self.cfg.mech_cap is not None and (
-                    state.contrib.get(v.mechanism, 0.0) >= self.cfg.mech_cap
+                if self.mech_cap is not None and (
+                    state.contrib.get(v.mechanism, 0.0) >= self.mech_cap
                 ):
                     continue  # this check can't add more evidence toward AI
                 cell = self.fmap.lookup(v.mechanism, item.item_type, self.cfg.attack_mode)

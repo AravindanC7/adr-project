@@ -58,6 +58,8 @@ python scripts/run_replay.py --stub \
 python scripts/run_replay.py --synthetic quiz --compare --n 500 --run-id budget-synthetic-quiz
 pip install -e ".[plot]"
 python scripts/plot_budget_curve.py results/runs/budget-synthetic-quiz/budget_curve.csv
+# what limits the router on one assessment (see docs/notes/router_synthetic_diagnosis.md):
+python scripts/diagnose_router.py --synthetic survey
 ```
 
 ```bash

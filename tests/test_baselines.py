@@ -189,7 +189,7 @@ AI = {"decoy": "picked_decoy", "canary": "followed_instruction", "glitch_token":
 @pytest.mark.parametrize("cls", [AllChecksRouter, FixedPlanRouter, RandomCheckRouter])
 def test_baselines_never_clear_early_but_still_pause_for_review(cls):
     a, items, variants = _bank()
-    cfg = RouterConfig(lower=-0.5, mech_cap=None)   # B reachable after one honest answer
+    cfg = RouterConfig(lower=-0.5, mech_cap_frac=None)   # B reachable after one honest answer
     trace, state = _trace(cls(items, variants, FMAP, cfg), a, HUMAN.get)
     assert all(status != "cleared" for _, _, status in trace) and state.status != "cleared"
     after_b = [m for m, score, _ in trace if score <= cfg.lower]
@@ -223,7 +223,7 @@ def test_compare_on_synthetic_data_router_needs_fewer_checks_than_all_checks(tmp
 
 def test_router_noclear_never_clears():
     a, items, variants = _bank()
-    cfg = RouterConfig(lower=-0.5, mech_cap=None)
+    cfg = RouterConfig(lower=-0.5, mech_cap_frac=None)
     trace, state = _trace(make_policy("router_noclear", a, items, variants, FMAP, cfg), a,
                           HUMAN.get)
     assert all(status != "cleared" for _, _, status in trace) and state.status != "cleared"
