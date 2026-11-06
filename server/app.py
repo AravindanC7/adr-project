@@ -277,14 +277,31 @@ class _Session:
 
 
 # ---------------------------------------------------------------- app
+class _Unset:
+    """create_app(data_dir=...) left out, as opposed to data_dir=None ("don't save")."""
+
+
+_FROM_ENV = _Unset()
+
+
 def create_app(
     bank_path: str | Path | None = None,
     mechanisms: dict[str, Mechanism] | None = None,
     pick: Pick | None = None,
     hide: Hide | None = None,
     pilot: bool | None = None,
-    data_dir: str | Path | None = None,
+    data_dir: str | Path | None | _Unset = _FROM_ENV,
 ) -> FastAPI:
+    """Arguments left out come from the environment (ADR_*). Saving is the exception:
+    ADR_DATA_DIR is read only when both `pilot` and `data_dir` are left out, i.e. when the
+    whole server is set up from the environment (uvicorn, scripts/run_pilot.ps1). Code that
+    builds its own app (tests, the browser-agent harness) never saves into a folder it didn't
+    name, so AI sessions can't end up next to the human pilot's answers."""
+    configured_by_env = pilot is None and isinstance(data_dir, _Unset)
+    if os.environ.get("ADR_DEBUG_STATE") == "1":
+        configured_by_env = False  # a debug or harness server: never the pilot's folder
+    if isinstance(data_dir, _Unset):
+        data_dir = (os.environ.get("ADR_DATA_DIR") or None) if configured_by_env else None
     bank_path = bank_path or os.environ.get("ADR_ITEMS", DEFAULT_BANK)
     items, assessments = load_bank(bank_path)
     flow = load_flow(bank_path, assessments)
@@ -298,7 +315,6 @@ def create_app(
         pilot = os.environ.get("ADR_PILOT") == "1"
     if pilot and os.environ.get("ADR_DEBUG_STATE") == "1":
         raise ValueError("ADR_PILOT=1 with ADR_DEBUG_STATE=1 would expose real sessions' state")
-    data_dir = data_dir or os.environ.get("ADR_DATA_DIR") or None
     if pilot and data_dir is None:
         raise ValueError("ADR_PILOT=1 needs ADR_DATA_DIR, or the pilot's answers are lost")
     store = SessionStore(data_dir) if data_dir else None

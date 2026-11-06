@@ -139,3 +139,27 @@ def test_remove_by_code_from_the_command_line(tmp_path, capsys):
     assert "Removed" in capsys.readouterr().out
     assert main(["remove", sid, "--dir", str(tmp_path)]) == 1
     assert main(["remove", "not-a-code", "--dir", str(tmp_path)]) == 2
+
+
+def test_an_app_built_in_code_never_saves_into_the_environments_folder(tmp_path, monkeypatch):
+    # e.g. the browser-agent harness run in a shell where the pilot's ADR_DATA_DIR is set
+    monkeypatch.setenv("ADR_DATA_DIR", str(tmp_path / "pilot_data"))
+    for app in (create_app(mechanisms={}, pilot=False), create_app(mechanisms={}, data_dir=None)):
+        client = TestClient(app)
+        client.post("/session/start", json={"assessment_id": "stub-quiz"})
+    assert not (tmp_path / "pilot_data").exists()
+    # Set up entirely from the environment (uvicorn), it does save there.
+    monkeypatch.delenv("ADR_PILOT", raising=False)
+    client = TestClient(create_app(mechanisms={}))
+    client.post("/session/start", json={"assessment_id": "stub-quiz"})
+    assert len(list((tmp_path / "pilot_data").iterdir())) == 1
+
+
+def test_a_debug_server_never_saves_into_the_environments_folder(tmp_path, monkeypatch):
+    # The browser-agent harness sets ADR_DEBUG_STATE=1 and may pass no data_dir at all.
+    monkeypatch.setenv("ADR_DATA_DIR", str(tmp_path / "pilot_data"))
+    monkeypatch.setenv("ADR_DEBUG_STATE", "1")
+    monkeypatch.delenv("ADR_PILOT", raising=False)
+    client = TestClient(create_app(mechanisms={}))
+    client.post("/session/start", json={"assessment_id": "stub-quiz"})
+    assert not (tmp_path / "pilot_data").exists()
