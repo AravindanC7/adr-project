@@ -343,13 +343,13 @@ def run_browser_agent(
         "n_rows": len(rows),
         "n_errors": len(errors),
         "stopped_for_budget": stopped_for_budget,
-    }, sort_keys=False))
-    with (run_dir / "responses.jsonl").open("w") as f:
+    }, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    with (run_dir / "responses.jsonl").open("w", encoding="utf-8") as f:
         for r in responses:
             f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
-    with (run_dir / "errors.jsonl").open("w") as f:  # always rewritten, empty = no failures
+    with (run_dir / "errors.jsonl").open("w", encoding="utf-8") as f:  # always rewritten, empty = no failures
         for e in errors:
-            f.write(json.dumps(e) + "\n")
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
     return rows
 
 

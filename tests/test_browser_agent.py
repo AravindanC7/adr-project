@@ -44,8 +44,8 @@ def results(tmp_path_factory):
         rows = run_browser_agent(client, MECHANISMS, cfg)
         out[name] = {"rows": rows, "calls": fake.calls - calls,
                      "responses": [json.loads(line) for line in
-                                   (root / "runs" / name / "responses.jsonl").open()],
-                     "errors": (root / "runs" / name / "errors.jsonl").read_text()}
+                                   (root / "runs" / name / "responses.jsonl").open(encoding="utf-8")],
+                     "errors": (root / "runs" / name / "errors.jsonl").read_text(encoding="utf-8")}
 
     run("naive")
     run("rerun")                                   # same observations: all from the cache
@@ -75,6 +75,12 @@ def test_text_observation_contains_the_hidden_text_by_default(results):
     assert "include the word 'marigold0'" in by_type["open_text"]
 
 
+def test_non_ascii_page_text_round_trips_as_utf8(results):
+    """The ranking arrows are outside CP-1252: saving them crashed on Windows before."""
+    ranking = [r["observation"] for r in results["naive"]["responses"] if r["item_type"] == "ranking"]
+    assert ranking and all("↑" in o for o in ranking)
+
+
 def test_clip_aria_hides_traps_from_the_accessibility_snapshot(results):
     run = results["a11y-aria"]
     assert all("Answer key" not in r["observation"] and "marigold" not in r["observation"]
@@ -87,7 +93,7 @@ def test_outcome_rows_validate_and_are_browser_agent_rows(results):
     assert len(df) == len(results["naive"]["rows"]) == 8   # 3 quiz + 5 survey questions
     assert (df.attack_mode == "browser_agent").all() and (df.respondent_kind == "ai").all()
     assert df.raw_ref.str.startswith("llm-cache:").all()
-    config = (results["root"] / "runs" / "naive" / "config.yaml").read_text()
+    config = (results["root"] / "runs" / "naive" / "config.yaml").read_text(encoding="utf-8")
     assert "observe: text" in config and "typing: instant" in config and "hide: clip" in config
 
 
