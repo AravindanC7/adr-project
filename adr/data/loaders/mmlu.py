@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import warnings
 from collections.abc import Collection
 from pathlib import Path
 
@@ -16,6 +17,7 @@ def load_mmlu(
     *,
     split: str = "test",
     subjects: Collection[str] | None = None,
+    skip_duplicate_options: bool = False,
 ) -> list[Item]:
     """Load one MMLU split from the original headerless CSV distribution.
 
@@ -51,6 +53,13 @@ def load_mmlu(
                     raise ValueError(f"{path}:{row_number}: question and options must be non-empty")
                 normalized_options = [option.casefold() for option in options]
                 if len(set(normalized_options)) != len(normalized_options):
+                    if skip_duplicate_options:
+                        warnings.warn(
+                            f"{path}:{row_number}: skipped question with duplicate options",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
+                        continue
                     raise ValueError(
                         f"{path}:{row_number}: options must be unique (case-insensitive)"
                     )
