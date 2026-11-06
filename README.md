@@ -27,11 +27,12 @@ pytest                                                    # all tests should pas
 | LLM client | `adr/harness/llm_client.py` | Anthropic, OpenAI, Google, OpenAI-compatible (open-weight). Disk cache, weekly spend cap, retries. |
 | Copy-paste attacker (#9) | `adr/harness/copy_paste.py`, `prompts.py`, `parse.py` | Levels L0, L1, L2, L4. L3 (retry) comes with step #36. |
 | Document-upload attacker (#20) | `adr/harness/doc_upload.py`, `pdf_render.py` | Whole assessment as one PDF, traps in the invisible text layer. Anthropic, OpenAI, Google only. |
+| Browser-agent attacker (#22) | `adr/harness/browser_agent.py` | Drives the real page in Chromium (Playwright); reads it as innerText or the accessibility tree, never pixels. |
 | Router prototype (#13) | `adr/router/` | SPRT score, Chernoff-rule check selection, burden and false-flag penalties, per-mechanism cap, escalation, random tie-breaks. |
 | Early baselines | `adr/baselines/simple.py` | Random check per item; single fixed mechanism. |
 | Synthetic test data | `adr/router/synthetic.py` | **Invented numbers** for developing the router. Never report these. |
 
-Not started: browser agent (#22), replay on real outcomes (#27),
+Not started: replay on real outcomes (#27),
 the other baselines, and everything Archana and Harshini own.
 
 ## Try it
@@ -45,6 +46,10 @@ python scripts/run_copy_paste.py --stub --models claude-small
 
 # Document-upload attacker: the 4 items as one PDF with invisible traps (same flags):
 python scripts/run_doc_upload.py --stub --fake
+
+# Browser-agent attacker: a model fills in the real web page, reading it as text or as the
+# accessibility tree (needs the server and browser extras):
+python scripts/run_browser_agent.py --stub --fake --observe text   # or --observe a11y
 
 # Router vs early baselines on SYNTHETIC data (about 20 s):
 python scripts/router_synthetic_demo.py
