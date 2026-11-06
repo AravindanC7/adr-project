@@ -37,6 +37,7 @@ def load_asurre_items(
         raise ValueError(f"{path}: config needs a non-empty attributes object")
 
     items: list[Item] = []
+    seen_item_ids: set[str] = set()
     for field, metadata in attributes.items():
         if not isinstance(field, str) or not field:
             raise TypeError(f"{path}: attribute names must be non-empty strings")
@@ -47,9 +48,13 @@ def load_asurre_items(
         label = metadata.get("label")
         if not isinstance(label, str) or not label.strip():
             raise ValueError(f"{path}: {field} needs a non-empty label")
+        item_id = f"{source}:{field.lower()}"
+        if item_id in seen_item_ids:
+            raise ValueError(f"{path}: duplicate normalized item_id {item_id!r}")
+        seen_item_ids.add(item_id)
         items.append(
             Item(
-                item_id=f"{source}:{field.lower()}",
+                item_id=item_id,
                 source=source,
                 assessment_type="survey",
                 item_type="open_text",

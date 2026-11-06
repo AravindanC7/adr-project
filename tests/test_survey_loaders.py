@@ -92,6 +92,12 @@ def test_loads_ipip_items_and_distributions(tmp_path: Path) -> None:
     assert items[0].item_id == "ipip:e1"
     assert items[0].reverse_keyed_with == "ipip:e2"
     assert items[1].reverse_keyed_with == "ipip:e1"
+    by_id = {item.item_id: item for item in items}
+    assert by_id["ipip:n1"].reverse_keyed_with == "ipip:n2"
+    assert by_id["ipip:n5"].reverse_keyed_with is None
+    assert by_id["ipip:n6"].reverse_keyed_with is None
+    assert by_id["ipip:a1"].reverse_keyed_with == "ipip:a2"
+    assert by_id["ipip:o7"].reverse_keyed_with is None
     assert distributions[0].option_probs == pytest.approx([0.5, 0, 0, 0, 0.5])
     assert distributions[0].n_respondents == 2
 
@@ -124,6 +130,24 @@ def test_loads_asurre_config(tmp_path: Path, dataset: str, source: str) -> None:
     assert items[0].source == source
     assert items[0].item_type == "open_text"
     assert items[0].eligible_mechanisms == ["canary", "glitch_token", "style"]
+
+
+def test_asurre_rejects_case_insensitive_item_id_collisions(tmp_path: Path) -> None:
+    path = tmp_path / "phd2019.json"
+    path.write_text(
+        json.dumps(
+            {
+                "attributes": {
+                    "Q1": {"label": "First question", "type": "text"},
+                    "q1": {"label": "Second question", "type": "text"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate normalized item_id"):
+        load_asurre_items(path)
 
 
 def test_assigns_exactly_one_heldout_survey(tmp_path: Path) -> None:

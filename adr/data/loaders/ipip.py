@@ -11,6 +11,44 @@ from adr.contracts import HumanDistribution, Item
 
 _ITEM_LINE = re.compile(r"^([ENACO](?:10|[1-9]))\t(.+?)\s*$")
 _OPTIONS = ["Disagree", "Slightly disagree", "Neutral", "Slightly agree", "Agree"]
+_REVERSE_KEY_PAIRS = {
+    "E1": "E2",
+    "E2": "E1",
+    "E3": "E4",
+    "E4": "E3",
+    "E5": "E6",
+    "E6": "E5",
+    "E7": "E8",
+    "E8": "E7",
+    "E9": "E10",
+    "E10": "E9",
+    "N1": "N2",
+    "N2": "N1",
+    "N3": "N4",
+    "N4": "N3",
+    "A1": "A2",
+    "A2": "A1",
+    "A3": "A4",
+    "A4": "A3",
+    "A5": "A6",
+    "A6": "A5",
+    "A7": "A8",
+    "A8": "A7",
+    "C1": "C2",
+    "C2": "C1",
+    "C3": "C4",
+    "C4": "C3",
+    "C5": "C6",
+    "C6": "C5",
+    "C7": "C8",
+    "C8": "C7",
+    "O1": "O2",
+    "O2": "O1",
+    "O3": "O4",
+    "O4": "O3",
+    "O5": "O6",
+    "O6": "O5",
+}
 
 
 def load_ipip(
@@ -72,6 +110,7 @@ def load_ipip(
             raise ValueError(f"{responses_path}: no usable responses for {code}")
         item_id = f"ipip:{code.lower()}"
         dist_key = f"{item_id}:human"
+        paired_code = _REVERSE_KEY_PAIRS.get(code)
         items.append(
             Item(
                 item_id=item_id,
@@ -80,7 +119,7 @@ def load_ipip(
                 item_type="likert",
                 stem=stem,
                 options=_OPTIONS,
-                reverse_keyed_with=f"ipip:{_paired_code(code).lower()}",
+                reverse_keyed_with=f"ipip:{paired_code.lower()}" if paired_code else None,
                 eligible_mechanisms=["opinion_trap"],
                 human_dist_key=dist_key,
                 split=split,
@@ -109,9 +148,3 @@ def _parse_codebook(path: Path) -> dict[str, str]:
     if missing:
         raise ValueError(f"{path}: codebook is missing IPIP items {missing}")
     return items
-
-
-def _paired_code(code: str) -> str:
-    number = int(code[1:])
-    paired = number + 1 if number % 2 else number - 1
-    return f"{code[0]}{paired}"

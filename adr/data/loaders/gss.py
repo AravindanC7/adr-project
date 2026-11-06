@@ -20,6 +20,8 @@ def load_gss(
 
     GSS extracts are wide tables whose selected variables differ by project. The companion JSON
     manifest records the exact question wording and ordered value labels from the GSS codebook.
+    When a weight column is configured, probabilities are weighted while ``n_respondents`` remains
+    the unweighted number of usable response rows.
     """
 
     data_path = Path(csv_path)
@@ -68,6 +70,7 @@ def load_gss(
                         f"for {question['variable']}"
                     ) from exc
                 counts[question["variable"]][option_index] += weight
+                # Keep the raw usable-person count separate from the weighted probability mass.
                 respondents[question["variable"]] += 1
 
     items: list[Item] = []
