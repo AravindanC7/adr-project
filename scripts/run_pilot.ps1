@@ -1,6 +1,6 @@
 # Start the human pilot (#35) on this laptop and put it online through ngrok.
 #
-#   powershell -ExecutionPolicy Bypass -File scripts\run_pilot.ps1 -Domain your-name.ngrok-free.app
+#   powershell -ExecutionPolicy Bypass -File scripts\run_pilot.ps1 -Domain delicious-huddling-generic.ngrok-free.dev
 #
 # Needs: .venv with the server extras, ngrok signed in once (ngrok config add-authtoken ...),
 # and the free static domain from https://dashboard.ngrok.com/domains.

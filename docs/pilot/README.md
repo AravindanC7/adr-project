@@ -35,7 +35,7 @@ the laptop except through the tunnel, and the free static domain keeps the link 
 any restart. One command starts the server and the tunnel:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\run_pilot.ps1 -Domain <your-name>.ngrok-free.app
+powershell -ExecutionPolicy Bypass -File scripts\run_pilot.ps1 -Domain delicious-huddling-generic.ngrok-free.dev
 ```
 
 It sets `ADR_PILOT=1 ADR_DATA_DIR=pilot_data ADR_ITEMS=server/pilot_items.json`, listens on
