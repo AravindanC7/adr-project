@@ -26,7 +26,7 @@ models:
     model_id: gemini-3.5-flash
     price_in_per_mtok: 1.50
     price_out_per_mtok: 9.00
-    heldout: true   # PROPOSED held-out model; confirm with the team (step #16)
+    heldout: true   # Team-approved held-out model (step #16); final evaluation only.
 
   - name: open-weight
     provider: openai_compatible
