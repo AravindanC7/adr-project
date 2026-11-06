@@ -7,8 +7,9 @@ happens so a crash or restart loses nothing already answered:
 
     {"event": "start",  "session_id", "assessment_id", "pilot", "consented", "consent_version",
                         "seed", "started_on"}
-    {"event": "answer", "item_id", "variant_id", "mechanism", "item_type", "answer",
-                        "telemetry": {...}, "outcomes": [[variant_id, outcome], ...], "t"}
+    {"event": "answer", "assessment_id", "item_id", "variant_id", "mechanism", "item_type",
+                        "answer", "telemetry": {...}, "outcomes": [[variant_id, outcome], ...], "t"}
+    {"event": "part",   "assessment_id", "t"}      (a flow moving on to its next part)
     {"event": "finish", "t"}
 
 What is NOT stored (AGENTS.md rule 7, docs/pilot/consent.md): no name, email, ASU ID, IP
@@ -75,6 +76,11 @@ class SessionStore:
 
     def answer(self, session_id: str, **fields: Any) -> bool:
         record = {"event": "answer", **fields, "t": self._since_start(session_id)}
+        return self._write(session_id, record)
+
+    def part(self, session_id: str, **fields: Any) -> bool:
+        """The session moved on to the next part of a flow (quiz, then survey)."""
+        record = {"event": "part", **fields, "t": self._since_start(session_id)}
         return self._write(session_id, record)
 
     def finish(self, session_id: str) -> bool:

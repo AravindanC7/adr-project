@@ -172,6 +172,31 @@ def load_bank(path: str | Path) -> tuple[dict[str, Item], dict[str, Assessment]]
     return items, assessments
 
 
+@dataclass(frozen=True)
+class Flow:
+    """Assessments taken one after another in one session: one consent, one debrief at the end.
+
+    The pilot needs a quiz part and a survey part. Taken as two separate sessions, the debrief
+    after the first would reveal the hidden text before the second. In the bank JSON:
+        "flow": {"title": "Quiz and survey", "parts": ["pilot-quiz", "pilot-survey"]}
+    """
+
+    title: str
+    parts: tuple[str, ...]
+
+
+def load_flow(path: str | Path, assessments: dict[str, Assessment]) -> Flow | None:
+    raw = json.loads(Path(path).read_text(encoding="utf-8")).get("flow")
+    if raw is None:
+        return None
+    flow = Flow(title=raw["title"], parts=tuple(raw["parts"]))
+    missing = [p for p in flow.parts if p not in assessments]
+    if not flow.parts or missing or len(set(flow.parts)) != len(flow.parts):
+        raise ValueError(f"bad flow parts {flow.parts}: unknown {missing}" if missing
+                         else f"flow parts must be non-empty and distinct: {flow.parts}")
+    return flow
+
+
 def check_answer(item: Item, answer: Any) -> None:
     """Raise ValueError unless `answer` fits the item type (option index, ranking, number, text)."""
     n = len(item.options or [])
@@ -245,6 +270,10 @@ class _Session:
     consented: bool = False  # pilot: pressed "I agree" (the only thing stored about consent)
     responses: list[tuple[Response, Telemetry]] = field(default_factory=list)
     outcomes: list[tuple[str, str]] = field(default_factory=list)  # (variant_id, outcome)
+    # A flow: the parts still to come, questions in the parts already done, questions in all.
+    later_parts: list[Assessment] = field(default_factory=list)
+    done_before: int = 0
+    total: int = 0
 
 
 # ---------------------------------------------------------------- app
@@ -256,7 +285,9 @@ def create_app(
     pilot: bool | None = None,
     data_dir: str | Path | None = None,
 ) -> FastAPI:
-    items, assessments = load_bank(bank_path or os.environ.get("ADR_ITEMS", DEFAULT_BANK))
+    bank_path = bank_path or os.environ.get("ADR_ITEMS", DEFAULT_BANK)
+    items, assessments = load_bank(bank_path)
+    flow = load_flow(bank_path, assessments)
     if mechanisms is None:
         mechanisms = load_injected_mechanisms(os.environ.get("ADR_STUB_MECHANISMS") == "1")
     pick = pick or os.environ.get("ADR_PICK", "all")  # type: ignore[assignment]
@@ -318,8 +349,8 @@ def create_app(
                 if hidden_text
                 else None
             ),
-            position=len(s.state.served) + 1,
-            total=len(s.assessment.item_ids),
+            position=s.done_before + len(s.state.served) + 1,
+            total=s.total or len(s.assessment.item_ids),
         )
         return Step(session_id=s.state.session_id, finished=False, item=item)
 
@@ -331,6 +362,14 @@ def create_app(
 
     @app.get("/assessments")
     def list_assessments() -> list[AssessmentInfo]:
+        if flow:  # one entry that runs every part; starting a later part alone isn't offered
+            first = assessments[flow.parts[0]]
+            return [AssessmentInfo(
+                assessment_id=first.assessment_id,
+                title=flow.title,
+                assessment_type=first.assessment_type,
+                n_items=sum(len(assessments[p].item_ids) for p in flow.parts),
+            )]
         return [
             AssessmentInfo(
                 assessment_id=a.assessment_id,
@@ -350,13 +389,16 @@ def create_app(
         if pilot and not req.consent:
             raise HTTPException(403, "please read and agree to the consent screen first")
         assessment = assessments.get(req.assessment_id)
-        if assessment is None:
+        if assessment is None or (flow and req.assessment_id != flow.parts[0]):
             raise HTTPException(404, "unknown assessment")
         session_id = uuid.uuid4().hex
         state, choice = router.start(assessment, session_id, seed=secrets.randbelow(2**31))
         s = sessions[session_id] = _Session(
             state=state, assessment=assessment, current=choice, consented=req.consent
         )
+        if flow:
+            s.later_parts = [assessments[p] for p in flow.parts[1:]]
+            s.total = sum(len(assessments[p].item_ids) for p in flow.parts)
         if store:
             store.start(session_id, assessment_id=assessment.assessment_id, pilot=pilot,
                         consented=req.consent, consent_version=consent_version,
@@ -410,9 +452,11 @@ def create_app(
         s.current = next_choice(s)
         # Someone may have pressed Stop while this answer was being scored: then the session
         # is gone and nothing is written (the store also never re-creates a deleted file).
-        if store and session_id in sessions:
+        saving = store is not None and session_id in sessions
+        if saving:
             store.answer(
                 session_id,
+                assessment_id=s.assessment.assessment_id,
                 item_id=choice.item_id,
                 variant_id=choice.variant_id,
                 mechanism=choice.mechanism,
@@ -421,8 +465,15 @@ def create_app(
                 telemetry=req.telemetry.model_dump(),
                 outcomes=s.outcomes[n_outcomes:],
             )
-            if s.current is None:
-                store.finish(session_id)
+        while s.current is None and s.later_parts:  # a flow: straight on to the next part
+            s.done_before += len(s.assessment.item_ids)
+            s.assessment = s.later_parts.pop(0)
+            s.state, _ = router.start(s.assessment, session_id, seed=s.state.seed)
+            s.current = next_choice(s)
+            if saving:
+                store.part(session_id, assessment_id=s.assessment.assessment_id)
+        if saving and s.current is None:
+            store.finish(session_id)
         return step(s)
 
     @app.post("/session/{session_id}/withdraw")
