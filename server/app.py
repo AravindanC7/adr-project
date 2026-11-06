@@ -36,11 +36,14 @@ Settings (environment variables):
                           trying the page before Archana's mechanisms are on main.
   ADR_PILOT=1             Human pilot (#30, #35): consent screen before question 1, a Stop
                           button, and the debrief after the last one. Text in docs/pilot/.
+                          Needs ADR_DATA_DIR, so a pilot can't run without saving answers.
+  ADR_DATA_DIR=<folder>   Save every session to <folder>/<session_id>.jsonl as it happens
+                          (server/store.py). Withdrawing deletes the file. Unset: memory only.
   ADR_DEBUG_STATE=1       GET /session/{id} returns the SessionState, for the demo (#47) and
                           logging. Never enable it in a session real people take.
 
 Not here yet: a real failure map for ADR_PICK=router (#28).
-Responses and outcomes stay in memory only; #39 writes them to the outcome table.
+Saved sessions are raw records; #39 turns them into outcome-table rows.
 
 Run from the repo root:   uvicorn server.app:app --reload      then open http://127.0.0.1:8000
 """
@@ -79,6 +82,7 @@ from adr.harness.copy_paste import plain_variant
 from adr.harness.registry import get_mechanism
 from adr.mechanisms.behaviour import MECHANISM as BEHAVIOUR
 from adr.router.core import SPRTRouter
+from server.store import SessionStore
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BANK = ROOT / "server" / "stub_items.json"
@@ -249,6 +253,7 @@ def create_app(
     pick: Pick | None = None,
     hide: Hide | None = None,
     pilot: bool | None = None,
+    data_dir: str | Path | None = None,
 ) -> FastAPI:
     items, assessments = load_bank(bank_path or os.environ.get("ADR_ITEMS", DEFAULT_BANK))
     if mechanisms is None:
@@ -261,6 +266,10 @@ def create_app(
         pilot = os.environ.get("ADR_PILOT") == "1"
     if pilot and os.environ.get("ADR_DEBUG_STATE") == "1":
         raise ValueError("ADR_PILOT=1 with ADR_DEBUG_STATE=1 would expose real sessions' state")
+    data_dir = data_dir or os.environ.get("ADR_DATA_DIR") or None
+    if pilot and data_dir is None:
+        raise ValueError("ADR_PILOT=1 needs ADR_DATA_DIR, or the pilot's answers are lost")
+    store = SessionStore(data_dir) if data_dir else None
     # Read at startup, so a broken file stops the server before anyone sees the page.
     consent = screen_text(PILOT_DIR / "consent.md") if pilot else None
     debrief = screen_text(PILOT_DIR / "debrief.md") if pilot else None
@@ -343,6 +352,9 @@ def create_app(
         s = sessions[session_id] = _Session(
             state=state, assessment=assessment, current=choice, consented=req.consent
         )
+        if store:
+            store.start(session_id, assessment_id=assessment.assessment_id, pilot=pilot,
+                        consented=req.consent, seed=state.seed)
         s.current = next_choice(s)
         return step(s)
 
@@ -366,6 +378,7 @@ def create_app(
         )
 
         s.responses.append((response, req.telemetry))
+        n_outcomes = len(s.outcomes)
         # Plain variants have outcome "none"; a decoy or canary scores the answer. The
         # behaviour check (#25) then scores every answer from its telemetry. Style and the
         # opinion trap come with #28.
@@ -386,13 +399,33 @@ def create_app(
             s.outcomes.append((passive_id, seen))
             s.state = router.update(s.state, passive_id, seen)
         s.current = next_choice(s)
+        if store:
+            store.answer(
+                session_id,
+                item_id=choice.item_id,
+                variant_id=choice.variant_id,
+                mechanism=choice.mechanism,
+                item_type=items[choice.item_id].item_type,
+                answer=req.answer,
+                telemetry=req.telemetry.model_dump(),
+                outcomes=s.outcomes[n_outcomes:],
+            )
+            if s.current is None:
+                store.finish(session_id)
         return step(s)
 
     @app.post("/session/{session_id}/withdraw")
     def withdraw(session_id: str) -> dict[str, bool]:
-        """Stop button or "Remove my answers": forget the session and all its answers."""
-        get_session(session_id)
-        del sessions[session_id]
+        """Stop button or "Remove my answers": forget the session and all its answers, on
+        disk too. Works after a server restart as long as the file is still there."""
+        on_disk = False
+        if store:
+            try:
+                on_disk = store.delete(session_id)
+            except ValueError:
+                raise HTTPException(404, "unknown session") from None
+        if sessions.pop(session_id, None) is None and not on_disk:
+            raise HTTPException(404, "unknown session")
         return {"withdrawn": True}
 
     @app.get("/session/{session_id}/debrief")

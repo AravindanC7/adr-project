@@ -16,10 +16,9 @@ GIVES_IT_AWAY = ["hidden", "decoy", "canary", "trap", "detect", "instruction", "
 
 
 @pytest.fixture
-def pilot():
-    return TestClient(
-        create_app(mechanisms={"decoy": StubDecoy(), "canary": StubCanary()}, pilot=True)
-    )
+def pilot(tmp_path):
+    mechanisms = {"decoy": StubDecoy(), "canary": StubCanary()}
+    return TestClient(create_app(mechanisms=mechanisms, pilot=True, data_dir=tmp_path))
 
 
 def start(client, consent=True):
@@ -38,11 +37,11 @@ def test_screen_text_reads_the_on_screen_section():
     assert all("\n" not in p and "  " not in p for p in CONSENT + DEBRIEF)
 
 
-def test_consent_and_page_give_nothing_away():
+def test_consent_and_page_give_nothing_away(tmp_path):
     text = " ".join(CONSENT).lower()
     assert [w for w in GIVES_IT_AWAY if w in text] == []
     # The page itself must not contain the debrief: an agent reads the whole page.
-    c = TestClient(create_app(mechanisms={}, pilot=True))
+    c = TestClient(create_app(mechanisms={}, pilot=True, data_dir=tmp_path))
     page = "".join(c.get(p).text for p in ("/", "/app.js", "/style.css", "/telemetry.js"))
     assert all(p not in page for p in DEBRIEF)
     assert "really about" not in page

@@ -15,8 +15,8 @@ DEBRIEF = screen_text(PILOT_DIR / "debrief.md")
 
 
 @pytest.fixture(scope="module")
-def site():
-    server, url = _launch("clip", pilot=True)
+def site(tmp_path_factory):
+    server, url = _launch("clip", pilot=True, data_dir=tmp_path_factory.mktemp("pilot"))
     try:
         with sync_api.sync_playwright() as p:
             try:

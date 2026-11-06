@@ -31,11 +31,18 @@ map (AGENTS.md sections 2.2 and 6.4, step #40). Rows go in with `data_origin = "
 ## Running it
 
 ```bash
-ADR_PILOT=1 ADR_ITEMS=server/pilot_items.json uvicorn server.app:app --host 0.0.0.0
+ADR_PILOT=1 ADR_DATA_DIR=pilot_data ADR_ITEMS=server/pilot_items.json uvicorn server.app:app --host 0.0.0.0
 ```
 
 `ADR_PILOT=1` turns on the consent and debrief screens and the Stop button. Never combine it
 with `ADR_DEBUG_STATE=1` or `ADR_STUB_MECHANISMS=1`.
+
+`ADR_DATA_DIR` is required in pilot mode: each session is saved to
+`pilot_data/<random id>.jsonl` as it happens (`server/store.py`), so a restart loses nothing
+already answered. Stop and "Remove my answers" delete the file. A file with no `finish` line
+is a partial session; #39 drops it. **Never commit `pilot_data/`**, and delete it in December
+2026 as the consent screen promises. Counting finished sessions each day:
+`grep -l '"finish"' pilot_data/*.jsonl | wc -l`.
 
 ## Session script (remote checklist)
 
@@ -71,6 +78,7 @@ Tell the group the pilot is over, so the hidden text is no longer a secret.
 
 - **Hosting:** the server must be reachable from classmates' laptops for 5 days. Options: a
   free host (Render or Azure App Service) or a tunnel from one of our laptops. Decide by Nov 7.
-- **Saving data:** sessions live in memory only right now. #35 needs them written to disk
-  (JSONL, no names) so a restart doesn't lose them, and withdrawal must delete from disk too.
+  **The host's disk must survive restarts:** free tiers often wipe it on every redeploy or
+  sleep, which would lose `pilot_data/`. A tunnel from a laptop keeps the files local.
+- **Saving data:** done (`ADR_DATA_DIR`, see Running it).
 - **Pilot bank:** build from the loaders once #3 merges.
