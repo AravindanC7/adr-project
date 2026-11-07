@@ -6,7 +6,7 @@ import pytest
 from adr.contracts import HumanDistribution, Item, RenderedItem
 from adr.contracts.io import read_jsonl, variants_path
 from adr.mechanisms.opinion_trap import OpinionTrapMechanism
-from scripts.build_runs_v1 import balanced_slice, make_bank, stable_sample, write_bundle
+from scripts.build_runs_v1 import balanced_slice, make_bank, parser, stable_sample, write_bundle
 
 
 def quiz_item(item_id: str) -> Item:
@@ -63,9 +63,7 @@ def test_bundle_writes_valid_plain_and_active_variants(tmp_path: Path):
         n_respondents=100,
     )
     opinion = OpinionTrapMechanism([distribution])
-    survey = make_bank(
-        "survey", "Survey", "survey", [opinion_item], seed=29, opinion=opinion
-    )
+    survey = make_bank("survey", "Survey", "survey", [opinion_item], seed=29, opinion=opinion)
     manifest = write_bundle(
         tmp_path,
         [quiz, survey],
@@ -81,6 +79,8 @@ def test_bundle_writes_valid_plain_and_active_variants(tmp_path: Path):
     assert [variant.mechanism for variant in survey_variants] == [None, "opinion_trap"]
     assert manifest["n_unique_items"] == 2
     assert json.loads((tmp_path / "manifest.json").read_text())["seed"] == 29
+    quiz_assessment = tmp_path / "assessments" / "quiz.json"
+    assert json.loads(quiz_assessment.read_text(encoding="utf-8"))["assessment_id"] == "quiz"
 
 
 def test_make_bank_rejects_mismatched_assessment_type():
@@ -94,3 +94,9 @@ def test_make_bank_rejects_mismatched_assessment_type():
     )
     with pytest.raises(ValueError, match="wrong assessment type"):
         make_bank("bad", "Bad", "assignment", [survey_item], seed=1)
+
+
+def test_parser_allows_partial_build_without_asurre_decision():
+    args = parser().parse_args(["--datasets", "mmlu", "arc", "ipip"])
+    assert args.datasets == ["mmlu", "arc", "ipip"]
+    assert args.heldout_asurre_source is None
