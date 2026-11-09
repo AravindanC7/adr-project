@@ -9,6 +9,10 @@ Real run, once Archana's loaders and mechanisms exist:
         --items data/processed/items.jsonl --variants data/processed/variants.jsonl \
         --mechanisms decoy,opinion_trap --models claude-haiku,gpt-mini --level L0
 
+--max-tokens caps the one reply that answers the whole document (default 1500). A reply that
+hits it is cut off; it is logged as a warning in errors.jsonl and counted in config.yaml
+(n_truncated_replies). Long assessments (e.g. 100 written answers) need a higher limit.
+
 Files: as for run_copy_paste.py. Models must be anthropic, openai or google: OpenAI-compatible
 servers can't take files. The PDFs sent are saved under results/runs/<run_id>/docs/.
 """
@@ -63,6 +67,9 @@ def main() -> None:
     ap.add_argument("--level", default="L0", choices=["L0", "L1", "L2", "L4"])
     ap.add_argument("--samples", type=int, default=1)
     ap.add_argument("--temperature", type=float, default=0.0)
+    ap.add_argument("--max-tokens", type=int, default=1500,
+                    help="reply limit for the whole document (default 1500); a reply that hits\n"
+                         "it is logged as a warning in errors.jsonl")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--run-id")
     args = ap.parse_args()
@@ -106,7 +113,7 @@ def main() -> None:
     run_id = args.run_id or f"du-{args.level}-{datetime.now():%Y%m%d-%H%M%S}"
     cfg = DocUploadConfig(run_id=run_id, models=models, attacker_level=args.level,
                           n_samples=args.samples, temperature=args.temperature,
-                          max_workers=args.workers)
+                          max_tokens=args.max_tokens, max_workers=args.workers)
     rows = run_doc_upload(client, assessment, items, variants, mechanisms, cfg)
 
     print(f"run {run_id}: {len(rows)} outcome rows -> results/outcomes/{run_id}.parquet")
@@ -116,7 +123,7 @@ def main() -> None:
     err = Path("results/runs") / run_id / "errors.jsonl"
     n_err = len(err.read_text().splitlines()) if err.exists() else 0
     if n_err:
-        print(f"  {n_err} failed calls or skipped questions; see {err}")
+        print(f"  {n_err} failed calls, skipped questions or cut-off replies; see {err}")
 
 
 if __name__ == "__main__":
