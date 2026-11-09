@@ -1,9 +1,7 @@
-// Respondent page (step #11 skeleton). Shows whatever item the server sends, one at a time,
-// and posts back the answer with that question's opaque token. The server keeps every id,
-// check name and score to itself (AGENTS.md 6.5) and builds the contract Response.
+// Question page. Shows whatever item the server sends, one at a time, and posts back the
+// answer with that question's one-time token. Notes for the team: docs/frontend.md.
 //
 // All item text goes in with textContent, never innerHTML: stems and options are plain text.
-// Hidden spans for the checks come later, from the variant's hidden data (step #19).
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -11,7 +9,7 @@ const $ = (id) => document.getElementById(id);
 let sessionId = null;
 let current = null;           // the ShownItem being answered
 let getAnswer = () => null;   // current answer, or null while unanswered
-let consentText = null;       // pilot (ADR_PILOT=1): paragraphs to agree to before starting
+let consentText = null;       // paragraphs to agree to before starting, if any
 
 async function api(path, body) {
   const init = body === undefined ? {} : {
@@ -55,8 +53,7 @@ function renderChoice(area, item, onChange) {
   item.options.forEach((text, i) => {
     const input = el("input", { type: "radio", name: "choice", value: String(i) });
     input.addEventListener("change", onChange);
-    // "1. Venus" as one run of text, so copying the question gives numbered options, the
-    // same format the attacker harness pastes into a model.
+    // "1. Venus" as one run of text (see docs/frontend.md).
     const label = el("span", {}, el("b", { className: "num", textContent: `${i + 1}.` }), ` ${text}`);
     group.append(el("label", {}, input, label));
   });
@@ -125,12 +122,10 @@ function renderOpenText(area, item, onChange) {
   return () => (box.value.trim() !== "" ? box.value : null);
 }
 
-// Text for automated readers: in the page, in copied text and in the accessibility tree, but
-// not visible. Never display:none / visibility:hidden / [hidden], which would drop it from all
-// three (adr/mechanisms/CANARY_SPEC.md). The server picks the hiding style; see style.css.
+// Extra item text from the server, placed where it says (see docs/frontend.md).
 function placeAux(aux) {
   if (!aux) return;
-  // A div, not a p: Chrome copies a p with a blank line after it, which breaks copy_text.
+  // A div, not a p (see docs/frontend.md).
   const node = el("div", { className: aux.style === "clear" ? "aux aux-clear" : "aux aux-clip",
                            textContent: aux.text });
   if (aux.style === "clip_aria") node.setAttribute("aria-hidden", "true");
@@ -201,7 +196,7 @@ async function submit(event) {
   if (answer === null || !current) return;
   $("next").disabled = true;
   const body = {
-    token: current.token,   // opaque: the page never learns which item or check this is
+    token: current.token,   // one-time token for this question
     answer,
     telemetry: ItemTelemetry.report(),   // counts and timings only (telemetry.js)
   };
@@ -257,8 +252,7 @@ async function withdraw() {
   sessionId = null;
 }
 
-// The debrief explains the hidden checks, so the server only sends it once the session is
-// over; it is never in the page before that (an AI agent reads the whole page).
+// The closing text is fetched only after the last question.
 async function showDebrief() {
   try {
     const { paragraphs: texts } = await api(`/session/${encodeURIComponent(sessionId)}/debrief`);

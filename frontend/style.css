@@ -184,12 +184,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .card.enter { animation: pop-in 0.3s ease; }
 .card { position: relative; }
 
-/* Hidden text for automated readers (#19). Must stay in the DOM, the copied text and the
-   accessibility tree; never display:none or visibility:hidden. Which style is used is a
-   server setting (ADR_HIDE), so the screen-reader test (#44) can compare them.
-   clip:      squeezed into a 1px clipped box; screen readers still read it.
-   clear:     full-size but colourless text, also colourless when highlighted.
-   clip_aria: clip, plus aria-hidden so screen readers skip it (set in app.js). */
+/* Extra item text (docs/frontend.md). */
 .aux { margin: 0; }
 .aux-clip {
   position: absolute;
@@ -204,7 +199,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
 .num { font-weight: 800; color: var(--accent); }
 .choices label:has(input:checked) .num { color: inherit; }
-.hint, .ranking button { user-select: none; }   /* not part of the question when copied */
+.hint, .ranking button { user-select: none; }
 @keyframes pop-in {
   from { opacity: 0; transform: translateY(10px) scale(0.98); }
   to { opacity: 1; transform: none; }
@@ -212,8 +207,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 
 /* MCQ and Likert */
 .choices { display: grid; gap: 0.6rem; }
-/* Option rows are display:block, not flex: Chrome adds a blank line around every flex box
-   when copying, and the copied text must equal the variant's copy_text (#19). */
+/* Option rows are display:block, not flex (see docs/frontend.md). */
 .choices label {
   display: block;
   padding: 0.75rem 1rem;

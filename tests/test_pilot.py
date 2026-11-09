@@ -90,3 +90,22 @@ def test_pilot_refuses_debug_state(monkeypatch):
     monkeypatch.setenv("ADR_DEBUG_STATE", "1")
     with pytest.raises(ValueError, match="ADR_PILOT"):
         create_app(mechanisms={}, pilot=True)
+
+
+# Words that would tell a participant (or an agent) what the page is really checking.
+REVEALING = ["hidden text", "hidden check", "automated reader", "ai agent", "for ai",
+             "checking for", "attacker", "harness", "decoy", "canary", "opinion trap",
+             "mechanism", "copy_text", "screen reader", "really about", "detect"]
+
+
+def test_served_files_give_nothing_away(tmp_path):
+    """Every file the server sends reaches the browser, comments included (docs/frontend.md)."""
+    from server.app import FRONTEND_DIR
+
+    c = TestClient(create_app(mechanisms={}, pilot=True, data_dir=tmp_path))
+    served = [p.name for p in FRONTEND_DIR.iterdir() if p.suffix in (".html", ".js", ".css")]
+    assert {"index.html", "app.js", "style.css", "telemetry.js"} <= set(served)
+    for name in served:
+        text = c.get("/" + name).text.lower()
+        found = [w for w in REVEALING if w in text]
+        assert found == [], f"{name} mentions {found}"
