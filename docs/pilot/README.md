@@ -65,11 +65,16 @@ with `ADR_DEBUG_STATE=1` or `ADR_STUB_MECHANISMS=1`.
 `pilot_data/<random id>.jsonl` as it happens (`server/store.py`), so a restart loses nothing
 already answered. Stop and "Remove my answers" delete the file. A file with no `finish` line
 is a partial session; #39 drops it. **Never commit `pilot_data/`**, and delete it in December
-2026 as the consent screen promises. Counting finished sessions each day (PowerShell):
+2026 as the consent screen promises. The daily check, in a second PowerShell window (counts
+and timings only, never answers):
 
 ```powershell
-(Get-ChildItem pilot_data -Filter *.jsonl | Select-String -List '"finish"').Count
+.venv\Scripts\python.exe -m server.store status
 ```
+
+It prints finished sessions, ones in progress, abandoned ones (unfinished and idle over an
+hour), the median time taken, and how many started each day. Without Python, the finished count
+alone: `(Get-ChildItem pilot_data -Filter *.jsonl | Select-String -List '"finish"').Count`
 
 No clock times are saved: the start record has the date only and later records have seconds
 since the session started, because with about ten classmates a time of day could identify

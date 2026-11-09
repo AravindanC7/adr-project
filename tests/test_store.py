@@ -163,3 +163,35 @@ def test_a_debug_server_never_saves_into_the_environments_folder(tmp_path, monke
     client = TestClient(create_app(mechanisms={}))
     client.post("/session/start", json={"assessment_id": "stub-quiz"})
     assert not (tmp_path / "pilot_data").exists()
+
+
+def test_status_counts_without_reading_out_answers(tmp_path, capsys):
+    import os
+    import time
+
+    from server.store import main, status
+
+    store = SessionStore(tmp_path)
+    for code, n_answers, done in (("a" * 32, 3, True), ("b" * 32, 1, False), ("c" * 32, 2, False)):
+        store.start(code, assessment_id="x")
+        for i in range(n_answers):
+            store.answer(code, item_id=f"x:{i}", answer="secret answer text")
+        if done:
+            store.finish(code)
+    old = time.time() - 2 * 3600  # "c" was last touched two hours ago
+    os.utime(tmp_path / f"{'c' * 32}.jsonl", (old, old))
+
+    s = status(tmp_path)
+    assert (s["finished"], s["in_progress"], s["abandoned"]) == (1, 1, 1)
+    assert len(s["minutes"]) == 1 and sum(s["by_day"].values()) == 3
+    assert main(["status", "--dir", str(tmp_path)]) == 0
+    printed = capsys.readouterr().out
+    assert "finished     1" in printed and "abandoned    1" in printed
+    assert "secret" not in printed and "a" * 32 not in printed
+
+
+def test_status_of_a_folder_that_doesnt_exist_yet(tmp_path):
+    from server.store import status
+
+    s = status(tmp_path / "pilot_data")
+    assert (s["finished"], s["in_progress"], s["abandoned"]) == (0, 0, 0)

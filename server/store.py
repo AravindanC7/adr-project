@@ -26,6 +26,10 @@ dropped there.
 Removing a session later, from the code shown on the done screen:
 
     python -m server.store remove <code> [--dir pilot_data]
+
+The daily check (counts and timings only):
+
+    python -m server.store status [--dir pilot_data]
 """
 
 from __future__ import annotations
@@ -102,13 +106,59 @@ def read_session(path: str | Path) -> list[dict[str, Any]]:
         return [json.loads(line) for line in f if line.strip()]
 
 
+ABANDONED_AFTER_S = 3600  # a partial session untouched this long has most likely been left
+
+
+def status(data_dir: str | Path, now: float | None = None) -> dict[str, Any]:
+    """Counts and timings for the daily pilot check. Never reads out answers."""
+    now = time.time() if now is None else now
+    out: dict[str, Any] = {"finished": 0, "in_progress": 0, "abandoned": 0, "minutes": [],
+                           "by_day": {}, "answers_in_partial": 0}
+    folder = Path(data_dir)
+    for path in sorted(folder.glob("*.jsonl")) if folder.is_dir() else []:
+        records = read_session(path)
+        if not records:
+            continue
+        day = records[0].get("started_on", "?")
+        out["by_day"][day] = out["by_day"].get(day, 0) + 1
+        if records[-1]["event"] == "finish":
+            out["finished"] += 1
+            if records[-1].get("t") is not None:
+                out["minutes"].append(records[-1]["t"] / 60)
+        else:
+            idle = now - path.stat().st_mtime
+            out["abandoned" if idle > ABANDONED_AFTER_S else "in_progress"] += 1
+            out["answers_in_partial"] += sum(r["event"] == "answer" for r in records)
+    return out
+
+
+def print_status(s: dict[str, Any], data_dir: str | Path) -> None:
+    minutes = sorted(s["minutes"])
+    print(f"{data_dir}:")
+    print(f"  finished     {s['finished']}")
+    print(f"  in progress  {s['in_progress']}   (active in the last hour)")
+    print(f"  abandoned    {s['abandoned']}   (unfinished, idle over an hour; dropped by #39)")
+    if minutes:
+        mid = minutes[len(minutes) // 2] if len(minutes) % 2 else (
+            (minutes[len(minutes) // 2 - 1] + minutes[len(minutes) // 2]) / 2)
+        print(f"  time taken   median {mid:.1f} min, fastest {minutes[0]:.1f}, "
+              f"slowest {minutes[-1]:.1f}")
+    for day, n in sorted(s["by_day"].items()):
+        print(f"  started {day}: {n}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m server.store")
     sub = parser.add_subparsers(dest="cmd", required=True)
     rm = sub.add_parser("remove", help="delete one session, e.g. when someone emails their code")
     rm.add_argument("code", help="the code from the done screen")
     rm.add_argument("--dir", default="pilot_data")
+    st = sub.add_parser("status", help="how the pilot is going: counts and timings only")
+    st.add_argument("--dir", default="pilot_data")
     args = parser.parse_args(argv)
+    if args.cmd == "status":
+        print_status(status(args.dir), args.dir)
+        return 0
     try:
         removed = SessionStore(args.dir).delete(args.code.strip().lower())
     except ValueError:
