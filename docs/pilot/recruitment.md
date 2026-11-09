@@ -10,7 +10,7 @@ link and a reminder; it is not linked to any session.
 ## WhatsApp / Discord (class group)
 
 > Hi everyone! 👋 For our CSE 576 project we're running a short online study on how people
-> answer quizzes and surveys. It takes about 20 min on your laptop, any time Mon Nov 9 – Fri Nov 13.
+> answer quizzes and surveys. It takes about 15 min on your laptop, any time Mon Nov 9 – Fri Nov 13.
 >
 > • No names or emails collected, only your answers and simple timings
 > • Totally voluntary, nothing to do with grades
@@ -26,17 +26,17 @@ link and a reminder; it is not linked to any session.
 
 ## Link message (Mon Nov 9)
 
-> Here's the link: <PILOT_URL>
+> Here's the link: https://delicious-huddling-generic.ngrok-free.dev
 >
 > Please use a laptop or desktop (not your phone), in Chrome, Edge or Firefox. Do it in one
-> go, on your own, without AI tools or search. It takes about 20 min. The first screen
+> go, on your own, without AI tools or search. It takes about 15 min. The first screen
 > explains everything. If you first see a page saying "You are about to visit", that's just
 > the free hosting: click **Visit Site**. Thank you!! 🎉
 
 ## Reminder (Thu Nov 12, only to people who said yes)
 
 > Gentle reminder 🙂 the study closes tomorrow (Fri Nov 13). If you've already done it, thank
-> you and please ignore this! Link: <PILOT_URL>
+> you and please ignore this! Link: https://delicious-huddling-generic.ngrok-free.dev
 
 Send the reminder to everyone on the sign-up list. We can't tell who has finished without
 linking names to sessions, and we won't do that.

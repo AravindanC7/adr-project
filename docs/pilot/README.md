@@ -23,7 +23,7 @@ map (AGENTS.md sections 2.2 and 6.4, step #40). Rows go in with `data_origin = "
   without it, and stores only `consented = true` with a random session id. No names, emails,
   IP addresses or ASU IDs.
 - **Questions:** one pilot assessment of about 20–25 real items (MMLU/ARC quiz items and
-  survey items from the loaders), about 20 minutes. Every eligible item carries its check
+  survey items from the loaders), about 15 minutes (a teammate dry run took 7). Every eligible item carries its check
   (`ADR_PICK=all`). Until #3 merges, the stub bank stands in.
 - **Withdrawal:** the Stop button (any time) and "Remove my answers" (debrief) delete the
   session on the server. Closing the tab mid-way leaves a partial session; #39 drops those.

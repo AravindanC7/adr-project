@@ -38,7 +38,7 @@ def open_consent(pg, url):
 def test_consent_gate_then_debrief_then_remove(site):
     pg, url = site
     open_consent(pg, url)
-    assert "about 20 minutes" in pg.inner_text("#consent-text")
+    assert "about 15 minutes" in pg.inner_text("#consent-text")
     assert pg.is_disabled("#consent-yes")
     pg.check("#agree")
     pg.click("#consent-yes")

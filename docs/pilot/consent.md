@@ -25,7 +25,7 @@ everything worked out from them (#39 outcome rows) are deleted then.
 
 ## On screen
 
-Thanks for helping with our CSE 576 class project. We are studying how people answer online questions: quizzes and short surveys. It takes about 20 minutes.
+Thanks for helping with our CSE 576 class project. We are studying how people answer online questions: quizzes and short surveys. It takes about 15 minutes.
 
 Please answer on your own, the way you normally would. Don't use AI tools, search engines or help from anyone else. There are no wrong answers on the survey questions.
 
