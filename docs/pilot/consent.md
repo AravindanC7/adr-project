@@ -14,9 +14,11 @@ it), and the pilot exists to measure how often honest people trip those checks b
 Everything is explained on the debrief screen, which also lets them remove their answers.
 
 Approval: Prof. Vivek Gupta approved a small classmate pilot (in class, step #24, and by
-email), and the study has IRB approval. If the IRB approved a specific consent text, the
-On screen section must match it: check any change here against the approved version.
-Prof. Gupta approved the final wording and said his contact doesn't need to be added (Nov 5).
+email) and the consent wording, and said his contact doesn't need to be added (Nov 5). This
+is a class pilot, not an IRB-reviewed study (all three of us have done the CITI
+human-subjects training, which is not an approval). So the data is for this class project
+only: no research write-up or publication may use it. A paper would need new data collected
+under an ASU IRB protocol.
 
 Data kept after December 2026: only the totals printed in the report. The raw answers and
 everything worked out from them (#39 outcome rows) are deleted then.
@@ -29,7 +31,7 @@ Please answer on your own, the way you normally would. Don't use AI tools, searc
 
 What we record: your answers, and how you answered. That means time spent on each question and counts such as how many keys you pressed, how many times you pasted and how often you left the page. We never record which keys you pressed, and we don't record your clipboard separately. Any text in an answer you submit, typed or pasted, is saved as your answer.
 
-We don't ask for your name, email or ASU ID. Please don't write anything that identifies you in the text answers. Your answers are stored under a random code. They are used for this class project and possibly a research write-up; only totals across everyone are ever reported, never individual answers. Your answers and everything worked out from them are deleted when the course ends in December 2026.
+We don't ask for your name, email or ASU ID. Please don't write anything that identifies you in the text answers. Your answers are stored under a random code. They are used only for this class project, and only totals across everyone are ever reported, never individual answers. Your answers and everything worked out from them are deleted when the course ends in December 2026. Only the report's totals are kept.
 
 Taking part is voluntary and has nothing to do with your grade in any course. You can stop at any time with the Stop button, which removes everything you've answered. At the end we explain the study in full, and you can still remove your answers then.
 
