@@ -109,6 +109,18 @@ Tell the group the pilot is over, so the hidden text is no longer a secret.
 **Before #39 uses the data**: read through the open-text answers for names, emails or anything
 else that identifies someone, and blank them out. Nothing leaves the laptop before that.
 
+**#39, by Sun Nov 15**: turn the finished sessions into outcome-table rows for Archana (#40):
+
+```powershell
+.venv\Scripts\python.exe -m server.clean --run-id pilot-2026-11-13
+```
+
+It writes `results/outcomes/pilot-2026-11-13.parquet` and `results/runs/pilot-2026-11-13/config.yaml`
+(sessions used and dropped, rows per check), and lists any open-text answer that looks like it
+holds an email, phone number, URL or name, for you to check first. `--exclude <code>` drops a
+session (e.g. someone who said they used AI). The table holds outcomes only, never answer text.
+The reverse-keyed IPIP "contradiction" rule is provisional until Archana confirms it.
+
 **December 2026, after final grades**: delete `pilot_data/`, every copy of it, and the #39
 outcome rows built from it. Only the totals printed in the report are kept (consent.md says so).
 
