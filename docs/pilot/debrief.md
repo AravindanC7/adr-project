@@ -19,6 +19,6 @@ We didn't mention this at the start because knowing about it changes how people 
 
 Nothing you did today counts as cheating or is judged in any way. Your answers stay under a random code, without your name.
 
-Please don't tell classmates about the hidden text until the pilot ends on Friday, November 13, so their answers stay natural.
+Please don't tell classmates about the hidden text until we tell the group the study is over, so their answers stay natural.
 
 If you'd rather we didn't use your answers, press "Remove my answers" below. To remove them later, email Harshini (hbalamu1@asu.edu) the code shown below. Questions or concerns? Contact Harshini at hbalamu1@asu.edu.
