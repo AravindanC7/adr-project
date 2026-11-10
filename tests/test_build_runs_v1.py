@@ -6,7 +6,14 @@ import pytest
 from adr.contracts import HumanDistribution, Item, RenderedItem
 from adr.contracts.io import read_jsonl, variants_path
 from adr.mechanisms.opinion_trap import OpinionTrapMechanism
-from scripts.build_runs_v1 import balanced_slice, make_bank, parser, stable_sample, write_bundle
+from scripts.build_runs_v1 import (
+    LOCKED_HELDOUT_ASURRE_SOURCE,
+    balanced_slice,
+    make_bank,
+    parser,
+    stable_sample,
+    write_bundle,
+)
 
 
 def quiz_item(item_id: str) -> Item:
@@ -96,7 +103,15 @@ def test_make_bank_rejects_mismatched_assessment_type():
         make_bank("bad", "Bad", "assignment", [survey_item], seed=1)
 
 
-def test_parser_allows_partial_build_without_asurre_decision():
+def test_parser_uses_locked_asurre_holdout_by_default():
     args = parser().parse_args(["--datasets", "mmlu", "arc", "ipip"])
     assert args.datasets == ["mmlu", "arc", "ipip"]
-    assert args.heldout_asurre_source is None
+    assert args.heldout_asurre_source == LOCKED_HELDOUT_ASURRE_SOURCE
+
+
+def test_data_decisions_match_locked_asurre_default():
+    decisions = json.loads(Path("configs/data_decisions.json").read_text(encoding="utf-8"))
+    assert decisions["locked_before_fitting"] is True
+    assert decisions["asurre"]["heldout_source"] == LOCKED_HELDOUT_ASURRE_SOURCE
+    counts = decisions["asurre"]["source_respondent_counts"]
+    assert min(counts, key=counts.get) == LOCKED_HELDOUT_ASURRE_SOURCE

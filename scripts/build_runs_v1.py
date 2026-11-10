@@ -2,8 +2,8 @@
 
 This script is deliberately offline: it loads public datasets already present under
 ``data/raw``, writes contract-validated JSONL under ``data/processed/runs_v1``, and never calls
-an LLM provider.  The held-out ASURRE survey must be named explicitly so it cannot be selected
-accidentally or changed between runs.
+an LLM provider.  The default held-out ASURRE survey is the team's pre-fitting decision recorded
+in ``configs/data_decisions.json``; an explicit option remains available for audit experiments.
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ ASURRE_SOURCES = (
     "asurre_springer_social_2017",
     "asurre_osmi_2017_18",
 )
+LOCKED_HELDOUT_ASURRE_SOURCE = "asurre_osmi_2017_18"
 
 
 @dataclass(frozen=True)
@@ -317,7 +318,11 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--heldout-asurre-source",
         choices=ASURRE_SOURCES,
-        help="explicit team decision; required only when ASURRE is selected",
+        default=LOCKED_HELDOUT_ASURRE_SOURCE,
+        help=(
+            "pre-fitting team decision (OSMI by the smallest-source rule); override only for "
+            "an explicitly documented audit experiment"
+        ),
     )
     return ap
 
