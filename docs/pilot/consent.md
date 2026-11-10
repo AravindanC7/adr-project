@@ -14,7 +14,9 @@ it), and the pilot exists to measure how often honest people trip those checks b
 Everything is explained on the debrief screen, which also lets them remove their answers.
 
 Approval: Prof. Vivek Gupta approved a small classmate pilot (in class, step #24, and by
-email) and the consent wording, and said his contact doesn't need to be added (Nov 5). This
+email) and the consent wording, and said his contact doesn't need to be added (Nov 5). On
+Nov 10 he approved taking any number of classmate participants (same consent, debrief and
+data handling), so the pilot is no longer capped at about ten. This
 is a class pilot, not an IRB-reviewed study (all three of us have done the CITI
 human-subjects training, which is not an approval). So the data is for this class project
 only: no research write-up or publication may use it. A paper would need new data collected

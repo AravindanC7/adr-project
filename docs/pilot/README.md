@@ -14,7 +14,9 @@ map (AGENTS.md sections 2.2 and 6.4, step #40). Rows go in with `data_origin = "
 
 ## Design (decided Nov 3)
 
-- **Who:** about 10 classmates, 18 or older. Approved by Prof. Gupta in class (#24).
+- **Who:** classmates aged 18 or older. Approved by Prof. Gupta in class (#24); on Nov 10 he
+  approved any number of participants, so aim for 30-50 (more people narrows the human
+  false-flag rates, especially for the canary and behaviour checks).
 - **Format:** remote. Each person opens a link on their own laptop, any time Nov 9–13.
   Tab switches and pastes then look like real life.
 - **Disclosure:** partial disclosure, then a full debrief with the option to remove answers
