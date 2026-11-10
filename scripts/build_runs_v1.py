@@ -96,7 +96,7 @@ def active_variants(
         variants.append(plain_variant(item))
         if DECOY.applies_to(item):
             variants.append(DECOY.generate(item, seed))
-        if item.source == "opinionqa" and opinion is not None and opinion.applies_to(item):
+        if opinion is not None and opinion.applies_to(item):
             variants.append(opinion.generate(item, seed))
         if CANARY.applies_to(item):
             variants.append(CANARY.generate(item, seed))
@@ -229,14 +229,32 @@ def build(args: argparse.Namespace) -> dict[str, object]:
 
     if "ipip" in selected:
         ipip_items, ipip_distributions = load_ipip(args.ipip_data, args.ipip_codebook)
+        opinion = OpinionTrapMechanism(ipip_distributions)
         banks.append(
-            make_bank("survey-ipip", "IPIP Big Five", "survey", ipip_items, seed=args.seed)
+            make_bank(
+                "survey-ipip",
+                "IPIP Big Five",
+                "survey",
+                ipip_items,
+                seed=args.seed,
+                opinion=opinion,
+            )
         )
         distributions.extend(ipip_distributions)
 
     if "gss" in selected:
         gss_items, gss_distributions = load_gss(args.gss_data, args.gss_manifest)
-        banks.append(make_bank("survey-gss", "GSS survey", "survey", gss_items, seed=args.seed))
+        opinion = OpinionTrapMechanism(gss_distributions)
+        banks.append(
+            make_bank(
+                "survey-gss",
+                "GSS survey",
+                "survey",
+                gss_items,
+                seed=args.seed,
+                opinion=opinion,
+            )
+        )
         distributions.extend(gss_distributions)
 
     if "asurre" in selected:
@@ -312,7 +330,11 @@ def parser() -> argparse.ArgumentParser:
         "--ipip-codebook", type=Path, default=Path("data/raw/ipip/BIG5/BIG5/codebook.txt")
     )
     ap.add_argument("--gss-data", type=Path, default=Path("data/raw/gss/gss.csv"))
-    ap.add_argument("--gss-manifest", type=Path, default=Path("data/raw/gss/manifest.json"))
+    ap.add_argument(
+        "--gss-manifest",
+        type=Path,
+        default=Path("configs/gss_2018_manifest.json"),
+    )
     ap.add_argument("--asurre-config-dir", type=Path, default=Path("data/raw/asurre/configs"))
     ap.add_argument("--asurre-limit", type=int, default=100)
     ap.add_argument(

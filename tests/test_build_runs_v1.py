@@ -90,6 +90,36 @@ def test_bundle_writes_valid_plain_and_active_variants(tmp_path: Path):
     assert json.loads(quiz_assessment.read_text(encoding="utf-8"))["assessment_id"] == "quiz"
 
 
+def test_opinion_variants_are_not_limited_to_opinionqa():
+    item = Item(
+        item_id="gss:happy",
+        source="gss",
+        assessment_type="survey",
+        item_type="mcq",
+        stem="How happy are you?",
+        options=["Very", "Pretty", "Not too"],
+        eligible_mechanisms=["opinion_trap"],
+        human_dist_key="gss:happy:human",
+    )
+    distribution = HumanDistribution(
+        key="gss:happy:human",
+        source="gss",
+        option_probs=[0.3, 0.6, 0.1],
+        n_respondents=1000,
+    )
+
+    bank = make_bank(
+        "gss",
+        "GSS",
+        "survey",
+        [item],
+        seed=29,
+        opinion=OpinionTrapMechanism([distribution]),
+    )
+
+    assert [variant.mechanism for variant in bank.variants] == [None, "opinion_trap"]
+
+
 def test_make_bank_rejects_mismatched_assessment_type():
     survey_item = Item(
         item_id="ipip:e1",

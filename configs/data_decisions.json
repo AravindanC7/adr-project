@@ -12,7 +12,7 @@
     "provenance": "Counts are copied from the version-controlled ASURRE source configs under data/raw/asurre/configs. The decision was made before fitting or inspecting model outcomes."
   },
   "gss": {
-    "release": "1972-2018 GSS cumulative cross-section",
+    "release": "2018 GSS individual-year cross-section",
     "survey_year": 2018,
     "variables": [
       "HAPPY",
