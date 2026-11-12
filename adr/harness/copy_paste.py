@@ -93,7 +93,7 @@ def observe(
 def _git_commit() -> str | None:
     try:
         return subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=True
+            ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, encoding="utf-8", check=True
         ).stdout.strip()
     except Exception:  # noqa: BLE001
         return None
@@ -219,11 +219,11 @@ def run_copy_paste(
         "n_skipped_observations": sum(skipped.values()),
         "skipped_observations": dict(sorted(skipped.items())),  # per mechanism: NoObservation
         "stopped_for_budget": stopped_for_budget,
-    }, sort_keys=False))
-    with (run_dir / "responses.jsonl").open("w") as f:
+    }, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    with (run_dir / "responses.jsonl").open("w", encoding="utf-8") as f:
         for r in sorted(responses, key=lambda r: (r["model"], r["session_id"], r["variant_id"])):
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    with (run_dir / "errors.jsonl").open("w") as f:  # always rewritten, empty = no failures
+    with (run_dir / "errors.jsonl").open("w", encoding="utf-8") as f:  # always rewritten, empty = no failures
         for e in errors:
             f.write(json.dumps(e) + "\n")
     return rows

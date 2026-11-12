@@ -297,7 +297,7 @@ class LLMClient:
             load_dotenv(find_dotenv(usecwd=True))
         except ImportError:
             pass
-        cfg = yaml.safe_load(Path(path).read_text())
+        cfg = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
         models = {m["name"]: ModelSpec(**m) for m in cfg["models"]}
         return cls(models=models, weekly_spend_cap_usd=cfg.get("weekly_spend_cap_usd"), **kw)
 
@@ -318,7 +318,7 @@ class LLMClient:
             return 0.0
         week = _iso_week(now or datetime.now(timezone.utc).isoformat())
         total = 0.0
-        for line in self._ledger.read_text().splitlines():
+        for line in self._ledger.read_text(encoding="utf-8").splitlines():
             rec = json.loads(line)
             if rec.get("usd") and _iso_week(rec["ts"]) == week:
                 total += rec["usd"]
@@ -338,13 +338,13 @@ class LLMClient:
 
     def read_cache(self, key: str) -> dict[str, Any] | None:
         p = self._path(key)
-        return json.loads(p.read_text()) if p.exists() else None
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
     def _write_cache(self, key: str, record: dict[str, Any]) -> None:
         p = self._path(key)
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_text(json.dumps(record, ensure_ascii=False, indent=1))
+        tmp.write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
         os.replace(tmp, p)  # atomic: a crash never leaves a half-written cache file
 
     # -- main entry point
@@ -434,7 +434,7 @@ class LLMClient:
                          "cost_usd": cost},
             "created_at": now,
         })
-        with self._lock, self._ledger.open("a") as f:
+        with self._lock, self._ledger.open("a", encoding="utf-8") as f:
             f.write(json.dumps({"ts": now, "model": model, "in": tin, "out": tout,
                                 "usd": cost}) + "\n")
         return Completion(text, model, key, False, tin, tout, cost)
