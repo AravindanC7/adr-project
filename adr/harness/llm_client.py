@@ -70,6 +70,31 @@ class Completion:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float | None = None
+    # Why the model stopped: "stop", "length" (hit max_tokens: the reply is cut off), another
+    # provider-specific word, or None if unknown (e.g. answers cached before this was recorded).
+    finish_reason: str | None = None
+
+    @property
+    def truncated(self) -> bool:
+        return self.finish_reason == "length"
+
+
+_LENGTH = {"length", "max_tokens", "max_output_tokens"}
+_STOP = {"stop", "end_turn", "stop_sequence"}
+
+
+def finish_reason(raw: Any) -> str | None:
+    """One word for why a provider stopped, the same for every provider: "length" when the
+    reply hit the token limit (OpenAI "length", Anthropic "max_tokens", Google MAX_TOKENS),
+    "stop" for a normal end, otherwise the provider's own word in lower case."""
+    if raw is None:
+        return None
+    word = str(getattr(raw, "name", raw)).rsplit(".", 1)[-1].lower()
+    if word in _LENGTH:
+        return "length"
+    if word in _STOP:
+        return "stop"
+    return word or None
 
 
 # ---------------------------------------------------------------- providers
@@ -82,8 +107,9 @@ class Provider(Protocol):
         temperature: float | None,
         max_tokens: int,
         attachments: list[Attachment] | None = None,
-    ) -> tuple[str, int, int]:
-        """Return (text, input_tokens, output_tokens)."""
+    ) -> tuple[str, int, int] | tuple[str, int, int, str | None]:
+        """Return (text, input_tokens, output_tokens[, finish_reason]). The fourth value is
+        optional so older providers keep working; pass it through finish_reason()."""
         ...
 
 
@@ -152,7 +178,8 @@ class AnthropicProvider:
             kwargs["temperature"] = temperature
         resp = self._client.messages.create(**kwargs)
         text = "".join(getattr(b, "text", "") for b in resp.content)
-        return text, resp.usage.input_tokens, resp.usage.output_tokens
+        return (text, resp.usage.input_tokens, resp.usage.output_tokens,
+                finish_reason(getattr(resp, "stop_reason", None)))
 
 
 class OpenAIProvider:
@@ -184,7 +211,8 @@ class OpenAIProvider:
         resp = self._client.chat.completions.create(**kwargs)
         text = resp.choices[0].message.content or ""
         usage = resp.usage
-        return text, getattr(usage, "prompt_tokens", 0), getattr(usage, "completion_tokens", 0)
+        return (text, getattr(usage, "prompt_tokens", 0), getattr(usage, "completion_tokens", 0),
+                finish_reason(getattr(resp.choices[0], "finish_reason", None)))
 
 
 class GoogleProvider:
@@ -215,16 +243,19 @@ class GoogleProvider:
             model=model_id, contents=contents, config=config
         )
         um = resp.usage_metadata
+        candidates = getattr(resp, "candidates", None) or []
         return (
             resp.text or "",
             getattr(um, "prompt_token_count", 0) or 0,
             getattr(um, "candidates_token_count", 0) or 0,
+            finish_reason(getattr(candidates[0], "finish_reason", None) if candidates else None),
         )
 
 
 class FakeProvider:
     """Offline provider for tests and dry runs. `fn(system, messages) -> text`, or
-    `fn(system, messages, attachments) -> text` when the call has attachments."""
+    `fn(system, messages, attachments) -> text` when the call has attachments. `fn` may also
+    return (text, finish_reason), e.g. (text, "length") to act out a reply that was cut off."""
 
     def __init__(self, fn: Callable[..., str]):
         self.fn = fn
@@ -232,8 +263,9 @@ class FakeProvider:
 
     def complete(self, model_id, system, messages, temperature, max_tokens, attachments=None):
         self.calls += 1
-        text = self.fn(system, messages, attachments) if attachments else self.fn(system, messages)
-        return text, sum(len(m["content"]) // 4 for m in messages), len(text) // 4
+        out = self.fn(system, messages, attachments) if attachments else self.fn(system, messages)
+        text, reason = out if isinstance(out, tuple) else (out, "stop")
+        return text, sum(len(m["content"]) // 4 for m in messages), len(text) // 4, reason
 
 
 def make_provider(spec: ModelSpec) -> Provider:
@@ -431,6 +463,7 @@ class LLMClient:
                 r["input_tokens"],
                 r["output_tokens"],
                 r.get("cost_usd"),
+                r.get("finish_reason"),
             )
 
         if self.weekly_spend_cap_usd is not None:
@@ -447,9 +480,11 @@ class LLMClient:
         attempt = 0
         while True:
             try:
-                text, tin, tout = provider.complete(
+                result = provider.complete(
                     spec.model_id, system, messages, sent_temperature, max_tokens, **files
                 )
+                text, tin, tout = result[:3]
+                reason = finish_reason(result[3]) if len(result) > 3 else None
                 break
             except Exception as e:  # provider SDKs raise many unrelated exception types
                 kind = classify_error(e)
@@ -487,6 +522,7 @@ class LLMClient:
                     "input_tokens": tin,
                     "output_tokens": tout,
                     "cost_usd": cost,
+                    "finish_reason": reason,
                 },
                 "created_at": now,
             },
@@ -495,4 +531,4 @@ class LLMClient:
             f.write(
                 json.dumps({"ts": now, "model": model, "in": tin, "out": tout, "usd": cost}) + "\n"
             )
-        return Completion(text, model, key, False, tin, tout, cost)
+        return Completion(text, model, key, False, tin, tout, cost, reason)
