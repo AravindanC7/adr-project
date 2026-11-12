@@ -54,7 +54,7 @@ class DocUploadConfig:
     attacker_level: str = "L0"
     n_samples: int = 1  # independent uploads per (model, document); use temperature > 0 if > 1
     temperature: float | None = 0.0
-    max_tokens: int = 1500  # one reply covers the whole document
+    max_tokens: int = 1500  # one reply covers the whole document; raise it for long ones
     persona: str = DEFAULT_PERSONA
     max_workers: int = 4
     results_dir: str = "results"
@@ -149,6 +149,7 @@ def run_doc_upload(
     errors: list[dict] = []
     skipped: Counter[str] = Counter()  # mechanism -> NoObservation count
     stopped_for_budget = False
+    n_truncated = 0  # replies that hit max_tokens
     attachment_name = re.sub(r"[^A-Za-z0-9_-]+", "_", assessment.assessment_id) + ".pdf"
 
     def work(job: _Job):
@@ -190,6 +191,12 @@ def run_doc_upload(
 
             spec = client.spec(job.model)
             session_id = f"{cfg.run_id}:{job.model}:{job.sample_idx}:d{job.doc.k}"
+            if out.truncated:  # cut off at max_tokens: later questions are likely missing
+                n_truncated += 1
+                errors.append({**_where(job), "cache_key": out.cache_key,
+                               "warning": f"reply hit max_tokens ({cfg.max_tokens}): it is cut "
+                                          "off, so later answers may be missing or partial. "
+                                          "Rerun with a higher --max-tokens."})
             answers = split_answers(out.text)
             for n, (item, rendered) in job.doc.questions.items():
                 text = answers.get(n, "")
@@ -249,6 +256,7 @@ def run_doc_upload(
         "n_skipped_observations": sum(skipped.values()),
         "skipped_observations": dict(sorted(skipped.items())),  # per mechanism: NoObservation
         "stopped_for_budget": stopped_for_budget,
+        "n_truncated_replies": n_truncated,  # hit max_tokens; each is a warning in errors.jsonl
     }, sort_keys=False, allow_unicode=True), encoding="utf-8")
     with (run_dir / "responses.jsonl").open("w", encoding="utf-8") as f:
         for r in sorted(responses, key=lambda r: (r["model"], r["session_id"], r["question"])):
