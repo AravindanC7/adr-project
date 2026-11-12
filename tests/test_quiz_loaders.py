@@ -49,6 +49,9 @@ def test_mmlu_rejects_duplicate_options_case_insensitively(tmp_path: Path) -> No
     with pytest.raises(ValueError, match="options must be unique"):
         load_mmlu(tmp_path, split="test")
 
+    with pytest.warns(RuntimeWarning, match="skipped question with duplicate options"):
+        assert load_mmlu(tmp_path, split="test", skip_duplicate_options=True) == []
+
 
 def test_loads_normalized_arc_record(tmp_path: Path) -> None:
     path = tmp_path / "ARC-Challenge-Train.jsonl"

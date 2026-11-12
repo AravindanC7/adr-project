@@ -120,28 +120,44 @@ def _b64(data: bytes) -> str:
 def _with_files(messages: list[Message], parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Copy of `messages` whose last message is a content list: file parts first, then its text."""
     *head, last = messages
-    return [*head, {"role": last["role"],
-                    "content": [*parts, {"type": "text", "text": last["content"]}]}]
+    return [
+        *head,
+        {"role": last["role"], "content": [*parts, {"type": "text", "text": last["content"]}]},
+    ]
 
 
 def anthropic_messages(messages: list[Message], attachments: list[Attachment] | None):
     if not attachments:
         return messages
-    return _with_files(messages, [
-        {"type": "document", "title": a["filename"],
-         "source": {"type": "base64", "media_type": a["mime"], "data": _b64(a["data"])}}
-        for a in attachments
-    ])
+    return _with_files(
+        messages,
+        [
+            {
+                "type": "document",
+                "title": a["filename"],
+                "source": {"type": "base64", "media_type": a["mime"], "data": _b64(a["data"])},
+            }
+            for a in attachments
+        ],
+    )
 
 
 def openai_messages(messages: list[Message], attachments: list[Attachment] | None):
     if not attachments:
         return messages
-    return _with_files(messages, [
-        {"type": "file", "file": {"filename": a["filename"],
-                                  "file_data": f"data:{a['mime']};base64,{_b64(a['data'])}"}}
-        for a in attachments
-    ])
+    return _with_files(
+        messages,
+        [
+            {
+                "type": "file",
+                "file": {
+                    "filename": a["filename"],
+                    "file_data": f"data:{a['mime']};base64,{_b64(a['data'])}",
+                },
+            }
+            for a in attachments
+        ],
+    )
 
 
 class AnthropicProvider:
@@ -151,8 +167,11 @@ class AnthropicProvider:
         self._client = anthropic.Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
 
     def complete(self, model_id, system, messages, temperature, max_tokens, attachments=None):
-        kwargs: dict[str, Any] = {"model": model_id, "max_tokens": max_tokens,
-                                  "messages": anthropic_messages(messages, attachments)}
+        kwargs: dict[str, Any] = {
+            "model": model_id,
+            "max_tokens": max_tokens,
+            "messages": anthropic_messages(messages, attachments),
+        }
         if system:
             kwargs["system"] = system
         if temperature is not None:
@@ -213,12 +232,16 @@ class GoogleProvider:
             for m in messages
         ]
         if attachments:
-            files = [types.Part.from_bytes(data=a["data"], mime_type=a["mime"]) for a in attachments]
+            files = [
+                types.Part.from_bytes(data=a["data"], mime_type=a["mime"]) for a in attachments
+            ]
             contents[-1].parts = files + contents[-1].parts
         config = types.GenerateContentConfig(
             system_instruction=system, temperature=temperature, max_output_tokens=max_tokens
         )
-        resp = self._client.models.generate_content(model=model_id, contents=contents, config=config)
+        resp = self._client.models.generate_content(
+            model=model_id, contents=contents, config=config
+        )
         um = resp.usage_metadata
         candidates = getattr(resp, "candidates", None) or []
         return (
@@ -263,8 +286,16 @@ def make_provider(spec: ModelSpec) -> Provider:
 
 # ---------------------------------------------------------------- errors
 _RATE_WORDS = ("rate limit", "rate_limit", "resource_exhausted", "overloaded", "too many requests")
-_FATAL_WORDS = ("credit balance", "insufficient_quota", "billing", "invalid api key",
-                "api key not valid", "invalid x-api-key", "incorrect api key", "not found")
+_FATAL_WORDS = (
+    "credit balance",
+    "insufficient_quota",
+    "billing",
+    "invalid api key",
+    "api key not valid",
+    "invalid x-api-key",
+    "incorrect api key",
+    "not found",
+)
 
 
 def classify_error(e: Exception) -> str:
@@ -278,9 +309,7 @@ def classify_error(e: Exception) -> str:
     msg = str(e).lower()
     status = getattr(e, "status_code", None) or getattr(e, "code", None)
     status = status if isinstance(status, int) else None
-    if "temperature" in msg and (
-        isinstance(e, TypeError) or status == 400 or "unsupported" in msg
-    ):
+    if "temperature" in msg and (isinstance(e, TypeError) or status == 400 or "unsupported" in msg):
         return "no_temperature"
     if any(w in msg for w in _FATAL_WORDS):
         return "fatal"
@@ -359,7 +388,9 @@ class LLMClient:
     def _cost(self, spec: ModelSpec, tin: int, tout: int) -> float | None:
         if spec.price_in_per_mtok is None or spec.price_out_per_mtok is None:
             if spec.name not in self._warned_no_price:
-                warnings.warn(f"{spec.name}: no prices in config; tracking tokens only", stacklevel=3)
+                warnings.warn(
+                    f"{spec.name}: no prices in config; tracking tokens only", stacklevel=3
+                )
                 self._warned_no_price.add(spec.name)
             return None
         return (tin * spec.price_in_per_mtok + tout * spec.price_out_per_mtok) / 1_000_000
@@ -370,7 +401,16 @@ class LLMClient:
 
     def read_cache(self, key: str) -> dict[str, Any] | None:
         p = self._path(key)
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+        if not p.exists():
+            return None
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except UnicodeDecodeError:
+            # Older Windows runs used pathlib's locale encoding. Read those cache files once and
+            # rewrite them as UTF-8 so real questions containing smart quotes/degrees remain usable.
+            record = json.loads(p.read_text(encoding="cp1252"))
+            self._write_cache(key, record)
+            return record
 
     def _write_cache(self, key: str, record: dict[str, Any]) -> None:
         p = self._path(key)
@@ -404,16 +444,27 @@ class LLMClient:
         if attachments:
             # Only added when present, so cache keys of calls without files stay the same.
             request["attachments"] = [
-                {"filename": a["filename"], "mime": a["mime"],
-                 "sha256": hashlib.sha256(a["data"]).hexdigest()}
+                {
+                    "filename": a["filename"],
+                    "mime": a["mime"],
+                    "sha256": hashlib.sha256(a["data"]).hexdigest(),
+                }
                 for a in attachments
             ]
         key = cache_key(spec, request)
         hit = self.read_cache(key)
         if hit is not None:
             r = hit["response"]
-            return Completion(r["text"], model, key, True, r["input_tokens"], r["output_tokens"],
-                              r.get("cost_usd"), r.get("finish_reason"))
+            return Completion(
+                r["text"],
+                model,
+                key,
+                True,
+                r["input_tokens"],
+                r["output_tokens"],
+                r.get("cost_usd"),
+                r.get("finish_reason"),
+            )
 
         if self.weekly_spend_cap_usd is not None:
             spent = self.week_spend_usd()
@@ -435,7 +486,7 @@ class LLMClient:
                 text, tin, tout = result[:3]
                 reason = finish_reason(result[3]) if len(result) > 3 else None
                 break
-            except Exception as e:  # provider SDKs raise many types
+            except Exception as e:  # provider SDKs raise many unrelated exception types
                 kind = classify_error(e)
                 if kind == "no_temperature" and sent_temperature is not None:
                     # Some newer models/SDKs refuse a temperature setting: drop it for this
@@ -458,17 +509,26 @@ class LLMClient:
 
         cost = self._cost(spec, tin, tout)
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        self._write_cache(key, {
-            "model": model,
-            "provider": spec.provider,
-            "model_id": spec.model_id,
-            "request": request,
-            "temperature_sent": sent_temperature,
-            "response": {"text": text, "input_tokens": tin, "output_tokens": tout,
-                         "cost_usd": cost, "finish_reason": reason},
-            "created_at": now,
-        })
+        self._write_cache(
+            key,
+            {
+                "model": model,
+                "provider": spec.provider,
+                "model_id": spec.model_id,
+                "request": request,
+                "temperature_sent": sent_temperature,
+                "response": {
+                    "text": text,
+                    "input_tokens": tin,
+                    "output_tokens": tout,
+                    "cost_usd": cost,
+                    "finish_reason": reason,
+                },
+                "created_at": now,
+            },
+        )
         with self._lock, self._ledger.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({"ts": now, "model": model, "in": tin, "out": tout,
-                                "usd": cost}) + "\n")
+            f.write(
+                json.dumps({"ts": now, "model": model, "in": tin, "out": tout, "usd": cost}) + "\n"
+            )
         return Completion(text, model, key, False, tin, tout, cost, reason)

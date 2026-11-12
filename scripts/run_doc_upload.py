@@ -30,11 +30,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from adr.contracts import Assessment, Item, RenderedItem
+from adr.contracts.io import read_jsonl
 from adr.harness.copy_paste import plain_variant
 from adr.harness.doc_upload import DocUploadConfig, run_doc_upload
 from adr.harness.llm_client import FakeProvider, LLMClient, ModelSpec
 from adr.harness.registry import load_mechanisms
-from scripts.run_copy_paste import read_jsonl
 
 
 def gullible(system, messages, attachments=None):
@@ -87,8 +87,9 @@ def main() -> None:
             if canary.applies_to(it):
                 vs.append(canary.generate(it, 0))
             variants[it.item_id] = vs
-        assessment = Assessment(assessment_id="stub", title="Stub", assessment_type="quiz",
-                                item_ids=list(items))
+        assessment = Assessment(
+            assessment_id="stub", title="Stub", assessment_type="quiz", item_ids=list(items)
+        )
         mechanisms = {"decoy": decoy, "canary": canary}
     else:
         if not (args.assessment and args.items and args.variants):
@@ -101,8 +102,11 @@ def main() -> None:
         mechanisms = load_mechanisms([m for m in args.mechanisms.split(",") if m])
 
     if args.fake:
-        client = LLMClient(models={"fake": ModelSpec("fake", "fake", "fake-v1", 0.0, 0.0)},
-                           cache_dir="cache/llm-fake", providers={"fake": FakeProvider(gullible)})
+        client = LLMClient(
+            models={"fake": ModelSpec("fake", "fake", "fake-v1", 0.0, 0.0)},
+            cache_dir="cache/llm-fake",
+            providers={"fake": FakeProvider(gullible)},
+        )
         models = ["fake"]
     else:
         client = LLMClient.from_config(args.config)
@@ -111,9 +115,15 @@ def main() -> None:
             raise SystemExit("give --models (names from configs/models.yaml)")
 
     run_id = args.run_id or f"du-{args.level}-{datetime.now():%Y%m%d-%H%M%S}"
-    cfg = DocUploadConfig(run_id=run_id, models=models, attacker_level=args.level,
-                          n_samples=args.samples, temperature=args.temperature,
-                          max_tokens=args.max_tokens, max_workers=args.workers)
+    cfg = DocUploadConfig(
+        run_id=run_id,
+        models=models,
+        attacker_level=args.level,
+        n_samples=args.samples,
+        temperature=args.temperature,
+        max_tokens=args.max_tokens,
+        max_workers=args.workers,
+    )
     rows = run_doc_upload(client, assessment, items, variants, mechanisms, cfg)
 
     print(f"run {run_id}: {len(rows)} outcome rows -> results/outcomes/{run_id}.parquet")
