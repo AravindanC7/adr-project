@@ -435,7 +435,7 @@ class LLMClient:
                 text, tin, tout = result[:3]
                 reason = finish_reason(result[3]) if len(result) > 3 else None
                 break
-            except Exception as e:  # noqa: BLE001 - provider SDKs raise many types
+            except Exception as e:  # provider SDKs raise many types
                 kind = classify_error(e)
                 if kind == "no_temperature" and sent_temperature is not None:
                     # Some newer models/SDKs refuse a temperature setting: drop it for this
