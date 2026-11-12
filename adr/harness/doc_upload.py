@@ -257,11 +257,11 @@ def run_doc_upload(
         "skipped_observations": dict(sorted(skipped.items())),  # per mechanism: NoObservation
         "stopped_for_budget": stopped_for_budget,
         "n_truncated_replies": n_truncated,  # hit max_tokens; each is a warning in errors.jsonl
-    }, sort_keys=False))
-    with (run_dir / "responses.jsonl").open("w") as f:
+    }, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    with (run_dir / "responses.jsonl").open("w", encoding="utf-8") as f:
         for r in sorted(responses, key=lambda r: (r["model"], r["session_id"], r["question"])):
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    with (run_dir / "errors.jsonl").open("w") as f:  # always rewritten, empty = no failures
+    with (run_dir / "errors.jsonl").open("w", encoding="utf-8") as f:  # always rewritten, empty = no failures
         for e in sorted(errors, key=lambda e: (e.get("model", ""), e.get("doc", -1),
                                                e.get("sample_idx", -1), e.get("question", 0))):
             f.write(json.dumps(e) + "\n")
