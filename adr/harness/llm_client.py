@@ -286,24 +286,19 @@ def make_provider(spec: ModelSpec) -> Provider:
 
 # ---------------------------------------------------------------- errors
 _RATE_WORDS = ("rate limit", "rate_limit", "resource_exhausted", "overloaded", "too many requests")
-_FATAL_WORDS = (
-    "credit balance",
-    "insufficient_quota",
-    "billing",
-    "invalid api key",
-    "api key not valid",
-    "invalid x-api-key",
-    "incorrect api key",
-    "not found",
-)
+_KEY_WORDS = ("invalid api key", "api key not valid", "invalid x-api-key", "incorrect api key")
+# Fatal even on a 429: no credit left, or a bad key. Retrying cannot help.
+_ALWAYS_FATAL_WORDS = ("credit balance", *_KEY_WORDS)
+_FATAL_WORDS = (*_ALWAYS_FATAL_WORDS, "insufficient_quota", "billing", "not found")
 
 
 def classify_error(e: Exception) -> str:
     """Decide how to react to a provider error.
 
     "no_temperature": the model refuses a temperature setting -> drop it and retry now
-    "rate_limit":     slow down and retry (429, 529, overloaded)
-    "fatal":          retrying can't help (bad key, no credit, bad request, unknown model)
+    "rate_limit":     slow down and retry (any 429 / RESOURCE_EXHAUSTED, 529, overloaded)
+    "fatal":          retrying can't help (bad key, no credit, bad request, unknown model);
+                      on a 429 only "credit balance" and invalid-key messages are fatal
     "retry":          probably transient (timeouts, 5xx) -> short backoff and retry
     """
     msg = str(e).lower()
@@ -311,9 +306,16 @@ def classify_error(e: Exception) -> str:
     status = status if isinstance(status, int) else None
     if "temperature" in msg and (isinstance(e, TypeError) or status == 400 or "unsupported" in msg):
         return "no_temperature"
+    if any(w in msg for w in _ALWAYS_FATAL_WORDS):
+        return "fatal"
+    # A 429 / RESOURCE_EXHAUSTED is a rate or quota limit: back off and retry, even when the
+    # message mentions billing or quota (Gemini's per-minute limits say "check your plan and
+    # billing details"). max_retries still bounds it, so a spent daily quota ends as an error.
+    if status == 429 or "resource_exhausted" in msg:
+        return "rate_limit"
     if any(w in msg for w in _FATAL_WORDS):
         return "fatal"
-    if status in (429, 529) or any(w in msg for w in _RATE_WORDS):
+    if status == 529 or any(w in msg for w in _RATE_WORDS):
         return "rate_limit"
     if isinstance(e, TypeError) or status in (400, 401, 403, 404, 422):
         return "fatal"
