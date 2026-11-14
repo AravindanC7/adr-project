@@ -34,7 +34,7 @@ Settings (environment variables):
   ADR_DEBUG_STATE=1       GET /session/{id} returns the SessionState, for the demo (#47) and
                           logging. Never enable it in a session real people take.
 
-Not here yet: telemetry beyond time on item (#23); a real failure map for ADR_PICK=router (#28).
+Not here yet: a real failure map for ADR_PICK=router (#28).
 Responses and outcomes stay in memory only; #39 writes them to the outcome table.
 
 Run from the repo root:   uvicorn server.app:app --reload      then open http://127.0.0.1:8000
@@ -62,14 +62,17 @@ from adr.contracts import (
     FailureMap,
     Item,
     Mechanism,
+    NoObservation,
     RenderedItem,
     Response,
     SessionState,
     Telemetry,
+    make_variant_id,
     parse_variant_id,
 )
 from adr.harness.copy_paste import plain_variant
 from adr.harness.registry import get_mechanism
+from adr.mechanisms.behaviour import MECHANISM as BEHAVIOUR
 from adr.router.core import SPRTRouter
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -79,7 +82,6 @@ FRONTEND_DIR = ROOT / "frontend"
 # Mechanisms that change what the page shows. Opinion traps, behaviour and style only look at
 # answers (passive), so the page has nothing to inject for them; glitch tokens are out for now.
 INJECTED = ("decoy", "canary")
-HIDDEN_POSITIONS = ("before_stem", "after_stem", "after_options")
 Pick = Literal["all", "router"]
 Hide = Literal["clip", "clear", "clip_aria"]
 
@@ -195,21 +197,9 @@ def build_variants(
         vs = [plain_variant(item)]
         for name, mech in mechanisms.items():
             if name in item.eligible_mechanisms and mech.applies_to(item):
-                vs.append(check_hidden(mech.generate(item, seed)))
+                vs.append(mech.generate(item, seed))  # contracts check hidden_position
         variants[item_id] = vs
     return variants
-
-
-def check_hidden(rendered: RenderedItem) -> RenderedItem:
-    """The page can only place hidden text at a known position. Until contracts v2 (#5) makes
-    hidden_position required, a variant without one is treated as "after_stem", which is where
-    every current mechanism puts it in copy_text."""
-    if "hidden_text" not in rendered.hidden:
-        return rendered
-    position = rendered.hidden.setdefault("hidden_position", "after_stem")
-    if position not in HIDDEN_POSITIONS:
-        raise ValueError(f"{rendered.variant_id}: unknown hidden_position {position!r}")
-    return rendered
 
 
 @dataclass
@@ -330,8 +320,9 @@ def create_app(
         )
 
         s.responses.append((response, req.telemetry))
-        # Plain variants have outcome "none"; a decoy or canary scores the answer. The passive
-        # checks (behaviour, style, opinion trap) come with #25 and #28.
+        # Plain variants have outcome "none"; a decoy or canary scores the answer. The
+        # behaviour check (#25) then scores every answer from its telemetry. Style and the
+        # opinion trap come with #28.
         rendered = by_variant[choice.variant_id]
         outcome = (
             mechanisms[rendered.mechanism].score(rendered, response, req.telemetry)
@@ -340,6 +331,16 @@ def create_app(
         )
         s.outcomes.append((choice.variant_id, outcome))
         s.state = router.update(s.state, choice.variant_id, outcome)
+        try:
+            seen = BEHAVIOUR.score(
+                rendered, response, req.telemetry, passage=items[choice.item_id].passage
+            )
+        except NoObservation:
+            seen = None
+        if seen is not None:
+            passive_id = make_variant_id(choice.item_id, "behaviour")
+            s.outcomes.append((passive_id, seen))
+            s.state = router.update(s.state, passive_id, seen)
         s.current = next_choice(s)
         return step(s)
 

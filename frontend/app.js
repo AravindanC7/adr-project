@@ -10,7 +10,6 @@ const $ = (id) => document.getElementById(id);
 
 let sessionId = null;
 let current = null;           // the ShownItem being answered
-let shownAt = 0;              // performance.now() when it was drawn
 let getAnswer = () => null;   // current answer, or null while unanswered
 
 async function api(path, body) {
@@ -177,7 +176,7 @@ function render(step) {
   refresh();
   show("question");
   $("stem").focus();
-  shownAt = performance.now();
+  ItemTelemetry.start(area);
 }
 
 async function begin(assessmentId, title) {
@@ -198,8 +197,7 @@ async function submit(event) {
   const body = {
     token: current.token,   // opaque: the page never learns which item or check this is
     answer,
-    // Time on item only. Paste, focus and keystroke counts come with step #23.
-    telemetry: { time_on_item_ms: Math.round(performance.now() - shownAt) },
+    telemetry: ItemTelemetry.report(),   // counts and timings only (telemetry.js)
   };
   try {
     render(await api(`/session/${encodeURIComponent(sessionId)}/respond`, body));
