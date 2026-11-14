@@ -260,6 +260,29 @@ def test_classify_error():
     assert classify_error(TimeoutError("read timed out")) == "retry"
 
 
+def test_classify_error_429_retries_even_with_billing_words():
+    from adr.harness.llm_client import classify_error
+
+    gemini = (
+        "429 RESOURCE_EXHAUSTED. You exceeded your current quota, please check your plan "
+        "and billing details."
+    )
+    assert classify_error(_Err(gemini, 429)) == "rate_limit"
+    assert classify_error(_Err(gemini)) == "rate_limit"  # no status attr: matched by text
+    assert classify_error(_Err("insufficient_quota: billing", 429)) == "rate_limit"
+
+
+def test_classify_error_still_fatal():
+    from adr.harness.llm_client import classify_error
+
+    assert classify_error(_Err("Your credit balance is too low", 429)) == "fatal"
+    assert classify_error(_Err("Incorrect API key provided", 429)) == "fatal"
+    assert classify_error(_Err("API key not valid. Please pass a valid API key.", 400)) == "fatal"
+    assert classify_error(_Err("insufficient_quota", 403)) == "fatal"
+    assert classify_error(_Err("insufficient_quota")) == "fatal"
+    assert classify_error(_Err("billing account disabled", 403)) == "fatal"
+
+
 def test_temperature_refusal_is_dropped_and_remembered(tmp_path):
     seen = []
 

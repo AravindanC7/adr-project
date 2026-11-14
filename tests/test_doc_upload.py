@@ -337,3 +337,63 @@ def test_script_passes_max_tokens(tmp_path, monkeypatch):
                                       "--max-tokens", "4000", "--run-id", "x"])
     script.main()
     assert seen["cfg"].max_tokens == 4000
+
+
+# ---------- chunked documents ----------
+def test_chunked_documents_keep_the_variant_split():
+    assessment, items, variants, _ = _setup()  # 4 items; q1 has 2 variants, the rest 1
+    whole = build_documents(assessment, items, variants)
+    assert [d.pdf for d in build_documents(assessment, items, variants, None)] == [
+        d.pdf for d in whole]                       # default unchanged, so the cache still hits
+    docs = build_documents(assessment, items, variants, questions_per_doc=2)
+    assert [(d.k, d.chunk, d.variant_k, len(d.questions)) for d in docs] == [
+        (0, 0, 0, 2), (1, 0, 1, 2), (2, 1, 0, 2)]    # chunk 1 has no item with a 2nd variant
+    assert docs[0].questions[1][1].mechanism == "decoy"
+    assert docs[1].questions[1][1].mechanism is None  # q1's plain variant, same chunk
+    used = {v.variant_id for d in docs for _, v in d.questions.values()}
+    assert used == {v.variant_id for d in whole for _, v in d.questions.values()}
+    with pytest.raises(ValueError):
+        build_documents(assessment, items, variants, questions_per_doc=0)
+
+
+def test_questions_per_doc_for():
+    from adr.harness.doc_upload import questions_per_doc_for
+
+    assert questions_per_doc_for(200, 10) == 20
+    assert questions_per_doc_for(205, 10) == 21
+    with pytest.raises(ValueError):
+        questions_per_doc_for(200, 0)
+
+
+def test_chunked_run_gives_each_document_its_own_session(tmp_path):
+    import yaml
+
+    client, fake = make_client(tmp_path)
+    assessment, items, variants, mechs = _setup()
+    cfg = DocUploadConfig(run_id="du-q2", models=["fake-a"], results_dir=str(tmp_path),
+                          questions_per_doc=2)
+    rows = run_doc_upload(client, assessment, items, variants, mechs, cfg)
+    assert fake.calls == 3
+    assert len(rows) == 6                            # 3 documents x 2 questions
+    assert len({r.session_id for r in rows}) == 3
+    config = yaml.safe_load((tmp_path / "runs" / "du-q2" / "config.yaml").read_text())
+    assert (config["questions_per_doc"], config["n_documents"], config["n_chunks"]) == (2, 3, 2)
+    resp = [json.loads(x) for x in (tmp_path / "runs" / "du-q2" / "responses.jsonl")
+            .read_text().splitlines()]
+    assert {r["chunk"] for r in resp} == {0, 1}
+
+
+@pytest.mark.parametrize(("flags", "expected"), [
+    ([], None), (["--questions-per-doc", "3"], 3), (["--docs-per-bank", "2"], 2)])
+def test_script_passes_chunk_size(monkeypatch, flags, expected):
+    import sys
+
+    import scripts.run_doc_upload as script
+
+    seen = {}
+    monkeypatch.setattr(script, "run_doc_upload",
+                        lambda client, a, i, v, m, cfg: seen.setdefault("cfg", cfg) and [])
+    monkeypatch.setattr(sys, "argv", ["run_doc_upload.py", "--stub", "--fake", *flags,
+                                      "--run-id", "x"])
+    script.main()
+    assert seen["cfg"].questions_per_doc == expected   # stub has 4 items: 2 docs -> 2 each

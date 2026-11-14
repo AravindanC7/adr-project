@@ -1,4 +1,4 @@
-"""Run the document-upload attacker (the whole assessment as one PDF).
+"""Run the document-upload attacker (the assessment as PDFs, whole or in chunks).
 
 Quick checks (no data needed yet; uses the 4 handwritten test items and stub traps):
     python scripts/run_doc_upload.py --stub --fake                   # offline, no API keys
@@ -12,6 +12,10 @@ Real run, once Archana's loaders and mechanisms exist:
 --max-tokens caps the one reply that answers the whole document (default 1500). A reply that
 hits it is cut off; it is logged as a warning in errors.jsonl and counted in config.yaml
 (n_truncated_replies). Long assessments (e.g. 100 written answers) need a higher limit.
+
+--questions-per-doc N (or --docs-per-bank M) cuts the items into chunks, each with its own PDF
+per variant (plain/decoy kept apart as before); every PDF is its own session. Smaller documents
+give more independent sessions per bank, e.g. 200 items at 20 per document = 10 chunks x 2.
 
 Files: as for run_copy_paste.py. Models must be anthropic, openai or google: OpenAI-compatible
 servers can't take files. The PDFs sent are saved under results/runs/<run_id>/docs/.
@@ -32,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from adr.contracts import Assessment, Item, RenderedItem
 from adr.contracts.io import read_jsonl
 from adr.harness.copy_paste import plain_variant
-from adr.harness.doc_upload import DocUploadConfig, run_doc_upload
+from adr.harness.doc_upload import DocUploadConfig, questions_per_doc_for, run_doc_upload
 from adr.harness.llm_client import FakeProvider, LLMClient, ModelSpec
 from adr.harness.registry import load_mechanisms
 from adr.mechanisms.style import StyleMechanism, load_style_profile
@@ -76,6 +80,12 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=1500,
                     help="reply limit for the whole document (default 1500); a reply that hits\n"
                          "it is logged as a warning in errors.jsonl")
+    size = ap.add_mutually_exclusive_group()
+    size.add_argument("--questions-per-doc", type=int,
+                      help="cut the items into PDFs of at most this many questions (each chunk\n"
+                           "still gets one PDF per variant; every PDF is its own session)")
+    size.add_argument("--docs-per-bank", type=int,
+                      help="cut the items into this many chunks instead (sets --questions-per-doc)")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--run-id")
     args = ap.parse_args()
@@ -134,6 +144,11 @@ def main() -> None:
         temperature=args.temperature,
         max_tokens=args.max_tokens,
         max_workers=args.workers,
+        questions_per_doc=(
+            questions_per_doc_for(len(assessment.item_ids), args.docs_per_bank)
+            if args.docs_per_bank
+            else args.questions_per_doc
+        ),
     )
     rows = run_doc_upload(client, assessment, items, variants, mechanisms, cfg)
 
