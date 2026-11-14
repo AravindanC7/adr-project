@@ -50,3 +50,10 @@ owners please correct it if wrong.
 | Date | Who | Step | What | Link |
 |---|---|---|---|---|
 | | | | e.g. kickoff (#1), schema spec (#6), emails (#4), mentor meetings (#5), reviews of others' PRs, mid-term report (#14, #15) | |
+| (date?) (due 10-19) | Harshini | #4 | Emailed Prof. Gupta about human-subjects coverage for the pilot | — |
+| (date?) (by 11-03) | Harshini | #24 | Human-subjects decision: run a class-only pilot without IRB, under Prof. Gupta's approval | `docs/pilot/consent.md` |
+| 2026-11-10 | Harshini | ~#24, #35 | Prof. Gupta approved taking any number of classmate participants | `05fe331` |
+| 2026-11-10 – 11-13 | Harshini | #35 | Ran the human pilot: recruitment message, reminder (Thu Nov 12), last call, monitored the server and tunnel; 55 sessions started, 44 finished | `docs/pilot/README.md` |
+| 2026-11-14 | Harshini | #39 | Cleaning run: 44 sessions kept, 11 unfinished dropped, 2,552 rows, 0 PII flags; low-effort sensitivity analysis | — |
+| 2026-11-14 | Harshini | review | Reviewed and approved with comments Arav's replay and baselines 1–4 PRs; ran the tests on the merged result | PR #9, PR #10 |
+| 2026-11-14 | Harshini | ~#14, #15 | Mid-term report: built the layout in Overleaf (`midterm.tex`) and wrote her sections | Overleaf |
