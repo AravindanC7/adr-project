@@ -94,7 +94,7 @@ def main() -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "metrics.json").write_text(json.dumps(
         {"WARNING": "SYNTHETIC data, invented numbers", "config": cfg.__dict__,
-         "n_per_class": args.n, "passive": list(passive), "results": out}, indent=2))
+         "n_per_class": args.n, "passive": list(passive), "results": out}, indent=2), encoding="utf-8")
     print(f"\nSaved {run_dir / 'metrics.json'}")
 
 

@@ -9,23 +9,24 @@ models:
   - name: claude-haiku
     provider: anthropic
     model_id: claude-haiku-5-5
-    price_in_per_mtok: null
-    price_out_per_mtok: null
+    # Standard prompts up to 100k tokens; ADR harness prompts are far below this threshold.
+    price_in_per_mtok: 0.10
+    price_out_per_mtok: 0.50
     heldout: false
 
   - name: gpt-mini
     provider: openai
     model_id: gpt-5.4-mini-2026-03-17
-    price_in_per_mtok: null
-    price_out_per_mtok: null
+    price_in_per_mtok: 0.75
+    price_out_per_mtok: 4.50
     heldout: false
 
   - name: gemini-flash
     provider: google
     model_id: gemini-3.5-flash
-    price_in_per_mtok: null
-    price_out_per_mtok: null
-    heldout: true   # PROPOSED held-out model; confirm with the team (step #16)
+    price_in_per_mtok: 1.50
+    price_out_per_mtok: 9.00
+    heldout: true   # Team-approved held-out model (step #16); final evaluation only.
 
   - name: open-weight
     provider: openai_compatible

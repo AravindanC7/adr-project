@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "locked_before_fitting": true,
+  "asurre": {
+    "heldout_source": "asurre_osmi_2017_18",
+    "selection_rule": "Hold out the source with the smallest total respondent count; break ties by the most recent survey year.",
+    "source_respondent_counts": {
+      "asurre_nature_phd_2019": 6813,
+      "asurre_springer_social_2017": 5292,
+      "asurre_osmi_2017_18": 1173
+    },
+    "provenance": "Counts are copied from the version-controlled ASURRE source configs under data/raw/asurre/configs. The decision was made before fitting or inspecting model outcomes."
+  },
+  "gss": {
+    "release": "2018 GSS individual-year cross-section",
+    "survey_year": 2018,
+    "variables": [
+      "HAPPY",
+      "TRUST",
+      "FAIR",
+      "HELPFUL",
+      "CONSCI",
+      "CONEDUC",
+      "CONPRESS",
+      "CONFINAN"
+    ],
+    "selection_rule": "Use categorical core questions with 2-4 substantive choices and at least 500 usable responses, spanning wellbeing, interpersonal trust, and institutional confidence; exclude demographics and political or religious identity.",
+    "minimum_usable_responses": 500,
+    "weight_column": "WTSSNR",
+    "ingestion_requirement": "Copy exact wording, value codes, missing-value codes, release identifier, and checksum from the official NORC export into the GSS loader manifest before building the bank."
+  }
+}

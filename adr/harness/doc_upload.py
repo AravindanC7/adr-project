@@ -3,7 +3,10 @@ chatbot and asks it to answer everything.
 
 DoPE-style traps sit in the PDF's text layer (invisible on the page, see pdf_render.py).
 Document k shows variant k mod len(variants) of every item, so across the documents every variant
-of every item gets used. For every model, every sample and every document, it:
+of every item gets used. With questions_per_doc set, the items are first cut into chunks of that
+size (in assessment order) and each chunk gets its own set of documents (one per variant: the
+plain/decoy split is kept within each chunk). Every document is its own session. For every
+model, every sample and every document, it:
   1. renders the PDF (deterministic, so reruns hit the cache),
   2. asks the model through the cached client, with the PDF attached,
   3. splits the reply into "Q<n>: <answer>" lines and parses each with parse_answer,
@@ -54,7 +57,8 @@ class DocUploadConfig:
     attacker_level: str = "L0"
     n_samples: int = 1  # independent uploads per (model, document); use temperature > 0 if > 1
     temperature: float | None = 0.0
-    max_tokens: int = 1500  # one reply covers the whole document
+    max_tokens: int = 1500  # one reply covers the whole document; raise it for long ones
+    questions_per_doc: int | None = None  # None = one document per variant with every item
     persona: str = DEFAULT_PERSONA
     max_workers: int = 4
     results_dir: str = "results"
@@ -67,6 +71,8 @@ class _Doc:
     k: int
     pdf: bytes
     questions: dict[int, tuple[Item, RenderedItem]]  # question number -> (item, variant)
+    chunk: int = 0  # which slice of the assessment's items (0 when not chunked)
+    variant_k: int = 0  # which variant of each item this document shows
 
 
 @dataclass
@@ -98,18 +104,41 @@ def split_answers(text: str) -> dict[int, str]:
 
 
 def build_documents(
-    assessment: Assessment, items: dict[str, Item], variants: dict[str, list[RenderedItem]]
+    assessment: Assessment,
+    items: dict[str, Item],
+    variants: dict[str, list[RenderedItem]],
+    questions_per_doc: int | None = None,
 ) -> list[_Doc]:
-    """Document k shows variant k mod len(variants) of each item, in assessment order."""
+    """Document k shows variant k mod len(variants) of each item, in assessment order.
+
+    With `questions_per_doc`, the items are cut into consecutive chunks of that size and each
+    chunk gets one document per variant, so each document holds at most that many questions.
+    Without it (the default) the documents are byte-identical to earlier runs, so the cache hits.
+    """
+    if questions_per_doc is not None and questions_per_doc < 1:
+        raise ValueError("questions_per_doc must be at least 1")
     order = [items[i] for i in assessment.item_ids]
-    per_item = [variants.get(it.item_id) or [plain_variant(it)] for it in order]
-    docs = []
-    for k in range(max(len(vs) for vs in per_item)):
-        chosen = [vs[k % len(vs)] for vs in per_item]
-        pdf, qmap = render_assessment_pdf(order, chosen, title=assessment.title)
-        questions = {n: (order[n - 1], chosen[n - 1]) for n in qmap}
-        docs.append(_Doc(k, pdf, questions))
+    size = questions_per_doc or len(order)
+    chunks = [order[i : i + size] for i in range(0, len(order), size)]
+    docs: list[_Doc] = []
+    for c, chunk in enumerate(chunks):
+        title = assessment.title if len(chunks) == 1 else (
+            f"{assessment.title} (part {c + 1} of {len(chunks)})"
+        )
+        per_item = [variants.get(it.item_id) or [plain_variant(it)] for it in chunk]
+        for v in range(max(len(vs) for vs in per_item)):
+            chosen = [vs[v % len(vs)] for vs in per_item]
+            pdf, qmap = render_assessment_pdf(chunk, chosen, title=title)
+            questions = {n: (chunk[n - 1], chosen[n - 1]) for n in qmap}
+            docs.append(_Doc(len(docs), pdf, questions, chunk=c, variant_k=v))
     return docs
+
+
+def questions_per_doc_for(n_items: int, docs_per_bank: int) -> int:
+    """Chunk size that cuts `n_items` into `docs_per_bank` chunks (the last may be shorter)."""
+    if docs_per_bank < 1:
+        raise ValueError("docs_per_bank must be at least 1")
+    return -(-n_items // docs_per_bank)
 
 
 def run_doc_upload(
@@ -135,7 +164,7 @@ def run_doc_upload(
             if rendered.mechanism and rendered.mechanism not in mechanisms:
                 raise ValueError(f"no mechanism object for {rendered.mechanism!r}")
 
-    docs = build_documents(assessment, items, variants)
+    docs = build_documents(assessment, items, variants, cfg.questions_per_doc)
     jobs = [_Job(model, s, d) for d in docs for model in cfg.models for s in range(cfg.n_samples)]
 
     run_dir = Path(cfg.results_dir) / "runs" / cfg.run_id
@@ -149,6 +178,7 @@ def run_doc_upload(
     errors: list[dict] = []
     skipped: Counter[str] = Counter()  # mechanism -> NoObservation count
     stopped_for_budget = False
+    n_truncated = 0  # replies that hit max_tokens
     attachment_name = re.sub(r"[^A-Za-z0-9_-]+", "_", assessment.assessment_id) + ".pdf"
 
     def work(job: _Job):
@@ -190,6 +220,12 @@ def run_doc_upload(
 
             spec = client.spec(job.model)
             session_id = f"{cfg.run_id}:{job.model}:{job.sample_idx}:d{job.doc.k}"
+            if out.truncated:  # cut off at max_tokens: later questions are likely missing
+                n_truncated += 1
+                errors.append({**_where(job), "cache_key": out.cache_key,
+                               "warning": f"reply hit max_tokens ({cfg.max_tokens}): it is cut "
+                                          "off, so later answers may be missing or partial. "
+                                          "Rerun with a higher --max-tokens."})
             answers = split_answers(out.text)
             for n, (item, rendered) in job.doc.questions.items():
                 text = answers.get(n, "")
@@ -203,7 +239,8 @@ def run_doc_upload(
                 resp = Response(session_id=session_id, item_id=item.item_id,
                                 variant_id=rendered.variant_id, answer=answer, raw_text=text)
                 responses.append({**resp.model_dump(), "model": job.model, "question": n,
-                                  "doc": job.doc.k, "cache_key": out.cache_key,
+                                  "doc": job.doc.k, "chunk": job.doc.chunk,
+                                  "cache_key": out.cache_key,
                                   "cached": out.cached})
 
                 base = {
@@ -238,6 +275,7 @@ def run_doc_upload(
         "n_items": len(assessment.item_ids),
         "n_variants": sum(len(variants.get(i) or [None]) for i in assessment.item_ids),
         "n_documents": len(docs),
+        "n_chunks": len({d.chunk for d in docs}),
         "mechanisms": sorted(mechanisms),
         "model_ids": {m: client.spec(m).model_id for m in cfg.models},
         "heldout_models": [m for m in cfg.models if client.spec(m).heldout],
@@ -249,11 +287,12 @@ def run_doc_upload(
         "n_skipped_observations": sum(skipped.values()),
         "skipped_observations": dict(sorted(skipped.items())),  # per mechanism: NoObservation
         "stopped_for_budget": stopped_for_budget,
-    }, sort_keys=False))
-    with (run_dir / "responses.jsonl").open("w") as f:
+        "n_truncated_replies": n_truncated,  # hit max_tokens; each is a warning in errors.jsonl
+    }, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    with (run_dir / "responses.jsonl").open("w", encoding="utf-8") as f:
         for r in sorted(responses, key=lambda r: (r["model"], r["session_id"], r["question"])):
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    with (run_dir / "errors.jsonl").open("w") as f:  # always rewritten, empty = no failures
+    with (run_dir / "errors.jsonl").open("w", encoding="utf-8") as f:  # always rewritten, empty = no failures
         for e in sorted(errors, key=lambda e: (e.get("model", ""), e.get("doc", -1),
                                                e.get("sample_idx", -1), e.get("question", 0))):
             f.write(json.dumps(e) + "\n")

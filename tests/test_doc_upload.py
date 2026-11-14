@@ -265,3 +265,135 @@ def test_failed_call_is_logged_not_fatal(tmp_path):
     assert run_doc_upload(client, assessment, items, variants, mechs, cfg) == []
     errs = (tmp_path / "runs" / "du-err" / "errors.jsonl").read_text().splitlines()
     assert len(errs) == 2 and all("provider down" in json.loads(e)["error"] for e in errs)
+
+
+# ---------- cut-off replies (max_tokens) ----------
+def test_finish_reasons_are_normalised_across_providers():
+    from enum import Enum
+
+    from adr.harness.llm_client import finish_reason
+
+    class GoogleReason(Enum):
+        MAX_TOKENS = 2
+        STOP = 1
+
+    assert finish_reason("length") == "length"                  # OpenAI
+    assert finish_reason("max_tokens") == "length"              # Anthropic
+    assert finish_reason(GoogleReason.MAX_TOKENS) == "length"   # Google enum
+    assert finish_reason("FinishReason.MAX_TOKENS") == "length"
+    assert finish_reason("end_turn") == finish_reason("stop") == finish_reason(GoogleReason.STOP) == "stop"
+    assert finish_reason("content_filter") == "content_filter"
+    assert finish_reason(None) is None
+
+
+def test_cut_off_reply_is_logged_as_a_warning_and_counted(tmp_path):
+    import yaml
+
+    def cut_off(system, messages, attachments=None):
+        full = reads_pdf(system, messages, attachments)
+        return full.split("\n")[0], "length"          # only Q1 made it before the limit
+
+    client, fake = make_client(tmp_path, fn=cut_off)
+    assessment, items, variants, mechs = _setup()
+    cfg = DocUploadConfig(run_id="du-cut", models=["fake-a"], results_dir=str(tmp_path),
+                          max_tokens=40)
+    run_doc_upload(client, assessment, items, variants, mechs, cfg)
+    run_dir = tmp_path / "runs" / "du-cut"
+    errors = [json.loads(x) for x in (run_dir / "errors.jsonl").read_text(encoding="utf-8").splitlines()]
+    warnings = [e for e in errors if "warning" in e]
+    assert len(warnings) == 2                              # one per document
+    assert all("max_tokens (40)" in w["warning"] and w["cache_key"] for w in warnings)
+    assert any(e.get("error", "").startswith("skipped") for e in errors)   # the missing answers
+    config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert config["max_tokens"] == 40 and config["n_truncated_replies"] == 2
+
+    # the finish reason is cached too, so a rerun from the cache still warns
+    calls = fake.calls
+    run_doc_upload(client, assessment, items, variants, mechs, cfg)
+    assert fake.calls == calls
+    rerun = (run_dir / "errors.jsonl").read_text(encoding="utf-8")
+    assert rerun.count("hit max_tokens") == 2
+
+
+def test_complete_replies_give_no_warning(tmp_path):
+    client, _ = make_client(tmp_path)
+    assessment, items, variants, mechs = _setup()
+    cfg = DocUploadConfig(run_id="du-ok", models=["fake-a"], results_dir=str(tmp_path))
+    run_doc_upload(client, assessment, items, variants, mechs, cfg)
+    run_dir = tmp_path / "runs" / "du-ok"
+    assert "hit max_tokens" not in (run_dir / "errors.jsonl").read_text(encoding="utf-8")
+    assert "n_truncated_replies: 0" in (run_dir / "config.yaml").read_text(encoding="utf-8")
+
+
+def test_script_passes_max_tokens(tmp_path, monkeypatch):
+    import sys
+
+    import scripts.run_doc_upload as script
+
+    seen = {}
+    monkeypatch.setattr(script, "run_doc_upload",
+                        lambda client, a, i, v, m, cfg: seen.setdefault("cfg", cfg) and [])
+    monkeypatch.setattr(sys, "argv", ["run_doc_upload.py", "--stub", "--fake",
+                                      "--max-tokens", "4000", "--run-id", "x"])
+    script.main()
+    assert seen["cfg"].max_tokens == 4000
+
+
+# ---------- chunked documents ----------
+def test_chunked_documents_keep_the_variant_split():
+    assessment, items, variants, _ = _setup()  # 4 items; q1 has 2 variants, the rest 1
+    whole = build_documents(assessment, items, variants)
+    assert [d.pdf for d in build_documents(assessment, items, variants, None)] == [
+        d.pdf for d in whole]                       # default unchanged, so the cache still hits
+    docs = build_documents(assessment, items, variants, questions_per_doc=2)
+    assert [(d.k, d.chunk, d.variant_k, len(d.questions)) for d in docs] == [
+        (0, 0, 0, 2), (1, 0, 1, 2), (2, 1, 0, 2)]    # chunk 1 has no item with a 2nd variant
+    assert docs[0].questions[1][1].mechanism == "decoy"
+    assert docs[1].questions[1][1].mechanism is None  # q1's plain variant, same chunk
+    used = {v.variant_id for d in docs for _, v in d.questions.values()}
+    assert used == {v.variant_id for d in whole for _, v in d.questions.values()}
+    with pytest.raises(ValueError):
+        build_documents(assessment, items, variants, questions_per_doc=0)
+
+
+def test_questions_per_doc_for():
+    from adr.harness.doc_upload import questions_per_doc_for
+
+    assert questions_per_doc_for(200, 10) == 20
+    assert questions_per_doc_for(205, 10) == 21
+    with pytest.raises(ValueError):
+        questions_per_doc_for(200, 0)
+
+
+def test_chunked_run_gives_each_document_its_own_session(tmp_path):
+    import yaml
+
+    client, fake = make_client(tmp_path)
+    assessment, items, variants, mechs = _setup()
+    cfg = DocUploadConfig(run_id="du-q2", models=["fake-a"], results_dir=str(tmp_path),
+                          questions_per_doc=2)
+    rows = run_doc_upload(client, assessment, items, variants, mechs, cfg)
+    assert fake.calls == 3
+    assert len(rows) == 6                            # 3 documents x 2 questions
+    assert len({r.session_id for r in rows}) == 3
+    config = yaml.safe_load((tmp_path / "runs" / "du-q2" / "config.yaml").read_text())
+    assert (config["questions_per_doc"], config["n_documents"], config["n_chunks"]) == (2, 3, 2)
+    resp = [json.loads(x) for x in (tmp_path / "runs" / "du-q2" / "responses.jsonl")
+            .read_text().splitlines()]
+    assert {r["chunk"] for r in resp} == {0, 1}
+
+
+@pytest.mark.parametrize(("flags", "expected"), [
+    ([], None), (["--questions-per-doc", "3"], 3), (["--docs-per-bank", "2"], 2)])
+def test_script_passes_chunk_size(monkeypatch, flags, expected):
+    import sys
+
+    import scripts.run_doc_upload as script
+
+    seen = {}
+    monkeypatch.setattr(script, "run_doc_upload",
+                        lambda client, a, i, v, m, cfg: seen.setdefault("cfg", cfg) and [])
+    monkeypatch.setattr(sys, "argv", ["run_doc_upload.py", "--stub", "--fake", *flags,
+                                      "--run-id", "x"])
+    script.main()
+    assert seen["cfg"].questions_per_doc == expected   # stub has 4 items: 2 docs -> 2 each
