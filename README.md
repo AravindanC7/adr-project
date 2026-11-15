@@ -82,6 +82,18 @@ applies the agreed add-one smoothing, and computes 95% intervals by resampling w
 It emits a mechanism/item-type cell only when both AI and human evidence exist; it never fills a
 missing class with invented observations.
 
+Before the pilot rows arrive, build the provisional AI side explicitly:
+
+```bash
+python scripts/build_failure_map.py results/outcomes --version v1-ai-only \
+  --output results/failure_map/v1-ai-only.json --ai-only
+```
+
+AI-only cells have real AI counts and confidence intervals, but zero human counts, no human
+confidence intervals, and prior-only human probabilities required by the shared contract. The
+output is marked provisional and must not be used by the router. Rebuild without `--ai-only`
+when the pilot outcome rows are available.
+
 ### Prepare the locked GSS 2018 bank
 
 Download NORC's official `2018_stata.zip` to `data/raw/gss/`, extract `GSS2018.dta` into

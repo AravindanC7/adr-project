@@ -21,6 +21,14 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--bootstrap", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=34)
     ap.add_argument("--note", default="")
+    ap.add_argument(
+        "--ai-only",
+        action="store_true",
+        help=(
+            "allow provisional cells without human rows; their human side is prior-only and "
+            "must not be used by the router"
+        ),
+    )
     return ap
 
 
@@ -33,6 +41,7 @@ def main() -> None:
         n_bootstrap=args.bootstrap,
         seed=args.seed,
         note=args.note,
+        ai_only=args.ai_only,
     )
     path = failure_map.save(args.output)
     print(
