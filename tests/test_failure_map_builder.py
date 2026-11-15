@@ -167,6 +167,14 @@ def test_builder_rejects_incomplete_frames() -> None:
         build_failure_map(pd.DataFrame({"outcome": []}), version="v1")
 
 
+def test_builder_rejects_dry_run_rows() -> None:
+    frame = _frame()
+    frame.loc[frame.index[0], "data_origin"] = "dry_run"
+
+    with pytest.raises(ValueError, match="dry_run rows are not evidence"):
+        build_failure_map(frame, version="v1", n_bootstrap=10)
+
+
 def test_writes_pooled_svg_heatmap(tmp_path) -> None:
     failure_map = build_failure_map(_frame(), version="v1", n_bootstrap=10)
 

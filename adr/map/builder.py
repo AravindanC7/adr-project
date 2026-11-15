@@ -99,6 +99,7 @@ def build_failure_map(
         "mechanism",
         "item_type",
         "outcome",
+        "data_origin",
         "attack_mode",
         "attacker_level",
         "heldout_model",
@@ -109,6 +110,13 @@ def build_failure_map(
         raise ValueError(f"outcome frame is missing columns: {missing}")
     if prior <= 0:
         raise ValueError("prior must be positive")
+    dry_run = frame[frame["data_origin"].eq("dry_run")]
+    if not dry_run.empty:
+        run_ids = sorted(str(value) for value in dry_run["run_id"].unique())
+        raise ValueError(
+            "dry_run rows are not evidence for a failure-mode map; "
+            f"select explicit validated outcome files instead (run_ids={run_ids})"
+        )
 
     eligible = _eligible_rows(frame)
     cells: list[MapCell] = []
