@@ -18,7 +18,9 @@ Rows per answered item (all respondent_kind="human", data_origin=pilot|dry_run)
   * the opinion trap for survey items with a human distribution in the bank
     (implausible / plausible), scored here because the server doesn't serve it yet;
   * for reverse-keyed IPIP pairs, the SECOND item of a pair is "contradiction" when both
-    answers lean the same way (both agree, or both disagree). PROVISIONAL rule: the mechanism
+    answers lean the same way (both agree, or both disagree); if either answer is neutral,
+    missing, non-integer or out of range the second item gets no opinion-trap row at all
+    (no observation). PROVISIONAL rule: the mechanism
     itself doesn't score pairs yet (adr/mechanisms/opinion_trap.py), so Archana should confirm
     it before #40 uses it. --no-pairs turns it off.
 
@@ -86,18 +88,42 @@ def leaning(answer: int, n_options: int) -> int:
     return 0 if answer == middle else (1 if answer > middle else -1)
 
 
-def outcome_row(run_id: str, origin: str, sid: str, item: Item, variant_id: str, outcome: str,
-                where: str) -> OutcomeRow:
+def pair_leaning(answer: Any, n_options: int) -> int:
+    """leaning() for one answer of a reverse-keyed pair; 0 when neutral, missing, non-integer or
+    out of range, so the pair gives no observation."""
+    if type(answer) is not int or not 0 <= answer < n_options:
+        return 0
+    return leaning(answer, n_options)
+
+
+def outcome_row(
+    run_id: str, origin: str, sid: str, item: Item, variant_id: str, outcome: str, where: str
+) -> OutcomeRow:
     return OutcomeRow(
-        run_id=run_id, session_id=sid, respondent_kind="human", data_origin=origin,
-        assessment_type=item.assessment_type, item_type=item.item_type, item_id=item.item_id,
-        split=item.split, mechanism=parse_variant_id(variant_id)[1], variant_id=variant_id,
-        outcome=outcome, raw_ref=where,
+        run_id=run_id,
+        session_id=sid,
+        respondent_kind="human",
+        data_origin=origin,
+        assessment_type=item.assessment_type,
+        item_type=item.item_type,
+        item_id=item.item_id,
+        split=item.split,
+        mechanism=parse_variant_id(variant_id)[1],
+        variant_id=variant_id,
+        outcome=outcome,
+        raw_ref=where,
     )
 
 
-def clean(data_dir: Path, bank_path: Path, *, origin: str, run_id: str, pairs: bool = True,
-          exclude: frozenset[str] = frozenset()) -> tuple[list[OutcomeRow], Report]:
+def clean(
+    data_dir: Path,
+    bank_path: Path,
+    *,
+    origin: str,
+    run_id: str,
+    pairs: bool = True,
+    exclude: frozenset[str] = frozenset(),
+) -> tuple[list[OutcomeRow], Report]:
     items, dists, _ = load_bank(bank_path)
     trap = OpinionTrapMechanism(dists)
     report = Report()
@@ -137,16 +163,25 @@ def clean(data_dir: Path, bank_path: Path, *, origin: str, run_id: str, pairs: b
 
             if trap.applies_to(item):
                 rendered = trap.generate(item, 0)
-                response = Response(session_id=sid, item_id=item.item_id,
-                                    variant_id=rendered.variant_id, answer=rec["answer"])
+                response = Response(
+                    session_id=sid,
+                    item_id=item.item_id,
+                    variant_id=rendered.variant_id,
+                    answer=rec["answer"],
+                )
                 outcome = trap.score(rendered, response, None)
                 partner = item.reverse_keyed_with
-                if pairs and partner and partner in answers and outcome != "implausible":
-                    a, b = rec["answer"], answers[partner]
+                if pairs and partner and partner in answers:
                     n = len(item.options or [])
-                    if type(a) is int and type(b) is int and leaning(a, n) == leaning(b, n) != 0:
-                        outcome = "contradiction"
-                found.append((rendered.variant_id, outcome))
+                    sides = [pair_leaning(x, n) for x in (rec["answer"], answers[partner])]
+                    if 0 in sides:
+                        pass  # neutral or invalid answer in the pair: no observation, no row
+                    elif sides[0] == sides[1] and outcome != "implausible":
+                        found.append((rendered.variant_id, "contradiction"))
+                    else:
+                        found.append((rendered.variant_id, outcome))
+                else:
+                    found.append((rendered.variant_id, outcome))
 
             for variant_id, outcome in found:
                 row = outcome_row(run_id, origin, sid, item, variant_id, outcome, where)
@@ -156,9 +191,14 @@ def clean(data_dir: Path, bank_path: Path, *, origin: str, run_id: str, pairs: b
             if item.item_type == "open_text" and isinstance(rec["answer"], str):
                 hits = [k for k, rx in PERSONAL.items() if rx.search(rec["answer"])]
                 if hits:
-                    report.flagged.append({"session": sid, "item": item.item_id,
-                                           "looks_like": ", ".join(hits),
-                                                                  "where": where})
+                    report.flagged.append(
+                        {
+                            "session": sid,
+                            "item": item.item_id,
+                            "looks_like": ", ".join(hits),
+                            "where": where,
+                        }
+                    )
     return rows, report
 
 
@@ -173,21 +213,36 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--origin", choices=["pilot", "dry_run"], default="pilot")
     p.add_argument("--run-id", required=True)
     p.add_argument("--out", type=Path, default=ROOT / "results")
-    p.add_argument("--exclude", action="append", default=[], metavar="CODE",
-                   help="session code to drop (repeatable)")
+    p.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="CODE",
+        help="session code to drop (repeatable)",
+    )
     p.add_argument("--no-pairs", action="store_true", help="don't score IPIP pair contradictions")
     args = p.parse_args(argv)
 
-    rows, rep = clean(args.data, args.bank, origin=args.origin, run_id=args.run_id,
-                      pairs=not args.no_pairs, exclude=frozenset(args.exclude))
+    rows, rep = clean(
+        args.data,
+        args.bank,
+        origin=args.origin,
+        run_id=args.run_id,
+        pairs=not args.no_pairs,
+        exclude=frozenset(args.exclude),
+    )
     out = write_outcomes(rows, args.out / "outcomes" / f"{args.run_id}.parquet")
     run_dir = args.out / "runs" / args.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     config = {
-        "step": "#39 pilot cleaning", "run_id": args.run_id, "data_origin": args.origin,
-        "bank": str(args.bank.name), "bank_sha256_12": file_hash(args.bank),
+        "step": "#39 pilot cleaning",
+        "run_id": args.run_id,
+        "data_origin": args.origin,
+        "bank": str(args.bank.name),
+        "bank_sha256_12": file_hash(args.bank),
         "pair_contradictions": not args.no_pairs,
-        "session_files": rep.files, "sessions_used": len(rep.used),
+        "session_files": rep.files,
+        "sessions_used": len(rep.used),
         "dropped": rep.dropped,
         "consent_versions": dict(rep.consent_versions),
         "rows": len(rows),
