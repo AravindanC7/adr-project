@@ -137,6 +137,14 @@ def test_parser_uses_locked_asurre_holdout_by_default():
     args = parser().parse_args(["--datasets", "mmlu", "arc", "ipip"])
     assert args.datasets == ["mmlu", "arc", "ipip"]
     assert args.heldout_asurre_source == LOCKED_HELDOUT_ASURRE_SOURCE
+    assert args.ipip_limit is None
+    assert args.gss_limit is None
+
+
+def test_parser_accepts_survey_smoke_limits():
+    args = parser().parse_args(["--ipip-limit", "10", "--gss-limit", "10"])
+    assert args.ipip_limit == 10
+    assert args.gss_limit == 10
 
 
 def test_data_decisions_match_locked_asurre_default():

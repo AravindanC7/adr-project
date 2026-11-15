@@ -229,6 +229,14 @@ def build(args: argparse.Namespace) -> dict[str, object]:
 
     if "ipip" in selected:
         ipip_items, ipip_distributions = load_ipip(args.ipip_data, args.ipip_codebook)
+        if args.ipip_limit is not None:
+            ipip_items = stable_sample(ipip_items, args.ipip_limit, args.seed)
+            selected_distribution_keys = {item.human_dist_key for item in ipip_items}
+            ipip_distributions = [
+                distribution
+                for distribution in ipip_distributions
+                if distribution.key in selected_distribution_keys
+            ]
         opinion = OpinionTrapMechanism(ipip_distributions)
         banks.append(
             make_bank(
@@ -244,6 +252,14 @@ def build(args: argparse.Namespace) -> dict[str, object]:
 
     if "gss" in selected:
         gss_items, gss_distributions = load_gss(args.gss_data, args.gss_manifest)
+        if args.gss_limit is not None:
+            gss_items = stable_sample(gss_items, args.gss_limit, args.seed)
+            selected_distribution_keys = {item.human_dist_key for item in gss_items}
+            gss_distributions = [
+                distribution
+                for distribution in gss_distributions
+                if distribution.key in selected_distribution_keys
+            ]
         opinion = OpinionTrapMechanism(gss_distributions)
         banks.append(
             make_bank(
@@ -287,8 +303,8 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         "quiz-mmlu-200": args.mmlu_limit,
         "quiz-arc-200": args.arc_limit,
         "survey-opinionqa-200": args.opinionqa_limit,
-        "survey-ipip": None,
-        "survey-gss": None,
+        "survey-ipip": args.ipip_limit,
+        "survey-gss": args.gss_limit,
         "assignment-asurre-train": args.asurre_limit,
     }
     return write_bundle(
@@ -329,12 +345,14 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--ipip-codebook", type=Path, default=Path("data/raw/ipip/BIG5/BIG5/codebook.txt")
     )
+    ap.add_argument("--ipip-limit", type=int)
     ap.add_argument("--gss-data", type=Path, default=Path("data/raw/gss/gss.csv"))
     ap.add_argument(
         "--gss-manifest",
         type=Path,
         default=Path("configs/gss_2018_manifest.json"),
     )
+    ap.add_argument("--gss-limit", type=int)
     ap.add_argument("--asurre-config-dir", type=Path, default=Path("data/raw/asurre/configs"))
     ap.add_argument("--asurre-limit", type=int, default=100)
     ap.add_argument(
