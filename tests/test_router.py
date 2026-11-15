@@ -92,9 +92,26 @@ def test_update_moves_score_and_status(setup):
     assert s3.score < 0
 
 
+@pytest.mark.parametrize("cls", [SPRTRouter, RandomCheckRouter])
+def test_outcome_none_means_shown_with_nothing_to_score(setup, cls):
+    fmap, assessment, items, variants = setup
+    r = cls(items, variants, fmap)
+    state, _ = r.start(assessment, "s", seed=0)
+    state = r.update(state, make_variant_id("handwritten:mcq0", "decoy"), "picked_decoy")
+    trapped = make_variant_id("handwritten:mcq1", "decoy")
+    after = r.update(state, trapped, None)                  # NoObservation on a trapped variant
+    assert trapped in after.served                          # the real variant, not a plain one
+    assert after.score == state.score and after.status == state.status
+    assert after.contrib == state.contrib
+    assert after.history[-1] == (trapped, "none", 0.0)
+    while (choice := r.next(after)) is not None:            # never offered again
+        assert choice.item_id != "handwritten:mcq1"
+        after = r.update(after, choice.variant_id, None)
+
+
 def test_review_ends_session_and_cleared_serves_plain(setup):
     fmap, assessment, items, variants = setup
-    r = SPRTRouter(items, variants, fmap, RouterConfig(mech_cap=None, beta=0.2))
+    r = SPRTRouter(items, variants, fmap, RouterConfig(mech_cap_frac=None, beta=0.2))
     state, _ = r.start(assessment, "s", seed=0)
     for i in range(3):
         state = r.update(state, make_variant_id(f"handwritten:mcq{i}", "decoy"), "picked_decoy")
@@ -110,12 +127,26 @@ def test_review_ends_session_and_cleared_serves_plain(setup):
 
 def test_mech_cap_bounds_one_checks_total(setup):
     fmap, assessment, items, variants = setup
-    r = SPRTRouter(items, variants, fmap, RouterConfig(mech_cap=2.0))
+    r = SPRTRouter(items, variants, fmap, RouterConfig(mech_cap_frac=0.4))
+    assert math.isclose(r.mech_cap, 0.4 * r.A)
     state, _ = r.start(assessment, "s", seed=0)
     for i in range(4):
         state = r.update(state, make_variant_id(f"handwritten:open{i}", "style"), "high")
-    assert math.isclose(state.contrib["style"], 2.0)
-    assert math.isclose(state.score, 2.0)
+    assert math.isclose(state.contrib["style"], r.mech_cap)
+    assert math.isclose(state.score, r.mech_cap)
+
+
+def test_mech_cap_is_a_fraction_of_a_and_follows_the_upper_override(setup):
+    fmap, _, items, variants = setup
+    default = SPRTRouter(items, variants, fmap)
+    a, _ = wald_thresholds(0.01, 0.05)
+    assert math.isclose(default.mech_cap, 0.65 * a)                  # ~2.96 at A = 4.55
+    assert math.isclose(0.65 * wald_thresholds(0.01, 0.01)[0], 3.0, abs_tol=0.02)  # old 3.0
+    moved = SPRTRouter(items, variants, fmap, RouterConfig(upper=8.0))
+    assert moved.A == 8.0 and math.isclose(moved.mech_cap, 0.65 * 8.0)
+    assert SPRTRouter(items, variants, fmap, RouterConfig(mech_cap_frac=None)).mech_cap is None
+    with pytest.raises(ValueError, match="mech_cap_frac"):
+        SPRTRouter(items, variants, fmap, RouterConfig(mech_cap_frac=0.0))
 
 
 def test_every_item_is_shown_once(setup):
