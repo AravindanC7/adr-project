@@ -28,11 +28,11 @@ pytest                                                    # all tests should pas
 | Copy-paste attacker (#9) | `adr/harness/copy_paste.py`, `prompts.py`, `parse.py` | Levels L0, L1, L2, L4. L3 (retry) comes with step #36. |
 | Document-upload attacker (#20) | `adr/harness/doc_upload.py`, `pdf_render.py` | Whole assessment as one PDF, traps in the invisible text layer. Anthropic, OpenAI, Google only. |
 | Router prototype (#13) | `adr/router/` | SPRT score, Chernoff-rule check selection, burden and false-flag penalties, per-mechanism cap, escalation, random tie-breaks. |
-| Early baselines | `adr/baselines/simple.py` | Random check per item; single fixed mechanism. |
+| Baselines 1–4 (#32) | `adr/baselines/` | Best single mechanism (train map), all checks, fixed plan, random. In display order, never clear early, pause for review like the router. |
 | Replay on logged outcomes (#27) | `adr/replay/` | Each simulated respondent copies one real logged session; fallbacks and map draws are counted. Metrics with bootstrap CIs over donor sessions. Three splits: train (map), calibration (default evaluation, 30% of items), held-out (only with `--final`). Uses a **temporary** quick map until #34. |
 | Synthetic test data | `adr/router/synthetic.py` | **Invented numbers** for developing the router. Never report these. |
 
-Not started: browser agent (#22), the other baselines, and everything Archana and Harshini own.
+Not started: browser agent (#22), baseline 5 (#33), and everything Archana and Harshini own.
 
 ## Try it
 
@@ -53,6 +53,13 @@ python scripts/router_synthetic_demo.py --passive     # also observe behaviour o
 # Replay the router and baselines on logged outcomes (a smoke test on our 4 items so far):
 python scripts/run_replay.py --stub \
     --outcomes results/outcomes/first-real-L0.parquet results/outcomes/first-real-du-L0.parquet
+# add --compare to run the router and baselines 1-4 on the same respondents and write
+# comparison.csv / comparison.md / budget_curve.csv; then plot the budget curve:
+python scripts/run_replay.py --synthetic quiz --compare --n 500 --run-id budget-synthetic-quiz
+pip install -e ".[plot]"
+python scripts/plot_budget_curve.py results/runs/budget-synthetic-quiz/budget_curve.csv
+# what limits the router on one assessment (see docs/notes/router_synthetic_diagnosis.md):
+python scripts/diagnose_router.py --synthetic survey
 ```
 
 ```bash

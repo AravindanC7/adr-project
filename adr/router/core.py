@@ -44,13 +44,25 @@ class RouterConfig:
     lambda_burden: float = 0.5     # penalty per unit of respondent burden
     lambda_fp: float = 0.05        # penalty per unit of honest-person false-flag risk
     escalated_burden_scale: float = 0.25  # when escalated, burden matters less: harder checks OK
-    mech_cap: float | None = 3.0   # max |total| any one mechanism may add (nats); None = no cap
+    # Max total any one mechanism may add, as a fraction of the review threshold A: cap = frac * A
+    # nats, so it moves with A when A is recalibrated (#42). 0.65 = the old fixed 3.0 at A = 4.60
+    # (2.96 at the default A = 4.55). Below 1, no single mechanism can trigger review on its own.
+    # None = no cap.
+    mech_cap_frac: float | None = 0.65
     objective: str = "kl"          # "kl" (Chernoff's rule) or "info_gain"; see selection.py
     tie_eps: float = 0.01          # candidates within this of the best are a tie
     allow_reorder: bool = True     # may serve items out of display order
     attack_mode: str | None = None # which failure-map cells to use; None = pooled over modes
     upper: float | None = None     # override A (after empirical calibration, step #42)
     lower: float | None = None     # override B
+
+
+def eligible_checks(item: Item, variants: list[RenderedItem]) -> list[RenderedItem]:
+    """The variants any policy may serve as a check on `item`: an active mechanism that the item
+    lists in eligible_mechanisms. The router and every baseline use this one rule, so a
+    comparison never gives one policy a check the others can't use."""
+    allowed = set(item.eligible_mechanisms) & set(ACTIVE_MECHANISMS)
+    return [v for v in variants if v.mechanism in allowed]
 
 
 class SPRTRouter:
@@ -68,6 +80,10 @@ class SPRTRouter:
         a, b = wald_thresholds(config.alpha, config.beta)
         self.A = config.upper if config.upper is not None else a
         self.B = config.lower if config.lower is not None else b
+        if config.mech_cap_frac is not None and config.mech_cap_frac <= 0:
+            raise ValueError("mech_cap_frac must be > 0 (or None for no cap)")
+        # Per-mechanism cap in nats, from A after any `upper` override.
+        self.mech_cap = None if config.mech_cap_frac is None else config.mech_cap_frac * self.A
         self._assessments: dict[str, Assessment] = {}
         self._variant_index: dict[str, RenderedItem] = {
             v.variant_id: v for vs in variants.values() for v in vs
@@ -116,7 +132,7 @@ class SPRTRouter:
             cell = self.fmap.lookup(mech, self.items[item_id].item_type, self.cfg.attack_mode)
             if cell is not None:
                 total = new.contrib.get(mech, 0.0)
-                delta = capped_delta(total, cell.llr(outcome), self.cfg.mech_cap)
+                delta = capped_delta(total, cell.llr(outcome), self.mech_cap)
                 new.contrib[mech] = total + delta
         new.score += delta
         new.history.append((variant_id, outcome, delta))
@@ -156,6 +172,10 @@ class SPRTRouter:
             return "escalated"
         return "active"
 
+    def checks(self, item_id: str) -> list[RenderedItem]:
+        """This item's servable checks (eligible_checks), in variant-file order."""
+        return eligible_checks(self.items[item_id], self.variants.get(item_id, []))
+
     def _plain(self, item_id: str) -> Choice:
         plain = [v for v in self.variants.get(item_id, []) if v.mechanism is None]
         vid = plain[0].variant_id if plain else make_variant_id(item_id, None)
@@ -171,11 +191,9 @@ class SPRTRouter:
         out: list[tuple[float, RenderedItem]] = []
         for item_id in pool:
             item = self.items[item_id]
-            for v in self.variants.get(item_id, []):
-                if v.mechanism not in ACTIVE_MECHANISMS:
-                    continue
-                if self.cfg.mech_cap is not None and (
-                    state.contrib.get(v.mechanism, 0.0) >= self.cfg.mech_cap
+            for v in self.checks(item_id):
+                if self.mech_cap is not None and (
+                    state.contrib.get(v.mechanism, 0.0) >= self.mech_cap
                 ):
                     continue  # this check can't add more evidence toward AI
                 cell = self.fmap.lookup(v.mechanism, item.item_type, self.cfg.attack_mode)
