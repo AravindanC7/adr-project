@@ -39,6 +39,7 @@ from adr.harness.copy_paste import plain_variant
 from adr.harness.doc_upload import DocUploadConfig, questions_per_doc_for, run_doc_upload
 from adr.harness.llm_client import FakeProvider, LLMClient, ModelSpec
 from adr.harness.registry import load_mechanisms
+from adr.mechanisms.style import StyleMechanism, load_style_profile
 
 
 def gullible(system, messages, attachments=None):
@@ -68,6 +69,11 @@ def main() -> None:
     ap.add_argument("--mechanisms", default="", help="comma list, e.g. decoy,canary")
     ap.add_argument("--models", default="", help="comma list of names from configs/models.yaml")
     ap.add_argument("--config", default="configs/models.yaml")
+    ap.add_argument(
+        "--style-profile",
+        default="data/processed/runs_v1/style_profile.json",
+        help="fitted profile required when --mechanisms includes style",
+    )
     ap.add_argument("--level", default="L0", choices=["L0", "L1", "L2", "L4"])
     ap.add_argument("--samples", type=int, default=1)
     ap.add_argument("--temperature", type=float, default=0.0)
@@ -110,6 +116,11 @@ def main() -> None:
         for v in read_jsonl(args.variants, RenderedItem):
             variants.setdefault(v.item_id, []).append(v)
         mechanisms = load_mechanisms([m for m in args.mechanisms.split(",") if m])
+        if "style" in mechanisms:
+            style = mechanisms["style"]
+            if not isinstance(style, StyleMechanism):
+                raise TypeError("registered style mechanism has the wrong type")
+            style.configure(load_style_profile(args.style_profile))
 
     if args.fake:
         client = LLMClient(

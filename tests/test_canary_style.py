@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from adr.contracts import Item, NoObservation, Response
 from adr.mechanisms.canary import MECHANISM as CANARY
-from adr.mechanisms.style import StyleMechanism, fit_style_profile
+from adr.mechanisms.style import StyleMechanism, fit_style_profile, load_style_profile
 
 
 def _open_item() -> Item:
@@ -171,3 +173,46 @@ def test_style_never_generates_an_active_variant() -> None:
 
     with pytest.raises(RuntimeError, match="passive"):
         mechanism.generate(_open_item(), seed=0)
+
+
+def test_style_profile_round_trips_from_audit_document(tmp_path) -> None:
+    fitted = fit_style_profile(_training_samples())
+    path = tmp_path / "style.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": "style-profile-v1",
+                "profile": {
+                    "feature_means": fitted.feature_means,
+                    "feature_stds": fitted.feature_stds,
+                    "mid_threshold": fitted.mid_threshold,
+                    "high_threshold": fitted.high_threshold,
+                    "n_training": fitted.n_training,
+                    "sources": fitted.sources,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_style_profile(path) == fitted
+
+
+def test_style_profile_loader_rejects_wrong_feature_count(tmp_path) -> None:
+    path = tmp_path / "style.json"
+    path.write_text(
+        json.dumps(
+            {
+                "feature_means": [1.0],
+                "feature_stds": [1.0],
+                "mid_threshold": 1.0,
+                "high_threshold": 2.0,
+                "n_training": 20,
+                "sources": ["handwritten"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="five features"):
+        load_style_profile(path)

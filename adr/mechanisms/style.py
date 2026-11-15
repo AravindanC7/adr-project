@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from statistics import fmean, pstdev
+from typing import Any
 
 from adr.contracts import Item, NoObservation, RenderedItem, Response, Telemetry
 
@@ -24,6 +27,36 @@ class StyleProfile:
     high_threshold: float
     n_training: int
     sources: tuple[str, ...]
+
+
+def load_style_profile(path: str | Path) -> StyleProfile:
+    """Load a profile written by ``scripts/prepare_style_profile.py``."""
+
+    source = Path(path)
+    document: Any = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise TypeError(f"{source}: style profile must be a JSON object")
+    values = document.get("profile", document)
+    if not isinstance(values, dict):
+        raise TypeError(f"{source}: profile must be a JSON object")
+    try:
+        profile = StyleProfile(
+            feature_means=tuple(float(value) for value in values["feature_means"]),
+            feature_stds=tuple(float(value) for value in values["feature_stds"]),
+            mid_threshold=float(values["mid_threshold"]),
+            high_threshold=float(values["high_threshold"]),
+            n_training=int(values["n_training"]),
+            sources=tuple(str(value) for value in values["sources"]),
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"{source}: invalid style profile: {error}") from error
+    if len(profile.feature_means) != 5 or len(profile.feature_stds) != 5:
+        raise ValueError(f"{source}: style profile must contain five features")
+    if profile.n_training < 20:
+        raise ValueError(f"{source}: style profile needs at least 20 training responses")
+    if profile.mid_threshold > profile.high_threshold:
+        raise ValueError(f"{source}: mid threshold cannot exceed high threshold")
+    return profile
 
 
 def fit_style_profile(samples: Iterable[tuple[Item, str]]) -> StyleProfile:
