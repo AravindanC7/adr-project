@@ -14,6 +14,6 @@ Doc upload & MMLU & \begin{tabular}[c]{@{}c@{}}77.5 {\tiny(200)}\\{\scriptsize[7
 Doc upload & ARC & \begin{tabular}[c]{@{}c@{}}31.5 {\tiny(200)}\\{\scriptsize[25.5, 38.0]}\end{tabular} & \begin{tabular}[c]{@{}c@{}}30.1 {\tiny(193)}\\{\scriptsize[23.8, 36.3]}\end{tabular} & \begin{tabular}[c]{@{}c@{}}71.4 {\tiny(7)}\\{\scriptsize[42.9, 100.0]}\end{tabular} \\
 \bottomrule
 \end{tabular}
-\caption{Share of decoy-variant answers in which gpt-mini (L0) picked the planted decoy, \% with 95\% CI (two-level bootstrap over items, then sessions within items; 2000 reps). Numbers in parentheses are items per cell; the ``doesn't know'' cells are small, and a cell where every answer picked the decoy has a zero-width interval. Copy-paste: 5 sessions at temperature 0.7; doc upload: 20 questions per PDF. ``Knows answer'': the model answered the plain version correctly at temperature 0.}
+\caption{Share of decoy-variant answers in which gpt-mini (L0) picked the planted decoy, \% with 95\% CI (two-level bootstrap over items, then sessions within items; 2000 reps). Numbers in parentheses are items per cell; the ``doesn't know'' cells are small, and a cell where every answer picked the decoy has a zero-width interval. Copy-paste: 5 sessions at temperature 0.7; doc upload: 20 questions per PDF. ``Knows answer'': the model answered the plain version correctly in the temperature-0 copy-paste run; the same per-item split is used for the doc-upload cells. n/a: no items in that group.}
 \label{tab:decoy-rates}
 \end{table}

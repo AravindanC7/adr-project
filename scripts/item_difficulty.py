@@ -10,7 +10,13 @@ Columns
   cp_s5_n            how many plain answers that run has for this item (5 if none failed)
   du_correct         plain answer correct in v1-du-L0-<bank> (one 200-question PDF)
   du_q20_correct     plain answer correct in v1-du-L0-<bank>-q20 (20-question PDFs)
-  knows              the split to use: cp_t0_correct (the deterministic copy-paste answer)
+  knows              the split to use: cp_t0_correct (the deterministic copy-paste answer).
+                     It splits the doc-upload cells too: knowing is judged once per item.
+
+Answers of None (the call failed, or the reply could not be parsed as an option) are skipped:
+they say nothing about whether the model knows the item, so they are neither right nor wrong.
+A column is blank when a run has no real answer for the item. The script prints how many None
+answers each run had.
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import yaml
@@ -32,18 +38,23 @@ RUNS = {  # column -> run id pattern
 }
 
 
-def plain_answers(run_dir: Path) -> dict[tuple[str, str], list]:
-    """(model, item_id) -> list of answers to the plain variant."""
+def plain_answers(run_dir: Path) -> tuple[dict[tuple[str, str], list], Counter]:
+    """(model, item_id) -> the real (non-None) answers to the plain variant, and the number of
+    None answers per (model, "plain" | "decoy")."""
     out: dict[tuple[str, str], list] = defaultdict(list)
+    n_none: Counter = Counter()
     path = run_dir / "responses.jsonl"
     if not path.exists():
-        return out
+        return out, n_none
     with path.open(encoding="utf-8") as f:
         for line in f:
             r = json.loads(line)
-            if "|plain|" in r["variant_id"]:
+            plain = "|plain|" in r["variant_id"]
+            if r["answer"] is None:
+                n_none[(r["model"], "plain" if plain else "decoy")] += 1
+            elif plain:
                 out[(r["model"], r["item_id"])].append(r["answer"])
-    return out
+    return out, n_none
 
 
 def main() -> None:
@@ -68,12 +79,17 @@ def main() -> None:
         models: set[str] = set()
         for col, pattern in RUNS.items():
             run_dir = Path("results/runs") / pattern.format(bank=bank)
-            answers[col] = plain_answers(run_dir)
+            answers[col], n_none = plain_answers(run_dir)
             cfg = run_dir / "config.yaml"
             if cfg.exists():
                 c = yaml.safe_load(cfg.read_text(encoding="utf-8"))
                 models |= set(c["models"])
                 heldout.update({m: (m in c.get("heldout_models", [])) for m in c["models"]})
+                for m in c["models"]:
+                    print(
+                        f"{run_dir.name:28s} {m:14s} None answers: "
+                        f"plain {n_none[(m, 'plain')]}, decoy {n_none[(m, 'decoy')]}"
+                    )
         for model in sorted(models):
             for item_id in assessment["item_ids"]:
                 key = items[item_id]["correct_option"]

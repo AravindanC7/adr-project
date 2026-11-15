@@ -11,7 +11,8 @@ decoy PDF, so the inner level has one observation per item and only items vary.
 
 Each cell is also split by `knows` from results/runs/v1-item-difficulty.csv (made by
 scripts/item_difficulty.py): 1 if the model answered the item's PLAIN version correctly in the
-temperature-0 copy-paste run.
+temperature-0 copy-paste run. The same per-item split is used for the doc-upload cells.
+An empty group (e.g. the model knows every item) is NaN in the CSV and "n/a" in the table/plot.
 
 Run from the repo root (needs results/outcomes/ and the difficulty CSV):
     python scripts/m2_decoy_figure.py
@@ -48,8 +49,14 @@ SEED = 576
 
 
 def two_level_bootstrap(per_item: list[np.ndarray], n_boot: int, rng) -> np.ndarray:
-    """Bootstrap rates: resample items, then each sampled item's observations (sessions)."""
+    """Bootstrap rates: resample items, then each sampled item's observations (sessions).
+
+    Items may have different numbers of observations; an item with one observation always
+    contributes that value. An empty group (no items) gives NaN for every replicate."""
+    per_item = [np.asarray(a, dtype=float) for a in per_item if len(a)]
     n_items = len(per_item)
+    if n_items == 0:
+        return np.full(n_boot, np.nan)
     n_obs = np.array([len(a) for a in per_item])
     width = int(n_obs.max())
     padded = np.full((n_items, width), np.nan)
@@ -79,7 +86,7 @@ def compute(outcomes_dir: Path, difficulty: Path, n_boot: int, seed: int) -> pd.
             sub = df if flag is None else df[df.knows == flag]
             per_item = [g.hit.to_numpy() for _, g in sub.groupby("item_id", sort=True)]
             boot = two_level_bootstrap(per_item, n_boot, rng)
-            lo, hi = np.quantile(boot, [0.025, 0.975])
+            lo, hi = (np.nan, np.nan) if sub.empty else np.quantile(boot, [0.025, 0.975])
             rows.append(
                 {
                     "mode": mode,
@@ -91,7 +98,7 @@ def compute(outcomes_dir: Path, difficulty: Path, n_boot: int, seed: int) -> pd.
                     "n_obs": len(sub),
                     "n_sessions": sub.session_id.nunique(),
                     "picked_decoy": int(sub.hit.sum()),
-                    "rate": sub.hit.mean(),
+                    "rate": sub.hit.mean() if len(sub) else np.nan,
                     "ci_low": lo,
                     "ci_high": hi,
                 }
@@ -132,6 +139,9 @@ def plot(table: pd.DataFrame, out_dir: Path) -> None:
     for j, (key, label, _) in enumerate(GROUPS):
         sub = table[table.group == key].set_index(["mode", "bank"]).loc[cells]
         pos = x + (j - 1) * width
+        for p in pos[sub.rate.isna().to_numpy()]:  # empty group: no bar, say so
+            ax.text(p, 1.5, "n/a", ha="center", va="bottom", rotation=90, fontsize=5.5, color=muted)
+        sub = sub.fillna(0.0)
         ax.bar(
             pos,
             sub.rate * 100,
@@ -185,6 +195,8 @@ def plot(table: pd.DataFrame, out_dir: Path) -> None:
 def latex(table: pd.DataFrame) -> str:
     def cell(r) -> str:
         # Rate (items) on top, CI underneath: keeps the table inside one ACL column.
+        if pd.isna(r.rate):
+            return f"n/a {{\\tiny({r.n_items})}}"
         return (
             "\\begin{tabular}[c]{@{}c@{}}"
             f"{r.rate * 100:.1f} {{\\tiny({r.n_items})}}\\\\"
@@ -223,7 +235,8 @@ def latex(table: pd.DataFrame) -> str:
             "cells are small, and a cell where every answer picked the decoy has a zero-width "
             "interval. Copy-paste: 5 sessions at "
             "temperature 0.7; doc upload: 20 questions per PDF. ``Knows answer'': the model "
-            "answered the plain version correctly at temperature 0.}"
+            "answered the plain version correctly in the temperature-0 copy-paste run; the same "
+            "per-item split is used for the doc-upload cells. n/a: no items in that group.}"
         ),
         "\\label{tab:decoy-rates}",
         "\\end{table}",
