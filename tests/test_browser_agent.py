@@ -55,7 +55,9 @@ def results(tmp_path_factory):
 
 
 def _outcomes(run):
-    return {(r.mechanism, r.outcome) for r in run["rows"] if r.mechanism}
+    """Active checks only (the variant shown); behaviour rows are tested separately."""
+    return {(r.mechanism, r.outcome) for r in run["rows"]
+            if r.mechanism and r.mechanism != "behaviour"}
 
 
 def test_naive_agent_falls_for_decoy_and_canary_through_the_real_page(results):
@@ -90,7 +92,8 @@ def test_clip_aria_hides_traps_from_the_accessibility_snapshot(results):
 
 def test_outcome_rows_validate_and_are_browser_agent_rows(results):
     df = read_outcomes(results["root"] / "outcomes" / "naive.parquet")   # validates every row
-    assert len(df) == len(results["naive"]["rows"]) == 8   # 3 quiz + 5 survey questions
+    assert len(df) == len(results["naive"]["rows"])
+    assert (df.mechanism != "behaviour").sum() == 8        # 3 quiz + 5 survey questions
     assert (df.attack_mode == "browser_agent").all() and (df.respondent_kind == "ai").all()
     assert df.raw_ref.str.startswith("llm-cache:").all()
     config = (results["root"] / "runs" / "naive" / "config.yaml").read_text(encoding="utf-8")
@@ -108,3 +111,32 @@ def test_debug_state_never_leaks_out_of_the_harness(results):
     import os
 
     assert "ADR_DEBUG_STATE" not in os.environ   # switched on only while our app is created
+
+
+def test_behaviour_entries_become_their_own_rows(results):
+    """The server adds a passive item|behaviour entry after an answer (#14). Questions are
+    matched to the active entries; each behaviour entry becomes its own row for that item."""
+    from adr.contracts import OUTCOME_LABELS
+
+    rows = results["naive"]["rows"]
+    behaviour = [r for r in rows if r.mechanism == "behaviour"]
+    active = [r for r in rows if r.mechanism != "behaviour"]
+    assert behaviour, "expected the server's behaviour check to score the agent's answers"
+    assert {r.outcome for r in behaviour} <= set(OUTCOME_LABELS["behaviour"])
+    assert all(r.variant_id == f"{r.item_id}|behaviour|0" for r in behaviour)
+    assert {r.item_id for r in behaviour} <= {r.item_id for r in active}
+    assert len({r.item_id for r in behaviour}) == len(behaviour)   # at most one per item
+    # responses.jsonl pairs each question with its active variant, not a behaviour entry
+    assert all("|behaviour|" not in r["variant_id"] for r in results["naive"]["responses"])
+
+
+def test_split_history():
+    from adr.harness.browser_agent import split_history
+
+    history = [["q1|decoy|0", "picked_decoy", 1.2], ["q1|behaviour|0", "too_fast", 0.4],
+               ["q2|plain|0", "none", 0.0], ["q3|canary|0", "clean", -0.5],
+               ["q3|behaviour|0", "normal", 0.0]]
+    active, passive = split_history(history)
+    assert [e[0] for e in active] == ["q1|decoy|0", "q2|plain|0", "q3|canary|0"]
+    assert passive == {"q1": [("q1|behaviour|0", "too_fast")],
+                       "q3": [("q3|behaviour|0", "normal")]}

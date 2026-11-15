@@ -17,9 +17,10 @@ For each model x sample x assessment, one session:
      creates its own server object, and the server only listens on 127.0.0.1;
   2. per question: observe -> ask the model (copy-paste system prompts per attacker level, plus
      FORMAT_HINT) through the cached LLMClient -> parse_answer -> fill the page -> Next;
-  3. at the finished screen, read GET /session/{id} (SessionState.history: one
-     (variant_id, outcome, delta) per question served) and write one OutcomeRow each, with
-     attack_mode="browser_agent".
+  3. at the finished screen, read GET /session/{id} (SessionState.history) and write one
+     OutcomeRow per question from its active entry (the variant shown), plus one row per
+     passive entry the server added for that item (the behaviour check scores every answer
+     from the page's telemetry), all with attack_mode="browser_agent".
 
 Writes, like run_copy_paste:
   results/outcomes/<run_id>.parquet          the outcome rows
@@ -48,7 +49,14 @@ from typing import Any
 
 import yaml
 
-from adr.contracts import Item, Mechanism, OutcomeRow, parse_variant_id, write_outcomes
+from adr.contracts import (
+    PASSIVE_MECHANISMS,
+    Item,
+    Mechanism,
+    OutcomeRow,
+    parse_variant_id,
+    write_outcomes,
+)
 from adr.contracts.outcome import utc_now
 from adr.harness.copy_paste import _git_commit
 from adr.harness.llm_client import LLMClient, SpendCapExceeded
@@ -315,7 +323,8 @@ def run_browser_agent(
                         state = page_state(base_url, server_sid)
                         rows += _rows(state, questions, items, a, model, spec.heldout, session,
                                       cfg, errors, where)
-                        for q, (variant_id, outcome, _) in zip(questions, state["history"]):
+                        active, _ = split_history(state["history"])
+                        for q, (variant_id, outcome, _) in zip(questions, active):
                             responses.append({**where, **q, "variant_id": variant_id,
                                               "outcome": outcome if q["usable"] else None})
                     if stopped_for_budget:
@@ -362,6 +371,24 @@ def page_state(base_url: str, session_id: str) -> dict[str, Any]:
     return r.json()
 
 
+def split_history(
+    history: list[Any],
+) -> tuple[list[Any], dict[str, list[tuple[str, str]]]]:
+    """Split SessionState.history into the active entries (one per question served, in order)
+    and the passive ones (e.g. behaviour) by item_id. The server adds a passive entry after an
+    answer when that check had something to score, so history can be longer than questions."""
+    active: list[Any] = []
+    passive: dict[str, list[tuple[str, str]]] = {}
+    for entry in history:
+        variant_id, outcome = entry[0], entry[1]
+        item_id, mechanism, _ = parse_variant_id(variant_id)
+        if mechanism in PASSIVE_MECHANISMS:
+            passive.setdefault(item_id, []).append((variant_id, outcome))
+        else:
+            active.append(entry)
+    return active, passive
+
+
 def _rows(
     state: dict[str, Any],
     questions: list[dict],
@@ -374,26 +401,31 @@ def _rows(
     errors: list[dict],
     where: dict[str, Any],
 ) -> list[OutcomeRow]:
-    """One OutcomeRow per question the model really answered, from the server's history."""
-    history = state["history"]
-    if len(history) != len(questions):
-        errors.append({**where, "error": f"server history has {len(history)} entries for "
-                                         f"{len(questions)} questions; no rows written"})
+    """One OutcomeRow per question the model really answered (its active check), plus one per
+    passive observation the server recorded for that item, from the server's history."""
+    active, passive = split_history(state["history"])
+    if len(active) != len(questions):
+        errors.append({**where, "error": f"server history has {len(active)} active entries "
+                                         f"for {len(questions)} questions; no rows written"})
         return []
     out = []
-    for q, (variant_id, outcome, _) in zip(questions, history):
+    for q, (variant_id, outcome, _) in zip(questions, active):
         item_id, mechanism, _ = parse_variant_id(variant_id)
         if not q["usable"]:
             errors.append({**where, "question": q["question"], "variant_id": variant_id,
                            "error": "skipped: no usable model answer, so no outcome row"})
             continue
         item = items[item_id]
-        out.append(OutcomeRow(
-            run_id=cfg.run_id, session_id=session, respondent_kind="ai",
-            data_origin="harness", model=model, attack_mode="browser_agent",
-            attacker_level=cfg.attacker_level, assessment_type=assessment.assessment_type,
-            item_type=item.item_type, item_id=item_id, split=item.split,
-            heldout_model=heldout, mechanism=mechanism, variant_id=variant_id, outcome=outcome,
-            raw_ref=f"llm-cache:{q['cache_key']}", prompt_version=cfg.prompt_version,
-        ))
+        observed = [(variant_id, mechanism, outcome)] + [
+            (p_id, parse_variant_id(p_id)[1], p_out) for p_id, p_out in passive.get(item_id, [])
+        ]
+        for v_id, mech, out_label in observed:
+            out.append(OutcomeRow(
+                run_id=cfg.run_id, session_id=session, respondent_kind="ai",
+                data_origin="harness", model=model, attack_mode="browser_agent",
+                attacker_level=cfg.attacker_level, assessment_type=assessment.assessment_type,
+                item_type=item.item_type, item_id=item_id, split=item.split,
+                heldout_model=heldout, mechanism=mech, variant_id=v_id, outcome=out_label,
+                raw_ref=f"llm-cache:{q['cache_key']}", prompt_version=cfg.prompt_version,
+            ))
     return out
