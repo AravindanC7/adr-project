@@ -6,7 +6,7 @@ pytest.importorskip("fastapi")  # pip install -e ".[server]"
 from fastapi.testclient import TestClient
 
 from adr.contracts import Item
-from server.app import DEFAULT_BANK, check_answer, check_hidden, create_app, load_bank
+from server.app import DEFAULT_BANK, check_answer, create_app, load_bank
 from tests.stubs import StubCanary, StubDecoy
 
 # One valid answer per item type, for the stub bank.
@@ -122,9 +122,8 @@ def test_answers_are_scored_by_the_check_they_carried(traps):
     step = respond(traps, step, 1).json()           # q2: picks the right answer
     step = respond(traps, step, 7).json()           # q3: plain
     history = traps.get(f"/session/{step['session_id']}").json()["history"]
-    assert [(v.split("|")[1], outcome) for v, outcome, _ in history] == [
-        ("decoy", "picked_decoy"), ("decoy", "picked_correct"), ("plain", "none"),
-    ]
+    active = [(v.split("|")[1], o) for v, o, _ in history if v.split("|")[1] != "behaviour"]
+    assert active == [("decoy", "picked_decoy"), ("decoy", "picked_correct"), ("plain", "none")]
 
     step = traps.post("/session/start", json={"assessment_id": "stub-survey"}).json()
     step = respond(traps, step, "I like the people. marigold0").json()
@@ -149,15 +148,6 @@ def test_bad_settings_fail_at_startup():
         create_app(mechanisms={}, hide="display_none")
 
 
-def test_hidden_position_defaults_until_contracts_v2_and_must_be_known():
-    rendered = StubDecoy().generate(ITEMS["handwritten:q1"], 0)
-    rendered.hidden.pop("hidden_position", None)
-    assert check_hidden(rendered).hidden["hidden_position"] == "after_stem"
-    rendered.hidden["hidden_position"] = "in_the_footer"
-    with pytest.raises(ValueError, match="hidden_position"):
-        check_hidden(rendered)
-
-
 def test_tokens_are_one_time_and_unguessable(client):
     step = client.post("/session/start", json={"assessment_id": "stub-quiz"}).json()
     assert respond(client, step, 1, token="handwritten:q1|plain|0").status_code == 409
@@ -175,6 +165,29 @@ def test_state_endpoint_only_in_debug_mode(client, monkeypatch):
     bodies = walk(debug, "stub-quiz")
     state = debug.get(f"/session/{bodies[0]['session_id']}").json()
     assert [v.split("|")[1] for v in state["served"]] == ["plain"] * 3
+
+
+def test_full_telemetry_is_kept_and_unknown_fields_are_refused(traps):
+    step = traps.post("/session/start", json={"assessment_id": "stub-quiz"}).json()
+    telemetry = {"time_on_item_ms": 5000, "paste_events": 1, "focus_loss_count": 2,
+                 "keystroke_count": 0, "mean_interkey_ms": None}
+    sid = step["session_id"]
+    full = dict(telemetry, first_key_ms=300, away_ms=0, pasted_chars=40, edit_keys=3)
+    r = traps.post(f"/session/{sid}/respond",
+                   json={"token": step["item"]["token"], "answer": 1, "telemetry": full})
+    assert r.status_code == 200
+    step = r.json()
+    extra = dict(telemetry, pasted_text="hello")  # content is never accepted
+    r = traps.post(f"/session/{sid}/respond",
+                   json={"token": step["item"]["token"], "answer": 1, "telemetry": extra})
+    assert r.status_code == 422
+    negative = dict(telemetry, paste_events=-1)
+    r = traps.post(f"/session/{sid}/respond",
+                   json={"token": step["item"]["token"], "answer": 1, "telemetry": negative})
+    assert r.status_code == 422
+    r = traps.post(f"/session/{sid}/respond",
+                   json={"token": step["item"]["token"], "answer": 1, "telemetry": telemetry})
+    assert r.status_code == 200
 
 
 @pytest.mark.parametrize("answer", [9, -1, True, "1", [0, 1], None])
@@ -218,3 +231,44 @@ def test_check_answer(item_type, options, good, bad):
     for a in bad:
         with pytest.raises(ValueError):
             check_answer(item, a)
+
+
+def test_every_answer_gets_a_behaviour_outcome(traps):
+    bodies = walk(traps, "stub-quiz")  # respond() spends 1200 ms on each: under the floor
+    state = traps.get(f"/session/{bodies[0]['session_id']}").json()
+    passive = [(v, o) for v, o, _ in state["history"] if v.split("|")[1] == "behaviour"]
+    assert len(passive) == len(bodies) - 1
+    assert {o for _, o in passive} <= {"too_fast", "normal"}
+    assert all(v.endswith("|behaviour|0") for v, _ in passive)
+    assert not any("behaviour" in v for v in state["served"])  # passive: never "served"
+
+
+def test_the_reading_floor_counts_the_items_passage(tmp_path, monkeypatch):
+    # A real Item with a passage, through the server: 40 + 5 words -> a 5500 ms floor.
+    monkeypatch.setenv("ADR_DEBUG_STATE", "1")
+    bank = tmp_path / "bank.json"
+    item = {
+        "item_id": "handwritten:p1",
+        "source": "handwritten",
+        "assessment_type": "quiz",
+        "item_type": "mcq",
+        "passage": " ".join(["word"] * 40),
+        "stem": "What is the passage about?",
+        "options": ["a", "b"],
+        "correct_option": 0,
+    }
+    quiz = {
+        "assessment_id": "p",
+        "title": "P",
+        "assessment_type": "quiz",
+        "item_ids": ["handwritten:p1"],
+    }
+    bank.write_text(json.dumps({"items": [item], "assessments": [quiz]}), encoding="utf-8")
+    client = TestClient(create_app(bank_path=bank, mechanisms={}))
+    outcomes = []
+    for ms in (3000, 6000):  # enough for the stem alone; enough for passage + stem
+        step = client.post("/session/start", json={"assessment_id": "p"}).json()
+        step = respond(client, step, 0, ms=ms).json()
+        history = client.get(f"/session/{step['session_id']}").json()["history"]
+        outcomes += [o for v, o, _ in history if v.split("|")[1] == "behaviour"]
+    assert outcomes == ["too_fast", "normal"]

@@ -77,6 +77,36 @@ pytest tests/test_frontend_copy.py                    # skipped if Playwright is
 Outputs: `results/outcomes/<run_id>.parquet` (the outcome table) and
 `results/runs/<run_id>/` (config, every parsed response, any errors).
 
+### Build the failure-mode map
+
+After AI and human outcome Parquet files are available, build the map and its pooled SVG figure:
+
+```bash
+python scripts/build_failure_map.py results/outcomes --version v1 \
+  --output results/failure_map/v1.json
+python scripts/plot_failure_map.py results/failure_map/v1.json \
+  --output results/figures/failure_map-v1.svg
+```
+
+The builder validates every outcome row, excludes held-out models and the held-out survey,
+applies the agreed add-one smoothing, and computes 95% intervals by resampling whole sessions.
+It emits a mechanism/item-type cell only when both AI and human evidence exist; it never fills a
+missing class with invented observations.
+
+### Prepare the locked GSS 2018 bank
+
+Download NORC's official `2018_stata.zip` to `data/raw/gss/`, extract `GSS2018.dta` into
+`data/raw/gss/2018_stata/`, then run:
+
+```bash
+python scripts/prepare_gss_2018.py
+python scripts/build_runs_v1.py --datasets gss --output data/processed/gss-check
+```
+
+The preparation step verifies the official archive and Stata-file checksums before writing the
+gitignored CSV. Exact wording, response codes, provenance, and the locked variable list are in
+`configs/gss_2018_manifest.json` and `configs/data_decisions.json`.
+
 ## For Archana and Harshini: how your code plugs in
 
 **Loaders** return `list[Item]` (and, if the team agrees, a `HumanDistribution` per item).
