@@ -70,6 +70,31 @@ class Completion:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float | None = None
+    # Why the model stopped: "stop", "length" (hit max_tokens: the reply is cut off), another
+    # provider-specific word, or None if unknown (e.g. answers cached before this was recorded).
+    finish_reason: str | None = None
+
+    @property
+    def truncated(self) -> bool:
+        return self.finish_reason == "length"
+
+
+_LENGTH = {"length", "max_tokens", "max_output_tokens"}
+_STOP = {"stop", "end_turn", "stop_sequence"}
+
+
+def finish_reason(raw: Any) -> str | None:
+    """One word for why a provider stopped, the same for every provider: "length" when the
+    reply hit the token limit (OpenAI "length", Anthropic "max_tokens", Google MAX_TOKENS),
+    "stop" for a normal end, otherwise the provider's own word in lower case."""
+    if raw is None:
+        return None
+    word = str(getattr(raw, "name", raw)).rsplit(".", 1)[-1].lower()
+    if word in _LENGTH:
+        return "length"
+    if word in _STOP:
+        return "stop"
+    return word or None
 
 
 # ---------------------------------------------------------------- providers
@@ -82,8 +107,9 @@ class Provider(Protocol):
         temperature: float | None,
         max_tokens: int,
         attachments: list[Attachment] | None = None,
-    ) -> tuple[str, int, int]:
-        """Return (text, input_tokens, output_tokens)."""
+    ) -> tuple[str, int, int] | tuple[str, int, int, str | None]:
+        """Return (text, input_tokens, output_tokens[, finish_reason]). The fourth value is
+        optional so older providers keep working; pass it through finish_reason()."""
         ...
 
 
@@ -94,28 +120,44 @@ def _b64(data: bytes) -> str:
 def _with_files(messages: list[Message], parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Copy of `messages` whose last message is a content list: file parts first, then its text."""
     *head, last = messages
-    return [*head, {"role": last["role"],
-                    "content": [*parts, {"type": "text", "text": last["content"]}]}]
+    return [
+        *head,
+        {"role": last["role"], "content": [*parts, {"type": "text", "text": last["content"]}]},
+    ]
 
 
 def anthropic_messages(messages: list[Message], attachments: list[Attachment] | None):
     if not attachments:
         return messages
-    return _with_files(messages, [
-        {"type": "document", "title": a["filename"],
-         "source": {"type": "base64", "media_type": a["mime"], "data": _b64(a["data"])}}
-        for a in attachments
-    ])
+    return _with_files(
+        messages,
+        [
+            {
+                "type": "document",
+                "title": a["filename"],
+                "source": {"type": "base64", "media_type": a["mime"], "data": _b64(a["data"])},
+            }
+            for a in attachments
+        ],
+    )
 
 
 def openai_messages(messages: list[Message], attachments: list[Attachment] | None):
     if not attachments:
         return messages
-    return _with_files(messages, [
-        {"type": "file", "file": {"filename": a["filename"],
-                                  "file_data": f"data:{a['mime']};base64,{_b64(a['data'])}"}}
-        for a in attachments
-    ])
+    return _with_files(
+        messages,
+        [
+            {
+                "type": "file",
+                "file": {
+                    "filename": a["filename"],
+                    "file_data": f"data:{a['mime']};base64,{_b64(a['data'])}",
+                },
+            }
+            for a in attachments
+        ],
+    )
 
 
 class AnthropicProvider:
@@ -125,15 +167,19 @@ class AnthropicProvider:
         self._client = anthropic.Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
 
     def complete(self, model_id, system, messages, temperature, max_tokens, attachments=None):
-        kwargs: dict[str, Any] = {"model": model_id, "max_tokens": max_tokens,
-                                  "messages": anthropic_messages(messages, attachments)}
+        kwargs: dict[str, Any] = {
+            "model": model_id,
+            "max_tokens": max_tokens,
+            "messages": anthropic_messages(messages, attachments),
+        }
         if system:
             kwargs["system"] = system
         if temperature is not None:
             kwargs["temperature"] = temperature
         resp = self._client.messages.create(**kwargs)
         text = "".join(getattr(b, "text", "") for b in resp.content)
-        return text, resp.usage.input_tokens, resp.usage.output_tokens
+        return (text, resp.usage.input_tokens, resp.usage.output_tokens,
+                finish_reason(getattr(resp, "stop_reason", None)))
 
 
 class OpenAIProvider:
@@ -165,7 +211,8 @@ class OpenAIProvider:
         resp = self._client.chat.completions.create(**kwargs)
         text = resp.choices[0].message.content or ""
         usage = resp.usage
-        return text, getattr(usage, "prompt_tokens", 0), getattr(usage, "completion_tokens", 0)
+        return (text, getattr(usage, "prompt_tokens", 0), getattr(usage, "completion_tokens", 0),
+                finish_reason(getattr(resp.choices[0], "finish_reason", None)))
 
 
 class GoogleProvider:
@@ -185,23 +232,30 @@ class GoogleProvider:
             for m in messages
         ]
         if attachments:
-            files = [types.Part.from_bytes(data=a["data"], mime_type=a["mime"]) for a in attachments]
+            files = [
+                types.Part.from_bytes(data=a["data"], mime_type=a["mime"]) for a in attachments
+            ]
             contents[-1].parts = files + contents[-1].parts
         config = types.GenerateContentConfig(
             system_instruction=system, temperature=temperature, max_output_tokens=max_tokens
         )
-        resp = self._client.models.generate_content(model=model_id, contents=contents, config=config)
+        resp = self._client.models.generate_content(
+            model=model_id, contents=contents, config=config
+        )
         um = resp.usage_metadata
+        candidates = getattr(resp, "candidates", None) or []
         return (
             resp.text or "",
             getattr(um, "prompt_token_count", 0) or 0,
             getattr(um, "candidates_token_count", 0) or 0,
+            finish_reason(getattr(candidates[0], "finish_reason", None) if candidates else None),
         )
 
 
 class FakeProvider:
     """Offline provider for tests and dry runs. `fn(system, messages) -> text`, or
-    `fn(system, messages, attachments) -> text` when the call has attachments."""
+    `fn(system, messages, attachments) -> text` when the call has attachments. `fn` may also
+    return (text, finish_reason), e.g. (text, "length") to act out a reply that was cut off."""
 
     def __init__(self, fn: Callable[..., str]):
         self.fn = fn
@@ -209,8 +263,9 @@ class FakeProvider:
 
     def complete(self, model_id, system, messages, temperature, max_tokens, attachments=None):
         self.calls += 1
-        text = self.fn(system, messages, attachments) if attachments else self.fn(system, messages)
-        return text, sum(len(m["content"]) // 4 for m in messages), len(text) // 4
+        out = self.fn(system, messages, attachments) if attachments else self.fn(system, messages)
+        text, reason = out if isinstance(out, tuple) else (out, "stop")
+        return text, sum(len(m["content"]) // 4 for m in messages), len(text) // 4, reason
 
 
 def make_provider(spec: ModelSpec) -> Provider:
@@ -231,28 +286,36 @@ def make_provider(spec: ModelSpec) -> Provider:
 
 # ---------------------------------------------------------------- errors
 _RATE_WORDS = ("rate limit", "rate_limit", "resource_exhausted", "overloaded", "too many requests")
-_FATAL_WORDS = ("credit balance", "insufficient_quota", "billing", "invalid api key",
-                "api key not valid", "invalid x-api-key", "incorrect api key", "not found")
+_KEY_WORDS = ("invalid api key", "api key not valid", "invalid x-api-key", "incorrect api key")
+# Fatal even on a 429: no credit left, or a bad key. Retrying cannot help.
+_ALWAYS_FATAL_WORDS = ("credit balance", *_KEY_WORDS)
+_FATAL_WORDS = (*_ALWAYS_FATAL_WORDS, "insufficient_quota", "billing", "not found")
 
 
 def classify_error(e: Exception) -> str:
     """Decide how to react to a provider error.
 
     "no_temperature": the model refuses a temperature setting -> drop it and retry now
-    "rate_limit":     slow down and retry (429, 529, overloaded)
-    "fatal":          retrying can't help (bad key, no credit, bad request, unknown model)
+    "rate_limit":     slow down and retry (any 429 / RESOURCE_EXHAUSTED, 529, overloaded)
+    "fatal":          retrying can't help (bad key, no credit, bad request, unknown model);
+                      on a 429 only "credit balance" and invalid-key messages are fatal
     "retry":          probably transient (timeouts, 5xx) -> short backoff and retry
     """
     msg = str(e).lower()
     status = getattr(e, "status_code", None) or getattr(e, "code", None)
     status = status if isinstance(status, int) else None
-    if "temperature" in msg and (
-        isinstance(e, TypeError) or status == 400 or "unsupported" in msg
-    ):
+    if "temperature" in msg and (isinstance(e, TypeError) or status == 400 or "unsupported" in msg):
         return "no_temperature"
+    if any(w in msg for w in _ALWAYS_FATAL_WORDS):
+        return "fatal"
+    # A 429 / RESOURCE_EXHAUSTED is a rate or quota limit: back off and retry, even when the
+    # message mentions billing or quota (Gemini's per-minute limits say "check your plan and
+    # billing details"). max_retries still bounds it, so a spent daily quota ends as an error.
+    if status == 429 or "resource_exhausted" in msg:
+        return "rate_limit"
     if any(w in msg for w in _FATAL_WORDS):
         return "fatal"
-    if status in (429, 529) or any(w in msg for w in _RATE_WORDS):
+    if status == 529 or any(w in msg for w in _RATE_WORDS):
         return "rate_limit"
     if isinstance(e, TypeError) or status in (400, 401, 403, 404, 422):
         return "fatal"
@@ -327,7 +390,9 @@ class LLMClient:
     def _cost(self, spec: ModelSpec, tin: int, tout: int) -> float | None:
         if spec.price_in_per_mtok is None or spec.price_out_per_mtok is None:
             if spec.name not in self._warned_no_price:
-                warnings.warn(f"{spec.name}: no prices in config; tracking tokens only", stacklevel=3)
+                warnings.warn(
+                    f"{spec.name}: no prices in config; tracking tokens only", stacklevel=3
+                )
                 self._warned_no_price.add(spec.name)
             return None
         return (tin * spec.price_in_per_mtok + tout * spec.price_out_per_mtok) / 1_000_000
@@ -338,7 +403,16 @@ class LLMClient:
 
     def read_cache(self, key: str) -> dict[str, Any] | None:
         p = self._path(key)
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+        if not p.exists():
+            return None
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except UnicodeDecodeError:
+            # Older Windows runs used pathlib's locale encoding. Read those cache files once and
+            # rewrite them as UTF-8 so real questions containing smart quotes/degrees remain usable.
+            record = json.loads(p.read_text(encoding="cp1252"))
+            self._write_cache(key, record)
+            return record
 
     def _write_cache(self, key: str, record: dict[str, Any]) -> None:
         p = self._path(key)
@@ -372,16 +446,27 @@ class LLMClient:
         if attachments:
             # Only added when present, so cache keys of calls without files stay the same.
             request["attachments"] = [
-                {"filename": a["filename"], "mime": a["mime"],
-                 "sha256": hashlib.sha256(a["data"]).hexdigest()}
+                {
+                    "filename": a["filename"],
+                    "mime": a["mime"],
+                    "sha256": hashlib.sha256(a["data"]).hexdigest(),
+                }
                 for a in attachments
             ]
         key = cache_key(spec, request)
         hit = self.read_cache(key)
         if hit is not None:
             r = hit["response"]
-            return Completion(r["text"], model, key, True, r["input_tokens"], r["output_tokens"],
-                              r.get("cost_usd"))
+            return Completion(
+                r["text"],
+                model,
+                key,
+                True,
+                r["input_tokens"],
+                r["output_tokens"],
+                r.get("cost_usd"),
+                r.get("finish_reason"),
+            )
 
         if self.weekly_spend_cap_usd is not None:
             spent = self.week_spend_usd()
@@ -397,11 +482,13 @@ class LLMClient:
         attempt = 0
         while True:
             try:
-                text, tin, tout = provider.complete(
+                result = provider.complete(
                     spec.model_id, system, messages, sent_temperature, max_tokens, **files
                 )
+                text, tin, tout = result[:3]
+                reason = finish_reason(result[3]) if len(result) > 3 else None
                 break
-            except Exception as e:  # noqa: BLE001 - provider SDKs raise many types
+            except Exception as e:  # provider SDKs raise many unrelated exception types
                 kind = classify_error(e)
                 if kind == "no_temperature" and sent_temperature is not None:
                     # Some newer models/SDKs refuse a temperature setting: drop it for this
@@ -424,17 +511,26 @@ class LLMClient:
 
         cost = self._cost(spec, tin, tout)
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        self._write_cache(key, {
-            "model": model,
-            "provider": spec.provider,
-            "model_id": spec.model_id,
-            "request": request,
-            "temperature_sent": sent_temperature,
-            "response": {"text": text, "input_tokens": tin, "output_tokens": tout,
-                         "cost_usd": cost},
-            "created_at": now,
-        })
+        self._write_cache(
+            key,
+            {
+                "model": model,
+                "provider": spec.provider,
+                "model_id": spec.model_id,
+                "request": request,
+                "temperature_sent": sent_temperature,
+                "response": {
+                    "text": text,
+                    "input_tokens": tin,
+                    "output_tokens": tout,
+                    "cost_usd": cost,
+                    "finish_reason": reason,
+                },
+                "created_at": now,
+            },
+        )
         with self._lock, self._ledger.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({"ts": now, "model": model, "in": tin, "out": tout,
-                                "usd": cost}) + "\n")
-        return Completion(text, model, key, False, tin, tout, cost)
+            f.write(
+                json.dumps({"ts": now, "model": model, "in": tin, "out": tout, "usd": cost}) + "\n"
+            )
+        return Completion(text, model, key, False, tin, tout, cost, reason)

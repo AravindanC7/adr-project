@@ -71,6 +71,20 @@ pytest tests/test_frontend_copy.py                    # skipped if Playwright is
 Outputs: `results/outcomes/<run_id>.parquet` (the outcome table) and
 `results/runs/<run_id>/` (config, every parsed response, any errors).
 
+### Prepare the locked GSS 2018 bank
+
+Download NORC's official `2018_stata.zip` to `data/raw/gss/`, extract `GSS2018.dta` into
+`data/raw/gss/2018_stata/`, then run:
+
+```bash
+python scripts/prepare_gss_2018.py
+python scripts/build_runs_v1.py --datasets gss --output data/processed/gss-check
+```
+
+The preparation step verifies the official archive and Stata-file checksums before writing the
+gitignored CSV. Exact wording, response codes, provenance, and the locked variable list are in
+`configs/gss_2018_manifest.json` and `configs/data_decisions.json`.
+
 ## For Archana and Harshini: how your code plugs in
 
 **Loaders** return `list[Item]` (and, if the team agrees, a `HumanDistribution` per item).
