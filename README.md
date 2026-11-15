@@ -29,10 +29,10 @@ pytest                                                    # all tests should pas
 | Document-upload attacker (#20) | `adr/harness/doc_upload.py`, `pdf_render.py` | Whole assessment as one PDF, traps in the invisible text layer. Anthropic, OpenAI, Google only. |
 | Router prototype (#13) | `adr/router/` | SPRT score, Chernoff-rule check selection, burden and false-flag penalties, per-mechanism cap, escalation, random tie-breaks. |
 | Early baselines | `adr/baselines/simple.py` | Random check per item; single fixed mechanism. |
+| Replay on logged outcomes (#27) | `adr/replay/` | Each simulated respondent copies one real logged session; fallbacks and map draws are counted. Metrics with bootstrap CIs over donor sessions. Three splits: train (map), calibration (default evaluation, 30% of items), held-out (only with `--final`). Uses a **temporary** quick map until #34. |
 | Synthetic test data | `adr/router/synthetic.py` | **Invented numbers** for developing the router. Never report these. |
 
-Not started: browser agent (#22), replay on real outcomes (#27),
-the other baselines, and everything Archana and Harshini own.
+Not started: browser agent (#22), the other baselines, and everything Archana and Harshini own.
 
 ## Try it
 
@@ -49,6 +49,10 @@ python scripts/run_doc_upload.py --stub --fake
 # Router vs early baselines on SYNTHETIC data (about 20 s):
 python scripts/router_synthetic_demo.py
 python scripts/router_synthetic_demo.py --passive     # also observe behaviour on every item
+
+# Replay the router and baselines on logged outcomes (a smoke test on our 4 items so far):
+python scripts/run_replay.py --stub \
+    --outcomes results/outcomes/first-real-L0.parquet results/outcomes/first-real-du-L0.parquet
 ```
 
 ```bash
@@ -135,8 +139,8 @@ Never send `state.score` to the browser.
 ## Contract changes beyond the Oct 17 draft
 
 These go beyond the Oct 17 draft in AGENTS.md section 6. **Items 1–8 are agreed by the team.**
-Items 9–12 (contracts v2) were agreed on Nov 2; items 13–15 were added on Nov 3. All land with
-the `arav/contracts-v2` PR.
+Items 9–12 (contracts v2) were agreed on Nov 2; items 13–15 were added on Nov 3 with the
+`arav/contracts-v2` PR (#5). Item 16 lands with the replay PR (#9) and was agreed on Nov 14.
 
 1. `RenderedItem.copy_text`: the exact text a select-and-copy of the item yields, hidden spans
    included. The mechanism sets it, because only it knows where hidden text goes.
@@ -176,3 +180,9 @@ the `arav/contracts-v2` PR.
 15. `Response.answer` is strict: kept exactly as given. `True`/`False` are rejected, `"1"`
     stays the text `"1"` (never option 1), `3.0` stays a float, and a ranking must be a list
     of ints. Whether the type fits the item is checked by the caller and the mechanism.
+16. `router.update` accepts `None` = shown, nothing to score; agreed on Nov 14.
+    `router.update(state, variant_id, None)` means the active
+    check raised `NoObservation`. The real `variant_id` goes into `served` (so it isn't offered
+    again), with no evidence: delta 0, status unchanged, history `(variant_id, "none", 0.0)`.
+    Plain variants still use outcome `"none"`. A passive check with nothing to score is
+    skipped. Replay uses this; the server should do the same.

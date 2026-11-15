@@ -91,7 +91,11 @@ class SPRTRouter:
         assert choice is not None  # an assessment has at least one item
         return state, choice
 
-    def update(self, state: SessionState, variant_id: str, outcome: str) -> SessionState:
+    def update(
+        self, state: SessionState, variant_id: str, outcome: str | None
+    ) -> SessionState:
+        """Record one observation. outcome None = shown, nothing to score (NoObservation): the
+        variant counts as served, but adds no evidence and leaves the status as it was."""
         item_id, mech, _ = parse_variant_id(variant_id)
         if item_id not in self.items:
             raise KeyError(f"unknown item {item_id!r}")
@@ -99,6 +103,9 @@ class SPRTRouter:
 
         if mech not in PASSIVE_MECHANISMS and variant_id not in new.served:
             new.served.append(variant_id)
+        if outcome is None:
+            new.history.append((variant_id, "none", 0.0))
+            return new
 
         delta = 0.0
         if mech is None:

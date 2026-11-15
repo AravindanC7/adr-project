@@ -10,8 +10,6 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 
-import numpy as np
-
 from adr.contracts import (
     OUTCOME_LABELS,
     PASSIVE_MECHANISMS,
@@ -23,6 +21,16 @@ from adr.contracts import (
     SessionState,
     make_variant_id,
 )
+from adr.replay.metrics import detection_at_fpr  # moved to adr/replay; kept importable here
+
+__all__ = [
+    "SessionResult",
+    "detection_at_fpr",
+    "sample_outcome",
+    "simulate_session",
+    "synthetic_bank",
+    "synthetic_failure_map",
+]
 
 # (mechanism, item_type): (AI outcome frequencies, human outcome frequencies), as percentages.
 # Shapes follow the literature qualitatively (decoys and canaries strong on naive AI, opinion
@@ -145,20 +153,3 @@ def simulate_session(
             decided_at = shown
         choice = router.next(state)
     return SessionResult(kind, state, shown, checks, decided_at)
-
-
-def detection_at_fpr(
-    ai_scores: list[float], human_scores: list[float], fpr: float
-) -> tuple[float, float, float]:
-    """Pick the lowest threshold t with P(human score > t) <= fpr; flag when score > t.
-
-    Returns (TPR on AI, actual FPR on humans, t). Ties are never split, so the actual FPR can
-    be below the target when many honest people share a score.
-    """
-    h = np.asarray(human_scores, dtype=float)
-    a = np.asarray(ai_scores, dtype=float)
-    for t in np.unique(h):  # ascending
-        actual = float(np.mean(h > t))
-        if actual <= fpr:
-            return float(np.mean(a > t)), actual, float(t)
-    raise AssertionError("unreachable: the max human score always qualifies")
