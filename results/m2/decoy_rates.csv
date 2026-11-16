@@ -1,0 +1,13 @@
+mode,bank,run_id,group,group_label,n_items,n_obs,n_sessions,picked_decoy,rate,ci_low,ci_high
+Copy-paste,MMLU,v1-cp-L0-quiz-mmlu-200-s5,all,All items,200,1000,5,639,0.6390,0.5770,0.7010
+Copy-paste,MMLU,v1-cp-L0-quiz-mmlu-200-s5,knows,Model knows answer,173,865,5,519,0.6000,0.5283,0.6671
+Copy-paste,MMLU,v1-cp-L0-quiz-mmlu-200-s5,unknown,Model doesn't,27,135,5,120,0.8889,0.7778,1.0000
+Copy-paste,ARC,v1-cp-L0-quiz-arc-200-s5,all,All items,200,1000,5,508,0.5080,0.4440,0.5730
+Copy-paste,ARC,v1-cp-L0-quiz-arc-200-s5,knows,Model knows answer,193,965,5,478,0.4953,0.4311,0.5586
+Copy-paste,ARC,v1-cp-L0-quiz-arc-200-s5,unknown,Model doesn't,7,35,5,30,0.8571,0.5714,1.0000
+Doc upload,MMLU,v1-du-L0-quiz-mmlu-200-q20,all,All items,200,200,10,155,0.7750,0.7150,0.8300
+Doc upload,MMLU,v1-du-L0-quiz-mmlu-200-q20,knows,Model knows answer,173,173,10,128,0.7399,0.6705,0.8035
+Doc upload,MMLU,v1-du-L0-quiz-mmlu-200-q20,unknown,Model doesn't,27,27,10,27,1.0000,1.0000,1.0000
+Doc upload,ARC,v1-du-L0-quiz-arc-200-q20,all,All items,200,200,10,63,0.3150,0.2550,0.3800
+Doc upload,ARC,v1-du-L0-quiz-arc-200-q20,knows,Model knows answer,193,193,10,58,0.3005,0.2383,0.3627
+Doc upload,ARC,v1-du-L0-quiz-arc-200-q20,unknown,Model doesn't,7,7,7,5,0.7143,0.4286,1.0000

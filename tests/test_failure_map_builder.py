@@ -130,9 +130,69 @@ def test_builder_requires_both_respondent_classes() -> None:
         build_failure_map(frame, version="v1", n_bootstrap=10)
 
 
+def test_ai_only_builder_emits_provisional_cells_without_human_rows() -> None:
+    frame = _frame()
+    frame = frame[frame["respondent_kind"].eq("ai")]
+
+    failure_map = build_failure_map(
+        frame,
+        version="v1-ai-only",
+        n_bootstrap=20,
+        seed=7,
+        ai_only=True,
+    )
+
+    pooled = failure_map.lookup("decoy", "mcq")
+    assert pooled is not None
+    assert pooled.counts_ai == {
+        "picked_decoy": 1,
+        "picked_correct": 1,
+        "picked_other": 0,
+    }
+    assert pooled.counts_human == {
+        "picked_decoy": 0,
+        "picked_correct": 0,
+        "picked_other": 0,
+    }
+    assert pooled.p_human == pytest.approx({label: 1 / 3 for label in pooled.p_human})
+    assert set(pooled.ci_ai) == set(pooled.p_ai)
+    assert pooled.ci_human == {}
+    assert failure_map.source_run_ids == ["ai-run"]
+    assert "AI-only provisional map" in failure_map.note
+    assert "must not be used by the router" in failure_map.note
+
+
+def test_ai_only_version_marker_must_match_build_mode() -> None:
+    frame = _frame()
+    ai_frame = frame[frame["respondent_kind"].eq("ai")].copy()
+
+    with pytest.raises(ValueError, match="version ending in '-ai-only'"):
+        build_failure_map(
+            ai_frame,
+            version="v1",
+            n_bootstrap=10,
+            ai_only=True,
+        )
+
+    with pytest.raises(ValueError, match="require ai_only=True"):
+        build_failure_map(
+            frame,
+            version="v1-ai-only",
+            n_bootstrap=10,
+        )
+
+
 def test_builder_rejects_incomplete_frames() -> None:
     with pytest.raises(ValueError, match="missing columns"):
         build_failure_map(pd.DataFrame({"outcome": []}), version="v1")
+
+
+def test_builder_rejects_dry_run_rows() -> None:
+    frame = _frame()
+    frame.loc[frame.index[0], "data_origin"] = "dry_run"
+
+    with pytest.raises(ValueError, match="dry_run rows are not evidence"):
+        build_failure_map(frame, version="v1", n_bootstrap=10)
 
 
 def test_writes_pooled_svg_heatmap(tmp_path) -> None:
