@@ -82,16 +82,33 @@ Outputs: `results/outcomes/<run_id>.parquet` (the outcome table) and
 After AI and human outcome Parquet files are available, build the map and its pooled SVG figure:
 
 ```bash
-python scripts/build_failure_map.py results/outcomes --version v1 \
+python scripts/build_failure_map.py \
+  results/outcomes/<validated-ai-run>.parquet \
+  results/outcomes/<pilot-run>.parquet --version v1 \
   --output results/failure_map/v1.json
 python scripts/plot_failure_map.py results/failure_map/v1.json \
   --output results/figures/failure_map-v1.svg
 ```
 
-The builder validates every outcome row, excludes held-out models and the held-out survey,
-applies the agreed add-one smoothing, and computes 95% intervals by resampling whole sessions.
+Pass the validated run files explicitly: the outcomes directory can also contain smoke files
+that are not result data. The builder validates every row, rejects dry-run rows, excludes
+held-out models and the held-out survey, applies the agreed add-one smoothing, and computes
+95% intervals by resampling whole sessions.
 It emits a mechanism/item-type cell only when both AI and human evidence exist; it never fills a
 missing class with invented observations.
+
+Before the pilot rows arrive, build the provisional AI side explicitly:
+
+```bash
+python scripts/build_failure_map.py \
+  results/outcomes/<validated-ai-run>.parquet --version v1-ai-only \
+  --output results/failure_map/v1-ai-only.json --ai-only
+```
+
+AI-only cells have real AI counts and confidence intervals, but zero human counts, no human
+confidence intervals, and prior-only human probabilities required by the shared contract. The
+output is marked provisional and must not be used by the router. Rebuild without `--ai-only`
+when the pilot outcome rows are available.
 
 ### Prepare the locked GSS 2018 bank
 

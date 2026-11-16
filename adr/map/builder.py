@@ -79,12 +79,19 @@ def build_failure_map(
     seed: int = 34,
     prior: float = 1.0,
     note: str = "",
+    ai_only: bool = False,
 ) -> FailureMap:
-    """Build exact and pooled cells from non-held-out AI and human observations.
+    """Build exact and pooled cells from non-held-out outcome observations.
 
     A cell is emitted only when both respondent classes have evidence for the same
     mechanism and item type. Human observations are pooled over attack settings,
     because human rows intentionally have no attack mode or attacker level.
+
+    ``ai_only`` allows a provisional cell when its human side is not available yet.
+    Such a cell has zero human counts, an empty human confidence interval, and the
+    contract-required prior-only ``p_human`` values. It is not ready for router use.
+    Its version must end in ``-ai-only`` so downstream consumers can reject it
+    without parsing a human-readable note.
     """
 
     required = {
@@ -94,6 +101,7 @@ def build_failure_map(
         "mechanism",
         "item_type",
         "outcome",
+        "data_origin",
         "attack_mode",
         "attacker_level",
         "heldout_model",
@@ -104,6 +112,18 @@ def build_failure_map(
         raise ValueError(f"outcome frame is missing columns: {missing}")
     if prior <= 0:
         raise ValueError("prior must be positive")
+    is_ai_only_version = version.endswith("-ai-only")
+    if ai_only and not is_ai_only_version:
+        raise ValueError("ai_only maps require a version ending in '-ai-only'")
+    if not ai_only and is_ai_only_version:
+        raise ValueError("versions ending in '-ai-only' require ai_only=True")
+    dry_run = frame[frame["data_origin"].eq("dry_run")]
+    if not dry_run.empty:
+        run_ids = sorted(str(value) for value in dry_run["run_id"].unique())
+        raise ValueError(
+            "dry_run rows are not evidence for a failure-mode map; "
+            f"select explicit validated outcome files instead (run_ids={run_ids})"
+        )
 
     eligible = _eligible_rows(frame)
     cells: list[MapCell] = []
@@ -121,20 +141,26 @@ def build_failure_map(
         ]
         human = base[base["respondent_kind"].eq("human")]
         ai = base[base["respondent_kind"].eq("ai")]
-        if human.empty or ai.empty:
+        if ai.empty or (human.empty and not ai_only):
             continue
 
         settings: set[tuple[str | None, str | None]] = {(None, None)}
         for mode, level in ai[["attack_mode", "attacker_level"]].itertuples(index=False):
             settings.update(((str(mode), str(level)), (str(mode), None), (None, str(level))))
 
-        human_counts = _counts(human, labels)
-        human_ci = _clustered_interval(
-            human,
-            labels,
-            n_bootstrap=n_bootstrap,
-            seed=_cell_seed(seed, (mechanism, item_type), "human"),
-            prior=prior,
+        human_counts = _counts(human, labels) if not human.empty else {
+            label: 0 for label in labels
+        }
+        human_ci = (
+            _clustered_interval(
+                human,
+                labels,
+                n_bootstrap=n_bootstrap,
+                seed=_cell_seed(seed, (mechanism, item_type), "human"),
+                prior=prior,
+            )
+            if not human.empty
+            else {}
         )
         for attack_mode, attacker_level in sorted(
             settings, key=lambda setting: (setting[0] or "", setting[1] or "")
@@ -169,9 +195,18 @@ def build_failure_map(
             cells.append(cell)
 
     if not cells:
-        raise ValueError("no mechanism/item type has both AI and human outcome rows")
+        requirement = "AI outcome rows" if ai_only else "both AI and human outcome rows"
+        raise ValueError(f"no mechanism/item type has {requirement}")
     exclusion_note = "Held-out models and held-out survey rows excluded."
-    combined_note = " ".join(part for part in (note.strip(), exclusion_note) if part)
+    ai_only_note = (
+        "AI-only provisional map: cells without human observations use prior-only human "
+        "probabilities and must not be used by the router."
+        if ai_only
+        else ""
+    )
+    combined_note = " ".join(
+        part for part in (note.strip(), exclusion_note, ai_only_note) if part
+    )
     return FailureMap(
         version=version,
         source_run_ids=sorted(source_run_ids),
