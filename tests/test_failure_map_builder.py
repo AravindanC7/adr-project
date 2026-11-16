@@ -162,6 +162,26 @@ def test_ai_only_builder_emits_provisional_cells_without_human_rows() -> None:
     assert "must not be used by the router" in failure_map.note
 
 
+def test_ai_only_version_marker_must_match_build_mode() -> None:
+    frame = _frame()
+    ai_frame = frame[frame["respondent_kind"].eq("ai")].copy()
+
+    with pytest.raises(ValueError, match="version ending in '-ai-only'"):
+        build_failure_map(
+            ai_frame,
+            version="v1",
+            n_bootstrap=10,
+            ai_only=True,
+        )
+
+    with pytest.raises(ValueError, match="require ai_only=True"):
+        build_failure_map(
+            frame,
+            version="v1-ai-only",
+            n_bootstrap=10,
+        )
+
+
 def test_builder_rejects_incomplete_frames() -> None:
     with pytest.raises(ValueError, match="missing columns"):
         build_failure_map(pd.DataFrame({"outcome": []}), version="v1")

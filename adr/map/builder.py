@@ -90,6 +90,8 @@ def build_failure_map(
     ``ai_only`` allows a provisional cell when its human side is not available yet.
     Such a cell has zero human counts, an empty human confidence interval, and the
     contract-required prior-only ``p_human`` values. It is not ready for router use.
+    Its version must end in ``-ai-only`` so downstream consumers can reject it
+    without parsing a human-readable note.
     """
 
     required = {
@@ -110,6 +112,11 @@ def build_failure_map(
         raise ValueError(f"outcome frame is missing columns: {missing}")
     if prior <= 0:
         raise ValueError("prior must be positive")
+    is_ai_only_version = version.endswith("-ai-only")
+    if ai_only and not is_ai_only_version:
+        raise ValueError("ai_only maps require a version ending in '-ai-only'")
+    if not ai_only and is_ai_only_version:
+        raise ValueError("versions ending in '-ai-only' require ai_only=True")
     dry_run = frame[frame["data_origin"].eq("dry_run")]
     if not dry_run.empty:
         run_ids = sorted(str(value) for value in dry_run["run_id"].unique())
