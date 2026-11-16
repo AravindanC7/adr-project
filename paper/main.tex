@@ -1,0 +1,165 @@
+% CSE 576 Project #7 -- Adaptive Defense Router
+% Final report: 8-10 pages, ACL format, due Fri Dec 4 (AGENTS.md Sections 4 and 14).
+% Drop this file into Overleaf's official ACL template (it needs acl.sty from that template).
+% Section owners follow AGENTS.md Section 14. Page budgets are the ~estimates from that table.
+% Limitations and Ethics are unnumbered, after the conclusion, as the ACL template expects.
+
+\documentclass[11pt]{article}
+
+% Course report with named authors -> [final]. For an anonymous version use [review].
+\usepackage[final]{acl}
+
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{inconsolata}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{booktabs}
+
+\title{Adaptive Defense Router: Sequential, Per-Respondent Selection of\\
+AI-Use Checks for Online Surveys and Quizzes}
+% TODO (Arav, final integration): agree the final title with the team.
+
+% Full names taken from git commit authors; please check spelling and order.
+\author{Aravindan Chidambaram \and Ulagarchana Ulaga Narasimhan \and Harshini Balamurugan Vadivazhagi \\
+  Arizona State University \\
+  \texttt{\{achidam8, uulagan1, hbalamu1\}@asu.edu}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+% TODO (Arav): ~150 words, written last.
+% - Problem: surveys/quizzes answered by an LLM (copy-paste, document upload, browser agent);
+%   single-mechanism defenses each fail against some attacker and raise false flags on honest people.
+% - Idea: the router picks the next check per question and per person, SPRT log-odds score,
+%   escalates only as evidence builds, pauses for human review (never blocks).
+% - Headline: at 1% FPR on honest people, does the router catch more AI use, in fewer
+%   questions, than any single check or all checks together? (fill with final numbers after #46)
+\end{abstract}
+
+% ------------------------------------------------------------------
+\section{Introduction}
+\label{sec:intro}
+% TODO (Arav): ~1 page together with abstract and conclusion (AGENTS.md Section 14).
+% - Motivation: LLMs answer online surveys, quizzes, tests; existing defenses use ONE mechanism
+%   everywhere (decoy, hidden instruction, text classifier, keystroke logging).
+% - Contribution 1: failure-mode map of where each check works and breaks (RQ1).
+% - Contribution 2: the Adaptive Defense Router (SPRT, s_t = s_{t-1} + log P(o_t|AI)/P(o_t|human)),
+%   compared with five baselines (RQ2--RQ4). State RQ1--RQ4 here.
+
+% ------------------------------------------------------------------
+\section{Related Work}
+\label{sec:related}
+% TODO (Archana): ~1 page.
+% - Decoys in exam documents: DoPE \citep{shekhar2026dope}, Integrity Shield \citep{shekhar2026integrity}.
+% - AI-assisted survey responses and survey traps: ASURRE \citep{wang2026asurre},
+%   \citet{wang2023traps}, \citet{hohne2025}, \citet{westwood2025}, \citet{xu2026soups}.
+% - Sequential testing: \citet{wald1945}; sequential person-fit \citet{vankrimpen2001}.
+% - Detector weaknesses: paraphrasing \citep{krishna2023paraphrasing}, bias against non-native
+%   writers \citep{liang2023detectors}; glitch tokens \citep{land2024magikarp};
+%   adaptive attacks \citep{nasr2025,zhan2025}.
+
+% ------------------------------------------------------------------
+\section{System}
+\label{sec:system}
+% TODO (Harshini): ~1 page -- schema, front end, telemetry (AGENTS.md Section 14).
+% - Assessment schema: every survey/quiz is a list of JSON items (type, correct answer or not,
+%   delivery, eligible mechanisms), so one front end renders any assessment.
+% - Front end and mechanism injection: hidden text is visually hidden but present in the DOM and
+%   in copied text (not display:none); variant ids, check names and router state stay server-side.
+% - Telemetry: timings and counts only (paste, focus loss, keystroke counts, time per item),
+%   never the keys typed; behaviour-check outcomes paste / focus_loss / too_fast / normal.
+
+% ------------------------------------------------------------------
+\section{Experimental Setup}
+\label{sec:setup}
+% TODO (owner not listed in AGENTS.md Section 14 -- suggest Archana for data, Arav for attackers;
+% or fold these into Sections 5 and 6 to save space).
+\subsection{Data and held-out splits}
+% - OpinionQA \citep{santurkar2023opinionqa}, General Social Survey \citep{gss},
+%   IPIP Big Five reverse-keyed pairs \citep{ipip}, the three ASURRE source surveys,
+%   MMLU \citep{hendrycks2021mmlu} and ARC \citep{clark2018arc}.
+% - All human data is pre-2020 (confound: old vs new writing); held-out model and held-out
+%   survey are never used for fitting or tuning.
+\subsection{Attack modes and attacker levels}
+% - copy_paste, doc_upload (PDF with decoy layers), browser_agent (DOM / accessibility tree).
+% - Attacker levels L0 naive ... L4 persona (used for RQ4).
+% - Models used and the held-out model (locked in #16).
+
+% ------------------------------------------------------------------
+\section{Mechanisms and Failure-Mode Map (RQ1)}
+\label{sec:map}
+% TODO (Archana): ~2 pages.
+% - Mechanisms: answer-key decoy, opinion trap, canary / prompt-leak trap, glitch-token probe
+%   (exploratory), behaviour check, writing-style signal; their outcome labels.
+% - Failure-mode map: P(outcome|AI), P(outcome|human) per mechanism x item type x attack mode
+%   x attacker level; add-one (Dirichlet(1)) smoothing; 95% intervals.
+% - RQ1 result: hit rate on AI, false-flag rate on humans; heatmap figure (#37).
+% - Wording: the map is *estimated*; the style classifier (if any) is *trained*; the router is not trained.
+
+% ------------------------------------------------------------------
+\section{Router, Replay and Baselines (RQ2, RQ3)}
+\label{sec:router}
+% TODO (Arav): ~2 pages.
+% - SPRT score and Wald thresholds A = ln((1-beta)/alpha), B = ln(beta/(1-alpha)), alpha = 0.01;
+%   escalation; next-check selection by expected information gain minus burden and FP penalties;
+%   random near-tie breaking; why not a contextual bandit.
+% - Correlated signals make the raw score overconfident: per-mechanism cap and empirical threshold
+%   calibration on held-out replay (#42).
+% - Replay simulation; five baselines (best single, all checks, fixed plan, random,
+%   published survey traps \citep{wang2023traps,hohne2025}).
+% - Metrics: TPR at 1% and 5% human FPR, items to decision, respondent burden, 95% bootstrap CIs.
+
+% ------------------------------------------------------------------
+\section{Adaptive Attackers (RQ4)}
+\label{sec:rq4}
+% TODO (Arav): ~0.75 page.
+% - RQ4 drop: TPR at L1--L4 minus TPR at L0 (warned, informed, retry, persona).
+
+% ------------------------------------------------------------------
+\section{Human Study and Fairness}
+\label{sec:human}
+% TODO (Harshini): part of ~1.5 pages shared with Limitations (AGENTS.md Section 14).
+% - Human pilot (#35) to measure false-flag rates of the traps and behaviour check on honest
+%   people; cleaned into the outcome table with data_origin = pilot (#39). Live sessions (#43) if done.
+% - Fairness: screen-reader test of hidden traps (#44, Harshini) -- report either way;
+%   non-native writer false-flag analysis (#45, Archana).
+
+% ------------------------------------------------------------------
+\section{Conclusion}
+\label{sec:conclusion}
+% TODO (Arav): answer the headline test; future work (screenshot / vision agents,
+% code or math assignments, multilingual assessments, LMS plugins).
+
+% ------------------------------------------------------------------
+\section*{Limitations}
+% TODO (Harshini): AGENTS.md lists these; expand with what the results show.
+% - Screenshot / vision-only agents and visual traps are out of scope (team decision, Oct 2026).
+% - Pre-2020 human data: a classifier may learn old vs new writing instead of human vs AI.
+% - SPRT assumes conditionally independent observations; behaviour and style signals are correlated.
+% - Small human pilot; writing-style signal may be biased against non-native writers;
+%   screen readers read hidden text aloud.
+
+\section*{Ethics Statement}
+% TODO (Harshini): check the wording and fill [N] once the pilot ends (Fri Nov 13).
+Our human pilot was a small class pilot with [N] classmates aged 18 or older (target: about ten).
+Prof.~Vivek Gupta approved a small classmate pilot for this course. The pilot was \emph{not}
+reviewed or approved by an Institutional Review Board, so the data is used only for this class
+project. Participants gave consent before starting. We used partial disclosure: before the
+session we described in general terms what we record and why, and after the last question a
+full debrief explained the hidden checks and let participants remove their answers. We did not
+collect names, emails or student IDs; responses are stored under a random session code, and
+telemetry records only timings and counts, never the keys typed. Only aggregate totals are
+reported, and the row-level pilot data is deleted when the course ends in December 2026. The detection system never blocks a respondent automatically; it only pauses a session
+for human review, because even a 1\% false-positive rate would flag honest people.
+
+% Lists every custom.bib entry so the skeleton compiles before any \cite exists.
+% TODO (Arav, final integration): remove once the sections cite their sources.
+\nocite{*}
+\bibliography{custom}
+
+\end{document}
