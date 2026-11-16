@@ -19,20 +19,32 @@ cp configs/models.example.yaml configs/models.yaml        # pick models, prices,
 pytest                                                    # all tests should pass
 ```
 
-## What exists so far (Arav, Oct 26)
+## Status (main, Nov 16)
 
-| Area | Files | Status |
+**Done (on `main`)**
+
+| Area | Files | Notes |
 |---|---|---|
-| Contracts (draft) | `adr/contracts/` | Item schema, mechanism interface, outcome table, failure map, router API. Tests in `tests/test_contracts.py`. **Needs team sign-off.** |
-| LLM client | `adr/harness/llm_client.py` | Anthropic, OpenAI, Google, OpenAI-compatible (open-weight). Disk cache, weekly spend cap, retries. |
-| Copy-paste attacker (#9) | `adr/harness/copy_paste.py`, `prompts.py`, `parse.py` | Levels L0, L1, L2, L4. L3 (retry) comes with step #36. |
-| Document-upload attacker (#20) | `adr/harness/doc_upload.py`, `pdf_render.py` | Whole assessment as one PDF, traps in the invisible text layer. Anthropic, OpenAI, Google only. |
-| Router prototype (#13) | `adr/router/` | SPRT score, Chernoff-rule check selection, burden and false-flag penalties, per-mechanism cap, escalation, random tie-breaks. |
-| Baselines 1–4 (#32) | `adr/baselines/` | Best single mechanism (train map), all checks, fixed plan, random. In display order, never clear early, pause for review like the router. |
-| Replay on logged outcomes (#27) | `adr/replay/` | Each simulated respondent copies one real logged session; fallbacks and map draws are counted. Metrics with bootstrap CIs over donor sessions. Three splits: train (map), calibration (default evaluation, 30% of items), held-out (only with `--final`). Uses a **temporary** quick map until #34. |
+| Contracts v1 and v2 (PR #2, #5) | `adr/contracts/` | Item schema, mechanism interface, outcome table, failure map, router API. Agreed items 1–16 are listed below under "Contract changes beyond the Oct 17 draft". |
+| LLM client | `adr/harness/llm_client.py` | Anthropic, OpenAI, Google, OpenAI-compatible (open-weight). Disk cache, weekly spend cap, retries (429 / `RESOURCE_EXHAUSTED` retried, PR #20). |
+| Copy-paste attacker (step #9) | `adr/harness/copy_paste.py`, `prompts.py`, `parse.py` | Levels L0, L1, L2, L4. |
+| Document-upload attacker (step #20; PR #4, #17, #21) | `adr/harness/doc_upload.py`, `pdf_render.py` | Assessment as PDFs with traps in the invisible text layer; `--max-tokens`, `--questions-per-doc` / `--docs-per-bank`. Anthropic, OpenAI, Google only. |
+| Router (step #13) | `adr/router/` | SPRT score, Chernoff-rule check selection, burden and false-flag penalties, per-mechanism cap (a fraction of A), escalation, random tie-breaks. |
+| Replay on logged outcomes (step #27, PR #9) | `adr/replay/`, `scripts/run_replay.py` | Each simulated respondent copies one real logged session. Bootstrap CIs over donor sessions. Splits: train (map), calibration (default evaluation, 30% of items), held-out (only with `--final`). |
+| Baselines 1–4 (step #32, PR #10) | `adr/baselines/` | Best single mechanism (train map), all checks, fixed plan, random; `--compare` and the budget curve. |
+| Failure-map builder and AI-only mode (PR #22, #24) | `adr/map/`, `scripts/build_failure_map.py`, `plot_failure_map.py` | See "Build the failure-mode map" below. AI-only maps (`--ai-only`) are provisional and must not feed the router. |
+| Telemetry and behaviour check (PR #11, #14) | `frontend/telemetry.js`, `adr/mechanisms/behaviour.py` | Per-question counts and timings, never keys typed; outcomes paste / focus_loss / too_fast / normal. |
+| Pilot materials (PR #12) | `docs/pilot/`, `server/` (`ADR_PILOT=1`), `server/clean.py` | Consent, debrief, withdraw, recruitment; saved sessions cleaned into outcome rows. |
+| First real gpt-mini runs and M2 figure (PR #23) | `results/m2/`, `scripts/m2_decoy_figure.py`, `item_difficulty.py` | MMLU and ARC, copy-paste and doc upload at L0, plus repeated runs. Inputs and commands: `results/m2/README.md`. |
 | Synthetic test data | `adr/router/synthetic.py` | **Invented numbers** for developing the router. Never report these. |
 
-Not started: browser agent (#22), baseline 5 (#33), and everything Archana and Harshini own.
+Also on `main`: Archana's loaders and mechanisms (PR #3, #7, #8, #19) and Harshini's respondent page and
+mechanism injection (PR #1, #6) and paper skeleton (PR #18).
+
+**In review:** browser-agent attacker (step #22, PR #15), provisional-map guard for the router and
+replay (PR #25).
+
+**Not started:** baseline 5 (step #33), L3 retry attacker (step #36).
 
 ## Try it
 
