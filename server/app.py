@@ -7,6 +7,9 @@ Wraps the router API (adr/contracts/router_api.py) over HTTP:
     GET  /assessments            the list the start page offers
     POST /session/start          {assessment_id}            -> {session_id, finished, item}
     POST /session/{id}/respond   {token, answer, telemetry} -> {session_id, finished, item}
+    GET  /study                  {consent}: the consent text in pilot mode, else null
+    POST /session/{id}/withdraw  removes the session and everything answered (Stop button)
+    GET  /session/{id}/debrief   {paragraphs}: pilot only, and only once the session finished
 
 What the browser gets, and nothing more (AGENTS.md section 6.5, "Server-side only"): the
 visible question and whether the assessment is finished. An AI agent reads everything the page
@@ -31,17 +34,23 @@ Settings (environment variables):
                           test (#44) compares them. Default clip.
   ADR_STUB_MECHANISMS=1   Use the test stubs (tests/stubs.py) instead of adr/mechanisms/, for
                           trying the page before Archana's mechanisms are on main.
+  ADR_PILOT=1             Human pilot (#30, #35): consent screen before question 1, a Stop
+                          button, and the debrief after the last one. Text in docs/pilot/.
+                          Needs ADR_DATA_DIR, so a pilot can't run without saving answers.
+  ADR_DATA_DIR=<folder>   Save every session to <folder>/<session_id>.jsonl as it happens
+                          (server/store.py). Withdrawing deletes the file. Unset: memory only.
   ADR_DEBUG_STATE=1       GET /session/{id} returns the SessionState, for the demo (#47) and
                           logging. Never enable it in a session real people take.
 
 Not here yet: a real failure map for ADR_PICK=router (#28).
-Responses and outcomes stay in memory only; #39 writes them to the outcome table.
+Saved sessions are raw records; #39 turns them into outcome-table rows.
 
 Run from the repo root:   uvicorn server.app:app --reload      then open http://127.0.0.1:8000
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -74,10 +83,12 @@ from adr.harness.copy_paste import plain_variant
 from adr.harness.registry import get_mechanism
 from adr.mechanisms.behaviour import MECHANISM as BEHAVIOUR
 from adr.router.core import SPRTRouter
+from server.store import SessionStore
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BANK = ROOT / "server" / "stub_items.json"
 FRONTEND_DIR = ROOT / "frontend"
+PILOT_DIR = ROOT / "docs" / "pilot"
 
 # Mechanisms that change what the page shows. Opinion traps, behaviour and style only look at
 # answers (passive), so the page has nothing to inject for them; glitch tokens are out for now.
@@ -91,6 +102,7 @@ class StartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     assessment_id: str
+    consent: bool = False  # required in pilot mode: the person pressed "I agree"
 
 
 class RespondRequest(BaseModel):
@@ -129,6 +141,14 @@ class Step(BaseModel):
     item: ShownItem | None
 
 
+class Study(BaseModel):
+    consent: list[str] | None  # paragraphs to show before starting; None = no consent step
+
+
+class Debrief(BaseModel):
+    paragraphs: list[str]
+
+
 class AssessmentInfo(BaseModel):
     assessment_id: str
     title: str
@@ -152,6 +172,31 @@ def load_bank(path: str | Path) -> tuple[dict[str, Item], dict[str, Assessment]]
     return items, assessments
 
 
+@dataclass(frozen=True)
+class Flow:
+    """Assessments taken one after another in one session: one consent, one debrief at the end.
+
+    The pilot needs a quiz part and a survey part. Taken as two separate sessions, the debrief
+    after the first would reveal the hidden text before the second. In the bank JSON:
+        "flow": {"title": "Quiz and survey", "parts": ["pilot-quiz", "pilot-survey"]}
+    """
+
+    title: str
+    parts: tuple[str, ...]
+
+
+def load_flow(path: str | Path, assessments: dict[str, Assessment]) -> Flow | None:
+    raw = json.loads(Path(path).read_text(encoding="utf-8")).get("flow")
+    if raw is None:
+        return None
+    flow = Flow(title=raw["title"], parts=tuple(raw["parts"]))
+    missing = [p for p in flow.parts if p not in assessments]
+    if not flow.parts or missing or len(set(flow.parts)) != len(flow.parts):
+        raise ValueError(f"bad flow parts {flow.parts}: unknown {missing}" if missing
+                         else f"flow parts must be non-empty and distinct: {flow.parts}")
+    return flow
+
+
 def check_answer(item: Item, answer: Any) -> None:
     """Raise ValueError unless `answer` fits the item type (option index, ranking, number, text)."""
     n = len(item.options or [])
@@ -170,6 +215,20 @@ def check_answer(item: Item, answer: Any) -> None:
     if not ok:
         # Says what kind of answer is expected, never which item it was.
         raise ValueError(f"{answer!r} is not a valid {item.item_type} answer")
+
+
+def screen_text(path: str | Path) -> list[str]:
+    """Paragraphs of the "## On screen" section of a docs/pilot file, so the wording lives in
+    one place that reviewers can read. Plain text, one paragraph per blank-line block."""
+    text = Path(path).read_text(encoding="utf-8")
+    _, found, rest = text.partition("\n## On screen\n")
+    if not found:
+        raise ValueError(f"{path}: no '## On screen' section")
+    section = rest.split("\n## ", 1)[0]
+    paragraphs = [" ".join(block.split()) for block in section.split("\n\n") if block.strip()]
+    if not paragraphs:
+        raise ValueError(f"{path}: the '## On screen' section is empty")
+    return paragraphs
 
 
 def load_injected_mechanisms(stubs: bool = False) -> dict[str, Mechanism]:
@@ -208,24 +267,64 @@ class _Session:
     assessment: Assessment
     current: Choice | None
     token: str | None = None  # the opaque token for `current`, as the browser knows it
+    consented: bool = False  # pilot: pressed "I agree" (the only thing stored about consent)
     responses: list[tuple[Response, Telemetry]] = field(default_factory=list)
     outcomes: list[tuple[str, str]] = field(default_factory=list)  # (variant_id, outcome)
+    # A flow: the parts still to come, questions in the parts already done, questions in all.
+    later_parts: list[Assessment] = field(default_factory=list)
+    done_before: int = 0
+    total: int = 0
 
 
 # ---------------------------------------------------------------- app
+class _Unset:
+    """create_app(data_dir=...) left out, as opposed to data_dir=None ("don't save")."""
+
+
+_FROM_ENV = _Unset()
+
+
 def create_app(
     bank_path: str | Path | None = None,
     mechanisms: dict[str, Mechanism] | None = None,
     pick: Pick | None = None,
     hide: Hide | None = None,
+    pilot: bool | None = None,
+    data_dir: str | Path | None | _Unset = _FROM_ENV,
 ) -> FastAPI:
-    items, assessments = load_bank(bank_path or os.environ.get("ADR_ITEMS", DEFAULT_BANK))
+    """Arguments left out come from the environment (ADR_*). Saving is the exception:
+    ADR_DATA_DIR is read only when both `pilot` and `data_dir` are left out, i.e. when the
+    whole server is set up from the environment (uvicorn, scripts/run_pilot.ps1). Code that
+    builds its own app (tests, the browser-agent harness) never saves into a folder it didn't
+    name, so AI sessions can't end up next to the human pilot's answers."""
+    configured_by_env = pilot is None and isinstance(data_dir, _Unset)
+    if os.environ.get("ADR_DEBUG_STATE") == "1":
+        configured_by_env = False  # a debug or harness server: never the pilot's folder
+    if isinstance(data_dir, _Unset):
+        data_dir = (os.environ.get("ADR_DATA_DIR") or None) if configured_by_env else None
+    bank_path = bank_path or os.environ.get("ADR_ITEMS", DEFAULT_BANK)
+    items, assessments = load_bank(bank_path)
+    flow = load_flow(bank_path, assessments)
     if mechanisms is None:
         mechanisms = load_injected_mechanisms(os.environ.get("ADR_STUB_MECHANISMS") == "1")
     pick = pick or os.environ.get("ADR_PICK", "all")  # type: ignore[assignment]
     hide = hide or os.environ.get("ADR_HIDE", "clip")  # type: ignore[assignment]
     if pick not in ("all", "router") or hide not in ("clip", "clear", "clip_aria"):
         raise ValueError(f"bad ADR_PICK={pick!r} or ADR_HIDE={hide!r}")
+    if pilot is None:
+        pilot = os.environ.get("ADR_PILOT") == "1"
+    if pilot and os.environ.get("ADR_DEBUG_STATE") == "1":
+        raise ValueError("ADR_PILOT=1 with ADR_DEBUG_STATE=1 would expose real sessions' state")
+    if pilot and data_dir is None:
+        raise ValueError("ADR_PILOT=1 needs ADR_DATA_DIR, or the pilot's answers are lost")
+    store = SessionStore(data_dir) if data_dir else None
+    # Read at startup, so a broken file stops the server before anyone sees the page.
+    consent = screen_text(PILOT_DIR / "consent.md") if pilot else None
+    debrief = screen_text(PILOT_DIR / "debrief.md") if pilot else None
+    # Which consent wording each person agreed to, if it changes during the pilot.
+    consent_version = (
+        hashlib.sha256("\n\n".join(consent).encode()).hexdigest()[:12] if consent else None
+    )
 
     variants = build_variants(items, mechanisms)
     by_variant = {v.variant_id: v for vs in variants.values() for v in vs}
@@ -266,8 +365,8 @@ def create_app(
                 if hidden_text
                 else None
             ),
-            position=len(s.state.served) + 1,
-            total=len(s.assessment.item_ids),
+            position=s.done_before + len(s.state.served) + 1,
+            total=s.total or len(s.assessment.item_ids),
         )
         return Step(session_id=s.state.session_id, finished=False, item=item)
 
@@ -279,6 +378,14 @@ def create_app(
 
     @app.get("/assessments")
     def list_assessments() -> list[AssessmentInfo]:
+        if flow:  # one entry that runs every part; starting a later part alone isn't offered
+            first = assessments[flow.parts[0]]
+            return [AssessmentInfo(
+                assessment_id=first.assessment_id,
+                title=flow.title,
+                assessment_type=first.assessment_type,
+                n_items=sum(len(assessments[p].item_ids) for p in flow.parts),
+            )]
         return [
             AssessmentInfo(
                 assessment_id=a.assessment_id,
@@ -289,14 +396,29 @@ def create_app(
             for a in assessments.values()
         ]
 
+    @app.get("/study")
+    def study() -> Study:
+        return Study(consent=consent)
+
     @app.post("/session/start")
     def start(req: StartRequest) -> Step:
+        if pilot and not req.consent:
+            raise HTTPException(403, "please read and agree to the consent screen first")
         assessment = assessments.get(req.assessment_id)
-        if assessment is None:
+        if assessment is None or (flow and req.assessment_id != flow.parts[0]):
             raise HTTPException(404, "unknown assessment")
         session_id = uuid.uuid4().hex
         state, choice = router.start(assessment, session_id, seed=secrets.randbelow(2**31))
-        s = sessions[session_id] = _Session(state=state, assessment=assessment, current=choice)
+        s = sessions[session_id] = _Session(
+            state=state, assessment=assessment, current=choice, consented=req.consent
+        )
+        if flow:
+            s.later_parts = [assessments[p] for p in flow.parts[1:]]
+            s.total = sum(len(assessments[p].item_ids) for p in flow.parts)
+        if store:
+            store.start(session_id, assessment_id=assessment.assessment_id, pilot=pilot,
+                        consented=req.consent, consent_version=consent_version,
+                        seed=state.seed)
         s.current = next_choice(s)
         return step(s)
 
@@ -320,17 +442,21 @@ def create_app(
         )
 
         s.responses.append((response, req.telemetry))
+        n_outcomes = len(s.outcomes)
         # Plain variants have outcome "none"; a decoy or canary scores the answer. The
         # behaviour check (#25) then scores every answer from its telemetry. Style and the
         # opinion trap come with #28.
         rendered = by_variant[choice.variant_id]
-        outcome = (
-            mechanisms[rendered.mechanism].score(rendered, response, req.telemetry)
-            if rendered.mechanism
-            else "none"
-        )
-        s.outcomes.append((choice.variant_id, outcome))
-        s.state = router.update(s.state, choice.variant_id, outcome)
+        scored_id, outcome = choice.variant_id, "none"
+        if rendered.mechanism:
+            try:
+                outcome = mechanisms[rendered.mechanism].score(rendered, response, req.telemetry)
+            except NoObservation:
+                # Nothing to score (e.g. an empty answer): no evidence either way. The router
+                # still has to know the item was shown, so it is recorded as the plain variant.
+                scored_id = make_variant_id(choice.item_id, None)
+        s.outcomes.append((scored_id, outcome))
+        s.state = router.update(s.state, scored_id, outcome)
         try:
             seen = BEHAVIOUR.score(
                 rendered, response, req.telemetry, passage=items[choice.item_id].passage
@@ -342,7 +468,55 @@ def create_app(
             s.outcomes.append((passive_id, seen))
             s.state = router.update(s.state, passive_id, seen)
         s.current = next_choice(s)
+        # Someone may have pressed Stop while this answer was being scored: then the session
+        # is gone and nothing is written (the store also never re-creates a deleted file).
+        saving = store is not None and session_id in sessions
+        if saving:
+            store.answer(
+                session_id,
+                assessment_id=s.assessment.assessment_id,
+                item_id=choice.item_id,
+                variant_id=choice.variant_id,
+                mechanism=choice.mechanism,
+                item_type=items[choice.item_id].item_type,
+                answer=req.answer,
+                telemetry=req.telemetry.model_dump(),
+                outcomes=s.outcomes[n_outcomes:],
+            )
+        while s.current is None and s.later_parts:  # a flow: straight on to the next part
+            s.done_before += len(s.assessment.item_ids)
+            s.assessment = s.later_parts.pop(0)
+            s.state, _ = router.start(s.assessment, session_id, seed=s.state.seed)
+            s.current = next_choice(s)
+            if saving:
+                store.part(session_id, assessment_id=s.assessment.assessment_id)
+        if saving and s.current is None:
+            store.finish(session_id)
         return step(s)
+
+    @app.post("/session/{session_id}/withdraw")
+    def withdraw(session_id: str) -> dict[str, bool]:
+        """Stop button or "Remove my answers": forget the session and all its answers, on
+        disk too. Works after a server restart as long as the file is still there."""
+        on_disk = False
+        if store:
+            try:
+                on_disk = store.delete(session_id)
+            except ValueError:
+                raise HTTPException(404, "unknown session") from None
+        if sessions.pop(session_id, None) is None and not on_disk:
+            raise HTTPException(404, "unknown session")
+        return {"withdrawn": True}
+
+    @app.get("/session/{session_id}/debrief")
+    def debrief_text(session_id: str) -> Debrief:
+        """Explains the hidden checks, so only after the last question (agents read the page)."""
+        s = get_session(session_id)
+        if debrief is None:
+            raise HTTPException(404, "no debrief outside the pilot")
+        if s.current is not None:
+            raise HTTPException(409, "the session isn't finished yet")
+        return Debrief(paragraphs=debrief)
 
     if os.environ.get("ADR_DEBUG_STATE") == "1":
 
