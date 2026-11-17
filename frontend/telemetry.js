@@ -4,7 +4,7 @@
 // values, no pasted text and no answer text are stored or sent (AGENTS.md rule 7). Pasted text
 // is measured for its length only.
 //
-// Sent to the server as the contract Telemetry (adr/contracts/mechanism.py):
+// Sent to the server as its Telemetry record:
 //   time_on_item_ms   question shown -> answer submitted
 //   paste_events      paste events inside the answer
 //   focus_loss_count  times the person left the page (tab switch, other window), counted once

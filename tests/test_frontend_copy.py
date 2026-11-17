@@ -43,9 +43,9 @@ def _free_port():
         return s.getsockname()[1]
 
 
-def _launch(hide):
+def _launch(hide, **options):
     port = _free_port()
-    app = create_app(mechanisms=MECHANISMS, hide=hide)
+    app = create_app(mechanisms=MECHANISMS, hide=hide, **options)
     server = uvicorn.Server(uvicorn.Config(app, port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()

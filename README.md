@@ -19,21 +19,31 @@ cp configs/models.example.yaml configs/models.yaml        # pick models, prices,
 pytest                                                    # all tests should pass
 ```
 
-## What exists so far (Arav, Oct 26)
+## Status (main, Nov 16)
 
-| Area | Files | Status |
+**Done (on `main`)**
+
+| Area | Files | Notes |
 |---|---|---|
-| Contracts (draft) | `adr/contracts/` | Item schema, mechanism interface, outcome table, failure map, router API. Tests in `tests/test_contracts.py`. **Needs team sign-off.** |
-| LLM client | `adr/harness/llm_client.py` | Anthropic, OpenAI, Google, OpenAI-compatible (open-weight). Disk cache, weekly spend cap, retries. |
-| Copy-paste attacker (#9) | `adr/harness/copy_paste.py`, `prompts.py`, `parse.py` | Levels L0, L1, L2, L4. L3 (retry) comes with step #36. |
-| Document-upload attacker (#20) | `adr/harness/doc_upload.py`, `pdf_render.py` | Whole assessment as one PDF, traps in the invisible text layer. Anthropic, OpenAI, Google only. |
-| Browser-agent attacker (#22) | `adr/harness/browser_agent.py` | Drives the real page in Chromium (Playwright); reads it as innerText or the accessibility tree, never pixels. |
-| Router prototype (#13) | `adr/router/` | SPRT score, Chernoff-rule check selection, burden and false-flag penalties, per-mechanism cap, escalation, random tie-breaks. |
-| Baselines 1–4 (#32) | `adr/baselines/` | Best single mechanism (train map), all checks, fixed plan, random. In display order, never clear early, pause for review like the router. |
-| Replay on logged outcomes (#27) | `adr/replay/` | Each simulated respondent copies one real logged session; fallbacks and map draws are counted. Metrics with bootstrap CIs over donor sessions. Three splits: train (map), calibration (default evaluation, 30% of items), held-out (only with `--final`). Uses a **temporary** quick map until #34. |
+| Contracts v1 and v2 (PR #2, #5) | `adr/contracts/` | Item schema, mechanism interface, outcome table, failure map, router API. Agreed items 1–16 are listed below under "Contract changes beyond the Oct 17 draft". |
+| LLM client | `adr/harness/llm_client.py` | Anthropic, OpenAI, Google, OpenAI-compatible (open-weight). Disk cache, weekly spend cap, retries (429 / `RESOURCE_EXHAUSTED` retried, PR #20). |
+| Copy-paste attacker (step #9) | `adr/harness/copy_paste.py`, `prompts.py`, `parse.py` | Levels L0, L1, L2, L4. |
+| Document-upload attacker (step #20; PR #4, #17, #21) | `adr/harness/doc_upload.py`, `pdf_render.py` | Assessment as PDFs with traps in the invisible text layer; `--max-tokens`, `--questions-per-doc` / `--docs-per-bank`. Anthropic, OpenAI, Google only. |
+| Browser-agent attacker (step #22, PR #15) | `adr/harness/browser_agent.py`, `scripts/run_browser_agent.py` | Drives the real page in Chromium (Playwright); reads it as innerText or the accessibility tree, never pixels. |
+| Router (step #13) | `adr/router/` | SPRT score, Chernoff-rule check selection, burden and false-flag penalties, per-mechanism cap (a fraction of A), escalation, random tie-breaks. |
+| Replay on logged outcomes (step #27, PR #9) | `adr/replay/`, `scripts/run_replay.py` | Each simulated respondent copies one real logged session. Bootstrap CIs over donor sessions. Splits: train (map), calibration (default evaluation, 30% of items), held-out (only with `--final`). |
+| Baselines 1–4 (step #32, PR #10) | `adr/baselines/` | Best single mechanism (train map), all checks, fixed plan, random; `--compare` and the budget curve. |
+| Failure-map builder and AI-only mode (PR #22, #24) | `adr/map/`, `scripts/build_failure_map.py`, `plot_failure_map.py` | See "Build the failure-mode map" below. AI-only maps (`--ai-only`) are provisional and must not feed the router. |
+| Provisional-map guard (PR #25) | `adr/router/map_guard.py` | `run_replay.py --map` refuses an `-ai-only` map or any cell with zero human counts unless `--allow-provisional-map` is passed. |
+| Telemetry and behaviour check (PR #11, #14) | `frontend/telemetry.js`, `adr/mechanisms/behaviour.py` | Per-question counts and timings, never keys typed; outcomes paste / focus_loss / too_fast / normal. |
+| Pilot materials (PR #12) | `docs/pilot/`, `server/` (`ADR_PILOT=1`), `server/clean.py` | Consent, debrief, withdraw, recruitment; saved sessions cleaned into outcome rows. |
+| First real gpt-mini runs and M2 figure (PR #23) | `results/m2/`, `scripts/m2_decoy_figure.py`, `item_difficulty.py` | MMLU and ARC, copy-paste and doc upload at L0, plus repeated runs. Inputs and commands: `results/m2/README.md`. |
 | Synthetic test data | `adr/router/synthetic.py` | **Invented numbers** for developing the router. Never report these. |
 
-Not started: baseline 5 (#33), and everything Archana and Harshini own.
+Also on `main`: Archana's loaders and mechanisms (PR #3, #7, #8, #19) and Harshini's respondent page and
+mechanism injection (PR #1, #6) and paper skeleton (PR #18).
+
+**Not started:** baseline 5 (step #33), L3 retry attacker (step #36).
 
 ## Try it
 
@@ -115,19 +125,43 @@ confidence intervals, and prior-only human probabilities required by the shared 
 output is marked provisional and must not be used by the router. Rebuild without `--ai-only`
 when the pilot outcome rows are available.
 
-### Prepare the locked GSS 2018 bank
+## Datasets
 
-Download NORC's official `2018_stata.zip` to `data/raw/gss/`, extract `GSS2018.dta` into
-`data/raw/gss/2018_stata/`, then run:
+All six sources are public. Download each one yourself and put the raw files where the table says. Every script reads those paths by default.
+
+| Source | What we use it for | Official download | Put the raw files in |
+|---|---|---|---|
+| MMLU (Hendrycks et al. 2021) | Quiz MCQs with known answers (decoy checks) | [hendrycks/test](https://github.com/hendrycks/test): [`data.tar`](https://people.eecs.berkeley.edu/~hendrycks/data.tar) | `data/raw/mmlu/data/{dev,val,test}/*.csv` (untar there) |
+| ARC (Clark et al. 2018) | Quiz MCQs with known answers (decoy checks); we use ARC-Challenge test | [allenai.org/data/arc](https://allenai.org/data/arc): [`ARC-V1-Feb2018.zip`](https://ai2-public-datasets.s3.amazonaws.com/arc/ARC-V1-Feb2018.zip) | `data/raw/arc/ARC-Challenge/ARC-Challenge-Test.jsonl` (and `ARC-Easy/`) |
+| OpinionQA (Santurkar et al. 2023; Pew American Trends Panel) | Survey MCQ / Likert items with human answer distributions | [tatsu-lab/opinions_qa](https://github.com/tatsu-lab/opinions_qa) (data link in its README) | `data/raw/opinionqa/human_resp/American_Trends_Panel_W<wave>/{info,responses}.csv` |
+| GSS 2018 (NORC) | Survey MCQ items with human answers; 8 locked questions | [`2018_stata.zip`](https://gss.norc.org/content/dam/gss/get-the-data/documents/stata/2018_stata.zip) ([codebook](https://gss.norc.org/content/dam/gss/get-documentation/pdf/codebook/GSS_Codebook_mainbody.pdf)) | `data/raw/gss/2018_stata.zip`, extracted to `data/raw/gss/2018_stata/GSS2018.dta` |
+| IPIP Big Five, 50 items (Open-Source Psychometrics Project) | Reverse-keyed item pairs for contradiction-type opinion traps | [openpsychometrics.org/_rawdata](https://openpsychometrics.org/_rawdata/): [`BIG5.zip`](https://openpsychometrics.org/_rawdata/BIG5.zip) | `data/raw/ipip/BIG5/BIG5/{data.csv,codebook.txt}` (unzip into `data/raw/ipip/BIG5/`) |
+| ASURRE source surveys (Wang, Mamaev, Leckie 2026): Nature PhD Students 2019, Springer Nature Social Media 2017, OSMI Mental Health in Tech 2017–18 | Open-ended human answers: the writing-style signal and canary false positives | Via the data section of [arXiv 2609.17317](https://arxiv.org/abs/2609.17317) | Configs `data/raw/asurre/configs/{phd2019,springer_2017,osmi_mh}.json`; the response spreadsheets each config names under `"source"` go in `data/raw/asurre/raw/` |
+
+**Held out:** the OSMI Mental Health in Tech 2017–18 survey (`asurre_osmi_2017_18`). It is excluded from all fitting: the failure map, thresholds and the style profile. It is used only for the final evaluation (`--final`). The team locked this before any fitting, using the "smallest source" rule recorded in `configs/data_decisions.json`. The held-out *model* (gemini-flash) is set in `configs/models.yaml`.
+
+### Build the banks
 
 ```bash
+# GSS 2018 first: verifies the official archive and Stata-file checksums, then writes the
+# 8 locked questions (plus the WTSSNR weight) to data/raw/gss/gss.csv
 python scripts/prepare_gss_2018.py
-python scripts/build_runs_v1.py --datasets gss --output data/processed/gss-check
+
+# All validated banks and variants -> data/processed/runs_v1/ (offline, no model calls)
+python scripts/build_runs_v1.py
+python scripts/build_runs_v1.py --datasets mmlu arc        # only some sources
+
+# Writing-style profile from the ASURRE training surveys (never opens the held-out one)
+python scripts/prepare_style_profile.py                   # -> data/processed/runs_v1/style_profile.json
 ```
 
-The preparation step verifies the official archive and Stata-file checksums before writing the
-gitignored CSV. Exact wording, response codes, provenance, and the locked variable list are in
-`configs/gss_2018_manifest.json` and `configs/data_decisions.json`.
+Exact GSS wording, response codes, provenance and checksums are in `configs/gss_2018_manifest.json`. The locked variable list and the held-out decision are in `configs/data_decisions.json`.
+
+### What is not in git
+
+Raw data (`data/raw/`), built banks (`data/processed/`), the model response cache (`cache/llm/`), run outputs (`results/outcomes/`, `results/runs/`) and all pilot data (`pilot_data/`, `dry_run_data/`) are gitignored and never committed. API keys go in `.env`, which is also ignored.
+
+The gpt-mini run data (outcome tables and run folders) is in the team Drive folder **"ADR runs"**. Pilot data is not shared there or anywhere else; only aggregate totals are reported.
 
 ## For Archana and Harshini: how your code plugs in
 

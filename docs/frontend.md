@@ -1,0 +1,48 @@
+# Front end: notes for the team
+
+Owner: Harshini. The server never sends this file; it sends only `frontend/`.
+
+## Why the served files say so little
+
+Everything in `frontend/` (HTML, CSS, JS, comments included) reaches every respondent's
+browser. An AI agent reads all of it, and a curious classmate can open the page source. If a
+comment explained the hidden text, a participant could learn the secret before the debrief,
+and an agent could learn what to avoid. So comments in `frontend/` stay neutral, and the
+explanations live here. `tests/test_pilot.py::test_served_files_give_nothing_away` fails if a
+revealing word comes back. The page title is a neutral "Quick Questions" for the same reason.
+
+## Extra item text (`aux`, steps #19, #44)
+
+Decoys and canaries carry `hidden_text`. The page must show it in a way people can't see, but
+copy-paste, document export and browser agents still get (`adr/mechanisms/CANARY_SPEC.md`):
+
+* it stays in the DOM, the copied text and the accessibility tree: never `display:none`,
+  `visibility:hidden` or the `hidden` attribute, which would drop it from all three;
+* the server picks the hiding style (`ADR_HIDE`), so the screen-reader test (#44) can compare:
+  * `clip`: squeezed into a 1px clipped box; screen readers still read it;
+  * `clear`: full-size but colourless text, also colourless when highlighted;
+  * `clip_aria`: `clip` plus `aria-hidden`, so screen readers skip it (set in `app.js`);
+* it is a `div`, not a `p`: Chrome copies a `p` with a blank line after it, which would break
+  `copy_text`.
+
+## Copied text must equal the variant's `copy_text`
+
+* Options render as "1. Venus" in one run of text, so a copied question has numbered options,
+  the same format the copy-paste harness gives a model.
+* Option rows are `display:block`, not flex: Chrome adds a blank line around every flex box
+  when copying.
+* Hints and ranking buttons are `user-select: none`, so they aren't part of a copied question.
+
+`tests/test_frontend_copy.py` checks the copied text in a real Chromium, including a real
+Ctrl+C into the clipboard.
+
+## Pilot screens (`ADR_PILOT=1`)
+
+The consent text comes from `docs/pilot/consent.md` (`GET /study`). The debrief explains the
+hidden checks, so the server sends it only after the last question
+(`GET /session/{id}/debrief`, 409 before then); it is never in the page earlier.
+
+## What the browser never gets
+
+The server keeps every item id, variant id, check name, answer key and score to itself
+(AGENTS.md 6.5). Each question carries a one-time `token` instead.

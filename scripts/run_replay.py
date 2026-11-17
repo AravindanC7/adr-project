@@ -32,6 +32,10 @@ Three splits (adr/replay/quick_map.py):
                a banner: report those numbers, never tune on them (AGENTS.md section 8).
 If the evaluated rows have no AI respondents, only the honest-side metrics (false flags,
 burden) are computed. Writes results/runs/<run_id>/metrics.json and config.yaml.
+
+--map refuses a provisional failure map (version ending in -ai-only, or any cell with zero
+human counts: adr/router/map_guard.py) unless --allow-provisional-map is passed, for
+development runs only.
 """
 
 from __future__ import annotations
@@ -53,7 +57,6 @@ from adr.baselines.policies import COMPARE, make_policy
 from adr.contracts import (
     COLUMNS,
     Assessment,
-    FailureMap,
     Item,
     RenderedItem,
     read_jsonl,
@@ -71,6 +74,12 @@ from adr.replay.quick_map import (
     split_rows,
 )
 from adr.router.core import RouterConfig
+from adr.router.map_guard import (
+    ALLOW_FLAG,
+    ProvisionalMapError,
+    load_router_map,
+    provisional_reasons,
+)
 
 
 def load_bank(args) -> tuple[Assessment, dict[str, Item], dict[str, list[RenderedItem]]]:
@@ -118,8 +127,19 @@ def load_logged(args, warnings: list[str]):
         raise SystemExit("no outcome rows for this assessment's items")
 
     splits = split_rows(table, frac, split_seed)
-    fmap = FailureMap.load(args.map) if args.map else quick_failure_map(splits.train)
-    if not args.map:
+    allow = getattr(args, "allow_provisional_map", False)
+    if args.map:
+        try:
+            fmap = load_router_map(args.map, allow_provisional=allow)
+        except ProvisionalMapError as e:
+            raise SystemExit(str(e)) from None
+        reasons = provisional_reasons(fmap)
+        if reasons:
+            loud(f"PROVISIONAL MAP ({ALLOW_FLAG}): " + "; ".join(reasons) + ". Development "
+                 "only: false-flag and TPR numbers from this run are not results.")
+            warnings.append("PROVISIONAL MAP: " + "; ".join(reasons))
+    else:
+        fmap = quick_failure_map(splits.train)
         warnings.append(f"map: {fmap.note}")
     if final:
         loud("FINAL EVALUATION ON HELD-OUT DATA (--final). Report these numbers; never tune "
@@ -156,6 +176,7 @@ def load_logged(args, warnings: list[str]):
         "outcome_files": [str(p) for p in paths],
         "source_run_ids": sorted(table["run_id"].unique()),
         "map": args.map or "quick (TEMPORARY, adr/replay/quick_map.py)",
+        "provisional_map_allowed": bool(args.map and allow),
         "evaluated_on": evaluated_on,
         "final": final,
         "n_items_assessment": len(assessment.item_ids),
@@ -202,6 +223,9 @@ def main() -> None:
     ap.add_argument("--assessment"), ap.add_argument("--assessment-id")
     ap.add_argument("--items"), ap.add_argument("--variants")
     ap.add_argument("--map", help="a saved FailureMap JSON; default: TEMPORARY quick map")
+    ap.add_argument(ALLOW_FLAG, action="store_true",
+                    help="use a provisional --map anyway (version ending in -ai-only, or cells "
+                         "with zero human counts); development only, never for results")
     ap.add_argument("--policies", default=",".join(COMPARE))
     ap.add_argument("--compare", action="store_true",
                     help=f"run {', '.join(COMPARE)}; write comparison.csv / .md and "
@@ -283,6 +307,7 @@ def main() -> None:
         "warnings": warnings,
         "evaluated_on": info["evaluated_on"],
         "final": info["final"],
+        "provisional_map_allowed": info.get("provisional_map_allowed", False),
         "best_single": best_single,
         "results": results,
         "outcome_sources": draws,
