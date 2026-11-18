@@ -117,8 +117,11 @@ def test_copied_text_equals_copy_text_and_trap_is_invisible(page, title):
     for rendered in _trap_pages(pg, title, _answer):
         aux = pg.locator("#item .aux")
         assert aux.count() == 1
-        assert pg.locator("#item .passage").count() == 0  # stub items have no passage
-        assert pg.evaluate("() => document.activeElement.id") == "stem"
+        item = ITEMS[rendered.item_id]
+        # Stub quiz q4 has a passage: shown above the stem, focus starts there.
+        assert pg.locator("#item .passage").count() == (1 if item.passage else 0)
+        focused = "document.activeElement.id || document.activeElement.className"
+        assert pg.evaluate(f"() => {focused}") == ("passage" if item.passage else "stem")
         box = aux.bounding_box()
         color = aux.evaluate("e => getComputedStyle(e).color")
         if hide == "clear":
@@ -129,9 +132,9 @@ def test_copied_text_equals_copy_text_and_trap_is_invisible(page, title):
         assert (aux.get_attribute("aria-hidden") == "true") == (hide == "clip_aria")
 
         copied = pg.evaluate(SELECT_ITEM).rstrip("\n")  # the answer box adds a trailing newline
-        assert copied == rendered.copy_text
+        assert copied == copy_text(rendered, item)  # the harness's text: passage first
         checked += 1
-    assert checked == {"Stub quiz": 2, "Stub survey": 1}[title]
+    assert checked == {"Stub quiz": 3, "Stub survey": 1}[title]
 
 
 SELECT_ONLY = """() => {

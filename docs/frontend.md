@@ -73,7 +73,8 @@ map is empty: nothing is scored and `ADR_PICK=router` serves every question plai
 Demo (#47): `python scripts/make_demo_map.py` writes the SYNTHETIC map `synthetic-demo`
 (invented numbers from `adr/router/synthetic.py`) to `results/failure_map/demo_synthetic.json`,
 which git ignores. The real v2 map (Archana, #40) drops in the same way once it exists:
-`ADR_MAP=results/failure_map/v2.json`.
+`ADR_MAP=results/failure_map/v2.json`. With `ADR_DEBUG_STATE=1` the server console prints each
+new session id, so `/session/{id}` can be opened without DevTools.
 
 ## What the browser never gets
 

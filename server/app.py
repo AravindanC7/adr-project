@@ -50,8 +50,8 @@ Settings (environment variables):
   ADR_DATA_DIR=<folder>   Save every session to <folder>/<session_id>.jsonl as it happens
                           (server/store.py). Withdrawing deletes the file. Unset: memory only.
   ADR_DEBUG_STATE=1       GET /session/{id} returns the SessionState, for the demo (#47) and
-                          logging, with the map in an X-ADR-Map header. Never enable it in a
-                          session real people take.
+                          logging, with the map in an X-ADR-Map header; the server console logs
+                          each new session id. Never enable it in a session real people take.
 
 The map's version and file hash stay on the server: in each session's record (_Session.fmap)
 and, when saving, in the saved start record. The page looks the same whatever the status.
@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import random
@@ -98,6 +99,9 @@ from adr.mechanisms.behaviour import MECHANISM as BEHAVIOUR
 from adr.router.core import SPRTRouter
 from adr.router.map_guard import load_router_map
 from server.store import SessionStore
+
+# uvicorn prints this logger to the console; the server's own messages go there.
+log = logging.getLogger("uvicorn.error")
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BANK = ROOT / "server" / "stub_items.json"
@@ -481,6 +485,9 @@ def create_app(
             store.start(session_id, assessment_id=assessment.assessment_id, pilot=pilot,
                         consented=req.consent, consent_version=consent_version,
                         seed=state.seed, failure_map=map_info)
+        if debug_state:  # so the presenter can open /session/{id} without DevTools
+            log.info("ADR_DEBUG_STATE: session %s started (%s); state at /session/%s",
+                     session_id, assessment.assessment_id, session_id)
         s.current = next_choice(s)
         return step(s)
 
