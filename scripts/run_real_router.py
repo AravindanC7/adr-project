@@ -17,11 +17,14 @@ What it does:
      donors.py, "same-type draws"): real behaviour, the map's own exchangeability assumption.
   4. AI rows are split by item as in run_replay.py: the map's AI side uses the train items, and
      the AI sessions are scored on the calibration items (on the held-out rows with --final).
-  5. For each of K folds of people: map_k = Archana's builder in STRICT mode (never --ai-only)
-     on the AI train rows + the other folds' people; A_k = the review threshold that pauses at
-     most alpha of fold k's people; the AI sessions are replayed with map_k and A_k. Done for
-     the router, baselines 1-4 and the router at each beta (the budget curve), at --alpha and
-     at 5% FPR (few people cannot pin down a 1% tail).
+  5. Threshold from replayed honest sessions (adr/replay/crossfit.py). For each of K folds of
+     people, map_k = Archana's builder in STRICT mode (never --ai-only) on the AI train rows +
+     the OTHER folds' people. Each real person is scored out of fold (with the map that never
+     saw them), and --n-synthetic honest sessions per fold are resampled from that fold's people
+     only. Three thresholds: A at 1% and at 5% of the pooled resampled sessions, and A_max =
+     the lowest threshold that pauses none of the real people. AI sessions are scored with
+     every map_k. Done for the router, baselines 1-4 and the router at each beta (the budget
+     curve). CIs resample PEOPLE and regenerate the resampled sessions per draw.
 
 Writes results/real-router/<run_id>/: comparison.csv/.md, thresholds.csv, budget_curve.csv/.png,
 metrics.json and config.yaml. --final reads held-out rows, as run_replay does; never by default.
@@ -56,11 +59,13 @@ from adr.harness.registry import get_mechanism
 from adr.replay.compare import BETAS
 from adr.replay.crossfit import (
     all_maps,
-    crossfit,
+    cap_warnings,
+    deploy_config,
     person_folds,
-    pooled_metrics,
     router_factory,
-    threshold_rows,
+    score_policy,
+    summarize,
+    tail_warnings,
 )
 from adr.replay.quick_map import CALIBRATION_FRAC, SPLIT_SEED, split_rows
 from adr.router.core import RouterConfig
@@ -156,7 +161,16 @@ def main() -> None:
     ap.add_argument("--assessment-id", help="replay one part of the bank (default: the flow)")
     ap.add_argument("--betas", default=",".join(str(b) for b in BETAS))
     ap.add_argument("--seed", type=int, default=0, help="fold split and replay seed")
-    ap.add_argument("--boot", type=int, default=1000)
+    ap.add_argument("--boot", type=int, default=200, help="bootstrap draws over people")
+    ap.add_argument(
+        "--n-synthetic", type=int, default=500, help="resampled honest sessions per fold"
+    )
+    ap.add_argument(
+        "--n-synthetic-boot",
+        type=int,
+        default=100,
+        help="resampled honest sessions per fold inside each bootstrap draw",
+    )
     ap.add_argument("--calibration-frac", type=float, default=CALIBRATION_FRAC)
     ap.add_argument("--split-seed", type=int, default=SPLIT_SEED)
     ap.add_argument("--results-dir", default="results")
@@ -223,76 +237,73 @@ def main() -> None:
         "items). Fitting the per-fold maps..."
     )
     maps = all_maps(splits.train, human, folds)
-    alphas = sorted({args.alpha, EXTRA_ALPHA})
+    alphas = sorted({args.alpha, 0.01, EXTRA_ALPHA})
 
-    def run(name: str, alpha: float, c: RouterConfig):
-        make = router_factory(name, assessment, items, variants, c)
-        res = crossfit(
+    def run(name: str, c: RouterConfig) -> dict:
+        make = router_factory(name, assessment, items, variants)
+        scored = score_policy(
             make,
+            c,
             assessment,
             items,
-            splits.train,
             human,
             ai_eval,
             folds,
-            alpha,
+            maps,
+            args.n_synthetic,
             passive,
             args.seed,
-            maps=maps,
         )
-        return res, pooled_metrics(res, args.boot, args.seed)
+        return summarize(
+            scored,
+            make,
+            c,
+            assessment,
+            items,
+            human,
+            alphas,
+            args.boot,
+            args.n_synthetic_boot,
+            passive,
+            args.seed,
+        )
 
-    results: dict[str, dict[str, dict]] = {}
-    thresholds: list[dict] = []
+    results: dict[str, dict] = {}
     for name in COMPARE:
-        results[name] = {}
-        for alpha in alphas:
-            res, m = run(name, alpha, cfg)
-            results[name][f"{alpha:g}"] = m
-            thresholds += threshold_rows(name, alpha, res)
+        results[name] = run(name, cfg)
+        r = results[name]["results"]
         print(
             f"  {name:15s} "
             + "  ".join(
-                f"alpha {a}: TPR {results[name][a]['tpr']:.2f}, honest paused "
-                f"{results[name][a]['honest_pause_rate']:.2f}, A_k {results[name][a]['thresholds']}"
-                for a in results[name]
+                f"{t}={v['A']:.2f}: TPR {v['tpr']:.2f}, honest paused {v['honest_pause_rate']:.2f}"
+                for t, v in r.items()
             )
         )
 
-    curve = []
-    for beta in (float(b) for b in args.betas.split(",") if b):
-        row = {"policy": "router", "beta": beta}
-        for alpha, col in ((0.01, "tpr_at_1pct_fpr"), (0.05, "tpr_at_5pct_fpr")):
-            _, m = run("router", alpha, replace(cfg, beta=beta))
-            row[col], (row[f"{col}_lo"], row[f"{col}_hi"]) = (
-                m["tpr"],
-                m["ci95"]["tpr"] or (None, None),
-            )
-            if alpha == 0.01:
-                row["checks_per_honest_person"] = m["checks_per_honest_person"]
-                lohi = m["ci95"]["checks_per_honest_person"] or (None, None)
-                row["checks_per_honest_person_lo"], row["checks_per_honest_person_hi"] = lohi
-        curve.append(row)
-    for name in COMPARE:
-        if name == "router":
-            continue
-        row = {"policy": name, "beta": None}
-        for alpha, col in ((0.01, "tpr_at_1pct_fpr"), (0.05, "tpr_at_5pct_fpr")):
-            m = results[name].get(f"{alpha:g}") or run(name, alpha, cfg)[1]
-            row[col], (row[f"{col}_lo"], row[f"{col}_hi"]) = (
-                m["tpr"],
-                m["ci95"]["tpr"] or (None, None),
-            )
-        m = results[name].get("0.01") or run(name, 0.01, cfg)[1]
-        row["checks_per_honest_person"] = m["checks_per_honest_person"]
-        lohi = m["ci95"]["checks_per_honest_person"] or (None, None)
-        row["checks_per_honest_person_lo"], row["checks_per_honest_person_hi"] = lohi
-        curve.append(row)
+    def key(a: float) -> str:
+        return f"A_{a:g}"
+
+    def curve_row(policy: str, beta, summ: dict) -> dict:
+        row = {"policy": policy, "beta": beta}
+        for a, col in ((0.01, "tpr_at_1pct_fpr"), (0.05, "tpr_at_5pct_fpr")):
+            v, ci = summ["results"][key(a)], summ["ci95"][key(a)].get("tpr")
+            row[col], (row[f"{col}_lo"], row[f"{col}_hi"]) = v["tpr"], ci or (None, None)
+        v, ci = summ["results"][key(0.01)], summ["ci95"][key(0.01)].get("checks_per_honest_person")
+        row["checks_per_honest_person"] = v["checks_per_honest_person"]
+        row["checks_per_honest_person_lo"], row["checks_per_honest_person_hi"] = ci or (None, None)
+        return row
+
+    curve = [
+        curve_row("router", float(b), run("router", replace(cfg, beta=float(b))))
+        for b in args.betas.split(",")
+        if b
+    ]
+    curve += [curve_row(n, None, results[n]) for n in COMPARE if n != "router"]
 
     out = Path(args.results_dir) / "real-router" / run_id
     out.mkdir(parents=True, exist_ok=True)
     write_comparison(results, out)
-    pd.DataFrame(thresholds).to_csv(out / "thresholds.csv", index=False)
+    write_thresholds(results, out)
     pd.DataFrame(curve).to_csv(out / "budget_curve.csv", index=False)
     try:  # scripts/ is not a package: load the plotting script by path
         import importlib.util
@@ -302,19 +313,23 @@ def main() -> None:
         )
         plot_mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(plot_mod)
-        plot_mod.plot(out / "budget_curve.csv", title=f"{run_id}: cross-fitted thresholds")
+        plot_mod.plot(out / "budget_curve.csv", title=f"{run_id}: thresholds from honest replay")
     except ImportError as e:  # matplotlib missing: the CSV is still written
         print(f"no budget_curve.png ({e}); pip install -e '.[plot]'")
-    granularity = results["router"][f"{args.alpha:g}"]["granularity"]
-    warnings = []
-    if granularity and granularity > args.alpha:
-        warnings.append(
-            f"With {min(len(f) for f in folds)} people in the smallest fold, one pause is "
-            f"{granularity:.0%} > alpha {args.alpha:g}: each A_k is the 'pause nobody in the fold' "
-            "threshold, so the 1% and 5% thresholds can coincide."
-        )
+
+    warnings = tail_warnings(results["router"]) + cap_warnings(results["router"], cfg, mechanisms)
+    print()
     for w in warnings:
-        print("WARNING: " + w)
+        print(("" if w.startswith("1% tail") else "WARNING: ") + w)
+    router_th = results["router"]["thresholds"]
+    deploy = {
+        name: {
+            k: (list(v) if isinstance(v, tuple) else v)
+            for k, v in deploy_config(cfg, a).__dict__.items()
+        }
+        for name, a in router_th.items()
+        if a != float("inf")
+    }
     (out / "metrics.json").write_text(
         json.dumps(
             {
@@ -324,6 +339,7 @@ def main() -> None:
                 "results": results,
             },
             indent=2,
+            default=str,
         ),
         encoding="utf-8",
     )
@@ -332,6 +348,8 @@ def main() -> None:
             {
                 "run_id": run_id,
                 "mode": "real_router_crossfit",
+                "threshold_method": "out-of-fold honest scores + resampled honest sessions "
+                "(adr/replay/crossfit.py)",
                 "final": args.final,
                 "ai_outcomes": args.ai_outcomes,
                 "pilot_outcomes": args.pilot_outcomes,
@@ -346,6 +364,8 @@ def main() -> None:
                 "excluded_sessions": sorted(excluded),
                 "excluded_not_found": not_found,
                 "alphas": alphas,
+                "n_synthetic_per_fold": args.n_synthetic,
+                "n_synthetic_per_fold_in_boot": args.n_synthetic_boot,
                 "ai_eval": "heldout" if args.final else "calibration items",
                 "n_ai_eval_sessions": int(ai_eval["session_id"].nunique()),
                 "calibration_frac": args.calibration_frac,
@@ -354,6 +374,8 @@ def main() -> None:
                 "router_config": {
                     k: (v if not isinstance(v, tuple) else list(v)) for k, v in cfg.__dict__.items()
                 },
+                "router_thresholds": {k: float(v) for k, v in router_th.items()},
+                "router_deploy_config": deploy,
                 "group_passive": args.group_passive,
                 "policies": list(COMPARE),
                 "budget_curve_betas": [r["beta"] for r in curve if r["policy"] == "router"],
@@ -373,56 +395,85 @@ def main() -> None:
     )
 
 
-COLUMNS = (
-    "tpr",
-    "honest_pause_rate",
-    "checks_per_honest_person",
-    "median_items_to_decision_honest",
-)
+COLUMNS = ("tpr", "honest_pause_rate", "checks_per_honest_person")
 
 
-def write_comparison(results: dict[str, dict[str, dict]], out: Path) -> None:
-    """One row per policy and alpha: each metric with its 95% CI, plus the A_k per fold."""
+def _fmt(v, ci) -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "-"
+    return f"{v:.3f}" if not ci else f"{v:.3f} [{ci[0]:.3f}, {ci[1]:.3f}]"
+
+
+def write_comparison(results: dict[str, dict], out: Path) -> None:
+    """One row per policy and threshold (A_0.01, A_0.05, A_max): the threshold, TPR, the real
+    honest pause rate and checks per honest person, with 95% CIs (bootstrap over people)."""
     rows = []
-    for name, by_alpha in results.items():
-        for alpha, m in by_alpha.items():
+    for name, summ in results.items():
+        for t, v in summ["results"].items():
+            ci = summ["ci95"][t]
             row = {
                 "policy": name,
-                "alpha": float(alpha),
-                "n_people": m["n_people"],
-                "n_ai_sessions": m["n_ai_sessions"],
-                "A_k": " ".join(f"{a:g}" for a in m["thresholds"]),
+                "threshold": t,
+                "A": v["A"],
+                "A_lo": (ci.get("A") or (None, None))[0],
+                "A_hi": (ci.get("A") or (None, None))[1],
+                "n_real_at_or_above": v["n_real_at_or_above"],
+                "n_people": summ["n_people"],
+                "n_ai_sessions": summ["n_ai_sessions"],
             }
             for c in COLUMNS:
-                ci = m["ci95"][c] or (None, None)
-                row[c], row[f"{c}_lo"], row[f"{c}_hi"] = m[c], ci[0], ci[1]
+                row[c] = v[c]
+                row[f"{c}_lo"], row[f"{c}_hi"] = ci.get(c) or (None, None)
             rows.append(row)
     table = pd.DataFrame(rows)
     table.to_csv(out / "comparison.csv", index=False)
-
-    def cell(r, c):
-        if r[c] is None or pd.isna(r[c]):
-            return "-"
-        lo, hi = r[f"{c}_lo"], r[f"{c}_hi"]
-        return f"{r[c]:.3f}" if lo is None or pd.isna(lo) else f"{r[c]:.3f} [{lo:.3f}, {hi:.3f}]"
-
     lines = [
-        "| policy | alpha | A_k per fold | " + " | ".join(COLUMNS) + " |",
+        "| policy | threshold | A | " + " | ".join(COLUMNS) + " |",
         "|---|---|---|" + "---|" * len(COLUMNS),
     ]
-    for _, r in table.iterrows():
-        lines.append(
-            f"| {r['policy']} | {r['alpha']:g} | {r['A_k']} | "
-            + " | ".join(cell(r, c) for c in COLUMNS)
-            + " |"
-        )
+    for name, summ in results.items():
+        for t, v in summ["results"].items():
+            ci = summ["ci95"][t]
+            lines.append(
+                f"| {name} | {t} | {_fmt(v['A'], ci.get('A'))} | "
+                + " | ".join(_fmt(v[c], ci.get(c)) for c in COLUMNS)
+                + " |"
+            )
+    n = next(iter(results.values()))["n_people"]
     (out / "comparison.md").write_text(
-        "Cross-fitted thresholds: each A_k is set on fold k's held-out people. TPR = AI sessions "
-        "paused for review; 95% bootstrap CIs resample people and AI sessions.\n\n"
+        "Thresholds from replayed honest sessions (cross-fitted: every honest score uses a map "
+        "that never saw that person). A_0.01 / A_0.05: smallest threshold pausing at most 1% / "
+        "5% of the resampled honest sessions; A_max: lowest threshold pausing none of the "
+        f"{n} real people. 95% CIs: bootstrap over people (resampled sessions regenerated per "
+        f"draw) and AI sessions. 1% tail extrapolated from {n} people.\n\n"
         + "\n".join(lines)
         + "\n",
         encoding="utf-8",
     )
+
+
+def write_thresholds(results: dict[str, dict], out: Path) -> None:
+    rows = []
+    for name, summ in results.items():
+        for t, v in summ["results"].items():
+            lohi = summ["ci95"][t].get("A") or (None, None)
+            rows.append(
+                {
+                    "policy": name,
+                    "threshold": t,
+                    "A": v["A"],
+                    "A_lo": lohi[0],
+                    "A_hi": lohi[1],
+                    "n_real_at_or_above": v["n_real_at_or_above"],
+                    "honest_pause_rate_real": v["honest_pause_rate"],
+                    "pause_rate_resampled": v["resampled_pause_rate"],
+                    "tpr": v["tpr"],
+                    "n_people": summ["n_people"],
+                    "people_per_fold": " ".join(map(str, summ["people_per_fold"])),
+                    "n_resampled_sessions": summ["n_resampled_sessions"],
+                }
+            )
+    pd.DataFrame(rows).to_csv(out / "thresholds.csv", index=False)
 
 
 if __name__ == "__main__":

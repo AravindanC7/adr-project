@@ -83,6 +83,9 @@ class Donor:
     _fmap: FailureMap | None
     _rng: random.Random
     _own_type: dict[Key, list[str]] = field(default_factory=dict)  # (item_type, mech) -> outcomes
+    # (item_type, mech) -> outcomes of the whole group, drawn with replacement when neither this
+    # session nor the group has the exact item (resampled honest sessions, adr/replay/crossfit.py)
+    _pooled_type: dict[Key, list[str]] = field(default_factory=dict)
     fallbacks: int = 0  # answered from another session of the same group
     same_type: int = 0  # answered from this session's own rows on another item of the same type
     synthetic: int = 0  # answered from the failure map: no logged row anywhere
@@ -106,6 +109,9 @@ class Donor:
         if key in self._pooled:
             self.fallbacks += 1
             return self._draw(key, self._pooled[key], "fallback")
+        if (item_type, mechanism) in self._pooled_type:
+            self.fallbacks += 1
+            return self._draw(key, self._pooled_type[(item_type, mechanism)], "fallback_type")
         cell = None
         if self._fmap is not None and item_id in self._items:
             cell = self._fmap.lookup(

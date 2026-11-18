@@ -72,11 +72,14 @@ pip install -e ".[plot]"
 python scripts/plot_budget_curve.py results/runs/budget-synthetic-quiz/budget_curve.csv
 # what limits the router on one assessment (see docs/notes/router_synthetic_diagnosis.md):
 python scripts/diagnose_router.py --synthetic survey
-# The first REAL router + baselines run, once pilot rows exist (step #42). Thresholds are
-# calibrated on held-out PEOPLE (4-fold person-level cross-fitting); the map is built in strict
-# mode (never --ai-only); only mechanisms with both AI and human rows are used. Needs the pilot
+# The first REAL router + baselines run, once pilot rows exist (step #42). The threshold comes
+# from replayed honest sessions: every person is scored with a map fitted without their fold,
+# and resampled honest sessions are built from each fold's held-out people (4-fold
+# cross-fitting). Reports A at 1% and 5% and A_max (pauses none of the real people). The map is
+# strict (never --ai-only); only mechanisms with both AI and human rows are used. Needs the pilot
 # bank (server/pilot_items.json). Add --exclude-sessions FILE for the low-effort sensitivity run,
 # --group-passive to give behaviour + style one shared cap, --final for the held-out rows.
+# About 25 min with the defaults (--boot 200, --n-synthetic 500).
 python scripts/run_real_router.py \
     --ai-outcomes results/outcomes/v1-cp-L0-quiz-mmlu-200-s5.parquet \
                   results/outcomes/v1-cp-L0-quiz-arc-200-s5.parquet \
