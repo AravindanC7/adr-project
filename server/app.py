@@ -128,6 +128,9 @@ class ShownItem(BaseModel):
 
     token: str  # opaque, one per question shown; the server maps it back to the variant
     item_type: str
+    # Item.passage, shown above the stem. Variants never carry it (RenderedItem.copy_text
+    # leaves it out), so the server adds it from the Item, like the harness's copy_text does.
+    passage: str | None = None
     stem: str
     options: list[str] | None = None
     aux: Aux | None = None
@@ -358,6 +361,7 @@ def create_app(
         item = ShownItem(
             token=s.token,
             item_type=items[rendered.item_id].item_type,
+            passage=items[rendered.item_id].passage,
             stem=rendered.visible["stem"],
             options=rendered.visible.get("options"),
             aux=(

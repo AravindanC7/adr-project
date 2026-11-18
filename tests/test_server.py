@@ -76,7 +76,7 @@ def test_browser_never_sees_ids_checks_or_router_state(request, app, assessment_
         assert set(b) == {"session_id", "finished", "item"}
         if b["item"]:
             assert set(b["item"]) == {
-                "token", "item_type", "stem", "options", "aux", "position", "total",
+                "token", "item_type", "passage", "stem", "options", "aux", "position", "total",
             }
             if b["item"]["aux"]:
                 assert set(b["item"]["aux"]) == {"text", "at", "style"}
@@ -312,6 +312,8 @@ def test_the_reading_floor_counts_the_items_passage(tmp_path, monkeypatch):
     }
     bank.write_text(json.dumps({"items": [item], "assessments": [quiz]}), encoding="utf-8")
     client = TestClient(create_app(bank_path=bank, mechanisms={}))
+    shown = client.post("/session/start", json={"assessment_id": "p"}).json()["item"]
+    assert shown["passage"] == item["passage"]  # sent with the visible item
     outcomes = []
     for ms in (3000, 6000):  # enough for the stem alone; enough for passage + stem
         step = client.post("/session/start", json={"assessment_id": "p"}).json()
