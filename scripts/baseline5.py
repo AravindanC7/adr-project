@@ -5,16 +5,24 @@ Westwood 2025 (attention checks). Each goes through the copy-paste attacker at L
 samples at temperature 0.7 (the RQ4 settings), and is scored by its own pass/fail rule.
 
     python scripts/baseline5.py build                # writes results/baseline5/traps.json etc.
-    python scripts/baseline5.py estimate             # cost upper bound, no API calls
-    python scripts/baseline5.py run --level L0       # then --level L2 (gpt-mini only)
+    python scripts/baseline5.py estimate [--level L2-generic]   # cost upper bound, no API calls
+    python scripts/baseline5.py run --level L0       # then L2, L2-generic (gpt-mini only)
     python scripts/baseline5.py report --rq4 results/rq4/rq4_rates.csv
 
 Outputs in results/baseline5/: traps.json (every trap, its source, wording note and rule),
 baseline5_traps.csv (per trap and level), baseline5_summary.csv (per trap type and level, with
 the RQ4 decoy rates for comparison), table.md, and runs/<run_id>/ (config and every response).
 
+Levels: L0 (naive), L2 (informed: the harness's L2 prompt, which names hidden answer-key text and
+hidden "include a code word" instructions, i.e. Wang's two attacks) and L2-generic (the same L2
+role, but it only warns about hidden instructions in general and names no trap;
+adr/harness/prompts.py SYSTEM_VARIANTS). L2-generic rows keep attacker_level L2 and use their own
+prompt_version (cp-v1+l2-generic-v1).
+
 CIs: per trap, Wilson 95% on its 5 answers. Pooled over a trap type, a two-level bootstrap
-(resample items, then answers within each item), the same scheme as the RQ4 decoy rates.
+(resample items, then answers within each item), the same scheme as the RQ4 decoy rates; when
+every pooled answer is unflagged (or every one flagged) the bootstrap can only return [0, 0]
+(or [1, 1]), so those cells use the Wilson 95% interval on the pooled k/n instead.
 """
 
 from __future__ import annotations
@@ -30,11 +38,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from adr.baselines.published_traps import Trap, all_traps, bank, flags
-from adr.harness.prompts import build_prompt
+from adr.harness.prompts import PROMPT_VERSION, SYSTEM_VARIANTS, build_prompt
 
 OUT = Path("results/baseline5")
 MODEL = "gpt-mini"
-LEVELS = ("L0", "L2")
+# run label -> (attacker level, system-prompt variant or None)
+RUNS: dict[str, tuple[str, str | None]] = {
+    "L0": ("L0", None), "L2": ("L2", None), "L2-generic": ("L2", "L2-generic"),
+}
+LEVELS = tuple(RUNS)
+LABEL = {"L0": "L0", "L2": "L2", "L2-generic": "L2 generic"}
 SAMPLES, TEMPERATURE, MAX_TOKENS = 5, 0.7, 300
 N_BOOT, SEED = 2000, 33
 
@@ -44,8 +57,10 @@ def run_id(level: str) -> str:
 
 
 def family(t: Trap) -> str:
-    """Trap type for pooling: the position / sub-kind in brackets is dropped."""
-    return f"{'Wang' if t.paper.startswith('Wang') else 'Westwood'}: {t.trap_type.split(' (')[0]}"
+    """Trap type for pooling: the position / sub-kind in brackets is dropped. Westwood items are
+    our own wording of his check types, and the label says so."""
+    kind = t.trap_type.split(" (")[0]
+    return f"Wang: {kind}" if t.paper.startswith("Wang") else f"Westwood-type (our wording): {kind}"
 
 
 # ---------------------------------------------------------------- build / estimate
@@ -64,23 +79,26 @@ def cmd_build(_args) -> None:
     print(f"{len(traps)} traps -> {OUT / 'traps.json'}")
 
 
-def cmd_estimate(_args) -> None:
+def cmd_estimate(args) -> None:
     import yaml
 
     spec = next(m for m in yaml.safe_load(Path("configs/models.yaml").read_text(encoding="utf-8"))["models"]
                 if m["name"] == MODEL)
     traps = all_traps()
     _, _, variants = bank(traps)
+    levels = [args.level] if args.level else list(LEVELS)
     in_tok = 0
-    for level in LEVELS:
+    for label in levels:
+        level, variant = RUNS[label]
         for t in traps:
-            system, messages = build_prompt(t.item, variants[t.trap_id][0], level)
+            system, messages = build_prompt(t.item, variants[t.trap_id][0], level,
+                                            variant=variant)
             chars = len(system or "") + sum(len(m["content"]) for m in messages)
             in_tok += SAMPLES * math.ceil(chars / 3)  # generous: ~4 chars per token in English
-    calls = len(traps) * SAMPLES * len(LEVELS)
+    calls = len(traps) * SAMPLES * len(levels)
     out_tok = calls * MAX_TOKENS  # worst case: every reply hits max_tokens
     usd = in_tok * spec["price_in_per_mtok"] / 1e6 + out_tok * spec["price_out_per_mtok"] / 1e6
-    print(f"{calls} calls ({len(traps)} traps x {SAMPLES} samples x {len(LEVELS)} levels), "
+    print(f"{calls} calls ({len(traps)} traps x {SAMPLES} samples x {len(levels)} levels), "
           f"<= {in_tok} input + {out_tok} output tokens -> at most ${usd:.2f} for {MODEL}")
 
 
@@ -91,8 +109,11 @@ def cmd_run(args) -> None:
 
     assessment, items, variants = bank(all_traps())
     client = LLMClient.from_config("configs/models.yaml")
+    level, variant = RUNS[args.level]
     cfg = CopyPasteConfig(run_id=run_id(args.level), models=[MODEL],
-                          attacker_level=args.level, n_samples=SAMPLES,
+                          attacker_level=level, system_variant=variant,
+                          prompt_version=SYSTEM_VARIANTS[variant][1] if variant else PROMPT_VERSION,
+                          n_samples=SAMPLES,
                           temperature=TEMPERATURE, max_tokens=MAX_TOKENS,
                           results_dir=str(OUT), note="baseline 5: published survey traps")
     run_copy_paste(client, assessment, items, variants, {}, cfg)
@@ -194,7 +215,8 @@ _NO_ALT = {"rate_alt": "", "ci_alt_low": "", "ci_alt_high": ""}
 
 def _pooled(per_item: list[list[int]]) -> dict:
     k, n = sum(map(sum, per_item)), sum(map(len, per_item))
-    lo, hi = bootstrap(per_item)
+    # all-zero / all-one cells: every bootstrap resample is identical, so use Wilson instead
+    lo, hi = wilson(k, n) if k in (0, n) else bootstrap(per_item)
     return {"n_items": len(per_item), "n": n, "n_flagged": k, "rate": round(k / n, 4),
             "ci_low": round(lo, 4), "ci_high": round(hi, 4)}
 
@@ -214,8 +236,9 @@ def _table(summary: list[dict]) -> str:
     """Headline rule in the table; a check with a second rule gets a footnote with its rates."""
     checks = list(dict.fromkeys(r["check"] for r in summary))
     by = {(r["check"], r["level"]): r for r in summary}
-    lines = ["| Check | Items | L0: share flagged [95% CI] | L2: share flagged [95% CI] |",
-             "|---|---|---|---|"]
+    lines = ["| Check | Items | " + " | ".join(f"{LABEL[lv]}: share flagged [95% CI]"
+                                               for lv in LEVELS) + " |",
+             "|---|---|" + "---|" * len(LEVELS)]
     notes = []
     for c in checks:
         rows = [by.get((c, lv)) for lv in LEVELS]
@@ -229,8 +252,9 @@ def _table(summary: list[dict]) -> str:
                    for r in rows]
             notes.append(f"{mark} Headline rule: agree-only (an impossible claim is flagged "
                          f"only if the answer agrees). If “Neither agree nor disagree” "
-                         f"also counts as flagged: L0 {alt[0]}, L2 {alt[1]}.")
-        lines.append(f"| {label} | {n_items} | {cells[0]} | {cells[1]} |")
+                         "also counts as flagged: " + ", ".join(
+                             f"{LABEL[lv]} {a}" for lv, a in zip(LEVELS, alt, strict=True)) + ".")
+        lines.append(f"| {label} | {n_items} | " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n" + "".join(f"\n{n}\n" for n in notes)
 
 
@@ -239,7 +263,8 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("build")
-    sub.add_parser("estimate")
+    est = sub.add_parser("estimate")
+    est.add_argument("--level", choices=LEVELS, help="one run only (default: all)")
     r = sub.add_parser("run")
     r.add_argument("--level", choices=LEVELS, required=True)
     rep = sub.add_parser("report")

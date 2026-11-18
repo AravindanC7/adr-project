@@ -43,11 +43,12 @@ from adr.contracts import (
     write_outcomes,
 )
 from adr.contracts.outcome import utc_now
-from adr.harness.copy_paste import _git_commit, observe, plain_variant
+from adr.harness.copy_paste import observe, plain_variant
 from adr.harness.llm_client import LLMClient, SpendCapExceeded
 from adr.harness.parse import parse_answer
 from adr.harness.pdf_render import render_assessment_pdf
 from adr.harness.prompts import DEFAULT_PERSONA, DOC_PROMPT_VERSION, build_doc_prompt
+from adr.harness.provenance import git_state
 
 
 @dataclass
@@ -157,6 +158,7 @@ def run_doc_upload(
     build_doc_prompt(assessment.assessment_type, 1, cfg.attacker_level, cfg.persona)
     for m in cfg.models:
         client.spec(m)  # fail fast on an unknown model
+    git = git_state()  # the code that runs: HEAD + dirty flag, read at the START
     if cfg.n_samples > 1 and not cfg.temperature:
         raise ValueError("n_samples > 1 with temperature 0 repeats the same answer; raise it")
     for item_id in assessment.item_ids:
@@ -281,7 +283,7 @@ def run_doc_upload(
         "mechanisms": sorted(mechanisms),
         "model_ids": {m: client.spec(m).model_id for m in cfg.models},
         "heldout_models": [m for m in cfg.models if client.spec(m).heldout],
-        "git_commit": _git_commit(),
+        **git,
         "finished_at": utc_now(),
         "n_jobs": len(jobs),
         "n_rows": len(rows),

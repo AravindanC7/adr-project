@@ -24,7 +24,6 @@ Outputs:
 from __future__ import annotations
 
 import json
-import subprocess
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
@@ -52,10 +51,12 @@ from adr.harness.prompts import (
     DEFAULT_PERSONA,
     PROMPT_VERSION,
     RETRY_PROMPT_VERSION,
+    SYSTEM_VARIANTS,
     build_prompt,
     build_retry_messages,
     is_flag,
 )
+from adr.harness.provenance import git_state
 
 
 @dataclass
@@ -71,6 +72,9 @@ class CopyPasteConfig:
     results_dir: str = "results"
     note: str = ""
     prompt_version: str = field(default=PROMPT_VERSION)
+    # a SYSTEM_VARIANTS name (e.g. "L2-generic"): replaces the level's system prompt; set
+    # prompt_version to that variant's version so its cache entries and rows stay apart
+    system_variant: str | None = None
 
 
 @dataclass
@@ -125,15 +129,6 @@ def _l3_summary(responses: list[dict]) -> dict:
     }
 
 
-def _git_commit() -> str | None:
-    try:
-        return subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, encoding="utf-8", check=True
-        ).stdout.strip()
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def run_copy_paste(
     client: LLMClient,
     assessment: Assessment,
@@ -147,8 +142,14 @@ def run_copy_paste(
     appears in `variants`, plus any passive ones (e.g. style) to score every response."""
     for m in cfg.models:
         client.spec(m)  # fail fast on an unknown model
+    git = git_state()  # the code that runs: HEAD + dirty flag, read at the START
     if cfg.n_samples > 1 and not cfg.temperature:
         raise ValueError("n_samples > 1 with temperature 0 repeats the same answer; raise it")
+    if cfg.system_variant is not None:
+        level, version, _ = SYSTEM_VARIANTS[cfg.system_variant]
+        if level != cfg.attacker_level or cfg.prompt_version != version:
+            raise ValueError(f"{cfg.system_variant} needs attacker_level={level} and "
+                             f"prompt_version={version!r}")
     l3 = cfg.attacker_level == "L3"
     # Rows of an L3 run carry both text versions; the first call itself uses cfg.prompt_version.
     row_prompt_version = (
@@ -180,7 +181,8 @@ def run_copy_paste(
     def work(job: _Job):
         """One item for one model and sample. Returns (job, final completion, first completion
         or None, first answer, first outcome); the first-* values are set only for L3."""
-        system, messages = build_prompt(job.item, job.rendered, cfg.attacker_level, cfg.persona)
+        system, messages = build_prompt(job.item, job.rendered, cfg.attacker_level, cfg.persona,
+                                       cfg.system_variant)
         try:
             out = client.complete(
                 job.model, messages, system=system, temperature=cfg.temperature,
@@ -289,7 +291,7 @@ def run_copy_paste(
         "mechanisms": sorted(mechanisms),
         "model_ids": {m: client.spec(m).model_id for m in cfg.models},
         "heldout_models": [m for m in cfg.models if client.spec(m).heldout],
-        "git_commit": _git_commit(),
+        **git,
         "finished_at": utc_now(),
         "n_jobs": len(jobs),
         "n_rows": len(rows),

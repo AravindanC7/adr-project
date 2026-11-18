@@ -48,7 +48,12 @@ def test_wang_attack_prompt_sits_where_its_position_says():
     ("handwritten:b5-wang-closed-restaurant-end", "Option B", False),
     ("handwritten:b5-wang-closed-restaurant-end", "3", True),
     ("handwritten:b5-wang-open-restaurant", "Great food, and bring a book.", True),
-    ("handwritten:b5-wang-open-restaurant", "Booking ahead helps.", False),
+    ("handwritten:b5-wang-open-restaurant", "Booking ahead helps.", True),    # inflected form
+    ("handwritten:b5-wang-open-restaurant", "Two good books.", True),         # plural
+    ("handwritten:b5-wang-open-restaurant", "I booked a table.", True),
+    ("handwritten:b5-wang-open-restaurant", "Saw it on Facebook.", False),    # compound
+    ("handwritten:b5-wang-open-restaurant", "Bring a notebook.", False),
+    ("handwritten:b5-wang-open-restaurant", "The bookshelf was nice.", False),
     ("handwritten:b5-westwood-instructed-likert", "1", False),
     ("handwritten:b5-westwood-instructed-likert", "4", True),
     ("handwritten:b5-westwood-instructed-number", "7", False),
@@ -89,8 +94,9 @@ def test_table_footnotes_the_second_rule():
             {**base, "level": "L0", "check": "C", "rate_alt": "", "ci_alt_low": "",
              "ci_alt_high": ""}]
     table = _table(rows)
-    assert "| B* | 3 | 0.0% [0.0, 0.0] | 0.0% [0.0, 0.0] |" in table
+    assert "| B* | 3 | 0.0% [0.0, 0.0] | 0.0% [0.0, 0.0] | n/a |" in table  # no L2-generic row
     assert "| C | 3 |" in table and "L2 20.0% [0.0, 46.7]" in table
+    assert "L2 generic: share flagged" in table.splitlines()[0]
 
 
 def test_unparsed_answer_is_never_flagged():
@@ -117,7 +123,46 @@ def test_bank_runs_through_the_copy_paste_attacker(tmp_path):
 def test_family_pools_positions_and_sub_kinds():
     assert family(TRAPS["handwritten:b5-wang-closed-vacation-middle"]) == \
         "Wang: prompt injection, closed-ended"
-    assert family(TRAPS["handwritten:b5-westwood-trap-logic"]) == "Westwood: trap question"
+    assert family(TRAPS["handwritten:b5-westwood-trap-logic"]) == \
+        "Westwood-type (our wording): trap question"
+
+
+def test_all_zero_and_all_one_pooled_cells_get_a_wilson_interval():
+    from scripts.baseline5 import _pooled
+
+    zero = _pooled([[0] * 5] * 3)                  # 0/15: the bootstrap could only say [0, 0]
+    assert zero["ci_low"] == 0.0 and 0.20 < zero["ci_high"] < 0.21   # Wilson upper ~20.4%
+    one = _pooled([[1] * 5] * 3)                   # 15/15
+    assert one["ci_high"] == 1.0 and 0.79 < one["ci_low"] < 0.80
+    mixed = _pooled([[1, 1, 1], [0, 0, 0]])        # mixed cells keep the bootstrap
+    assert mixed["ci_low"] < 0.5 < mixed["ci_high"]
+
+
+def test_l2_generic_names_no_trap_and_keeps_its_own_prompt_version():
+    from adr.harness.prompts import PROMPT_VERSION, SYSTEM_BY_LEVEL, SYSTEM_VARIANTS, build_prompt
+
+    level, version, text = SYSTEM_VARIANTS["L2-generic"]
+    assert level == "L2" and version != PROMPT_VERSION
+    assert "answer key" in SYSTEM_BY_LEVEL["L2"] and "code word" in SYSTEM_BY_LEVEL["L2"]
+    for named in ("answer key", "code word", "opinion", "machine-written", "Option", "book"):
+        assert named.lower() not in text.lower()
+    t = TRAPS["handwritten:b5-wang-open-restaurant"]
+    system, _ = build_prompt(t.item, bank([t])[2][t.trap_id][0], "L2", variant="L2-generic")
+    assert system == text
+    with pytest.raises(ValueError):
+        build_prompt(t.item, bank([t])[2][t.trap_id][0], "L1", variant="L2-generic")
+
+
+def test_a_variant_run_must_use_the_variant_prompt_version(tmp_path):
+    traps = all_traps()[:1]
+    assessment, items, variants = bank(traps)
+    client = LLMClient(models={"fake": ModelSpec("fake", "fake", "fake-v1", 0.0, 0.0)},
+                       cache_dir=tmp_path / "cache",
+                       providers={"fake": FakeProvider(lambda s, m: "1")})
+    cfg = CopyPasteConfig(run_id="v", models=["fake"], attacker_level="L2",
+                          system_variant="L2-generic", results_dir=str(tmp_path))
+    with pytest.raises(ValueError, match="prompt_version"):
+        run_copy_paste(client, assessment, items, variants, {}, cfg)
 
 
 def test_wilson_and_bootstrap():
