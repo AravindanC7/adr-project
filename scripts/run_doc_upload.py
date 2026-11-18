@@ -38,6 +38,7 @@ from adr.contracts.io import read_jsonl
 from adr.harness.copy_paste import plain_variant
 from adr.harness.doc_upload import DocUploadConfig, questions_per_doc_for, run_doc_upload
 from adr.harness.llm_client import FakeProvider, LLMClient, ModelSpec
+from adr.harness.prompts import DOC_PROMPT_VERSION, DOC_VARIANT_PROMPT_VERSION, SYSTEM_VARIANTS
 from adr.harness.registry import load_mechanisms
 from adr.mechanisms.style import StyleMechanism, load_style_profile
 
@@ -76,6 +77,9 @@ def main() -> None:
     )
     ap.add_argument("--level", default="L0", choices=["L0", "L1", "L2", "L4"],
                     help="L3 (retry after a flag) is copy-paste only")
+    ap.add_argument("--system-variant", choices=sorted(SYSTEM_VARIANTS),
+                    help="replace the level's system prompt with a named variant, e.g.\n"
+                         "L2-generic (with --level L2): warns about hidden instructions, names no check")
     ap.add_argument("--samples", type=int, default=1)
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--max-tokens", type=int, default=1500,
@@ -145,6 +149,9 @@ def main() -> None:
         temperature=args.temperature,
         max_tokens=args.max_tokens,
         max_workers=args.workers,
+        system_variant=args.system_variant,
+        prompt_version=(DOC_VARIANT_PROMPT_VERSION[args.system_variant] if args.system_variant
+                        else DOC_PROMPT_VERSION),
         questions_per_doc=(
             questions_per_doc_for(len(assessment.item_ids), args.docs_per_bank)
             if args.docs_per_bank

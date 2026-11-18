@@ -52,6 +52,7 @@ from adr.harness.prompts import (
     DEFAULT_PERSONA,
     PROMPT_VERSION,
     RETRY_PROMPT_VERSION,
+    SYSTEM_VARIANTS,
     build_prompt,
     build_retry_messages,
     is_flag,
@@ -71,6 +72,9 @@ class CopyPasteConfig:
     results_dir: str = "results"
     note: str = ""
     prompt_version: str = field(default=PROMPT_VERSION)
+    # a SYSTEM_VARIANTS name (e.g. "L2-generic"): replaces the level's system prompt; set
+    # prompt_version to that variant's version so its cache entries and rows stay apart
+    system_variant: str | None = None
 
 
 @dataclass
@@ -149,6 +153,11 @@ def run_copy_paste(
         client.spec(m)  # fail fast on an unknown model
     if cfg.n_samples > 1 and not cfg.temperature:
         raise ValueError("n_samples > 1 with temperature 0 repeats the same answer; raise it")
+    if cfg.system_variant is not None:
+        level, version, _ = SYSTEM_VARIANTS[cfg.system_variant]
+        if level != cfg.attacker_level or cfg.prompt_version != version:
+            raise ValueError(f"{cfg.system_variant} needs attacker_level={level} and "
+                             f"prompt_version={version!r}")
     l3 = cfg.attacker_level == "L3"
     # Rows of an L3 run carry both text versions; the first call itself uses cfg.prompt_version.
     row_prompt_version = (
@@ -180,7 +189,8 @@ def run_copy_paste(
     def work(job: _Job):
         """One item for one model and sample. Returns (job, final completion, first completion
         or None, first answer, first outcome); the first-* values are set only for L3."""
-        system, messages = build_prompt(job.item, job.rendered, cfg.attacker_level, cfg.persona)
+        system, messages = build_prompt(job.item, job.rendered, cfg.attacker_level, cfg.persona,
+                                       cfg.system_variant)
         try:
             out = client.complete(
                 job.model, messages, system=system, temperature=cfg.temperature,
