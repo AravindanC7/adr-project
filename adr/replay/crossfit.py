@@ -7,8 +7,9 @@ outcomes".
 Honest sessions are the pilot sessions (data_origin "pilot"), one per pilot session_id. Note: one
 person may span sessions (e.g. someone who started over); sessions are the unit throughout, so
 the folds and the bootstrap treat such sessions as independent. Sessions are split into K folds
-(fixed seed, sizes as equal as possible; low-effort sessions, if listed, are spread across the
-folds first). For each fold k,
+by adr/replay/folds.assign_session_folds, the one fold assignment shared with the behaviour
+calibration (fixed K and seed string from configs/data_decisions.json; low-effort sessions
+spread across the folds first). For each fold k,
 map_k = Archana's builder in STRICT mode on the AI train rows plus the human rows of the OTHER
 folds only (the #25 guard refuses provisional maps). Then:
 
@@ -68,31 +69,6 @@ PolicyFactory = Callable[[FailureMap, RouterConfig], Router]
 
 
 # ------------------------------------------------------------------ folds and maps
-def session_folds(
-    sessions: Sequence[str], k: int, seed: int, stratum: Sequence[str] = ()
-) -> list[list[str]]:
-    """Split sessions into k folds with a fixed seed, every session in exactly one fold.
-
-    Sessions in `stratum` (e.g. the low-effort sessions) are shuffled and dealt round-robin
-    first, then the rest continue the same deal, so the stratum is spread across the folds (at
-    most one apart) and fold sizes still differ by at most one. With no stratum this is the
-    plain shuffled deal."""
-    unique = sorted(set(sessions))
-    if k < 2:
-        raise ValueError("need at least 2 folds")
-    if len(unique) < k:
-        raise ValueError(f"{len(unique)} sessions cannot fill {k} folds")
-    strat = set(stratum) & set(unique)
-    first = [s for s in unique if s in strat]
-    rest = [s for s in unique if s not in strat]
-    random.Random(f"crossfit:{seed}:stratum").shuffle(first)
-    random.Random(f"crossfit:{seed}").shuffle(rest)
-    folds: list[list[str]] = [[] for _ in range(k)]
-    for i, session in enumerate(first + rest):
-        folds[i % k].append(session)
-    return [sorted(f) for f in folds]
-
-
 def fold_map(
     ai_rows: pd.DataFrame,
     human_rows: pd.DataFrame,
@@ -458,7 +434,9 @@ def cap_findings(
     summary: dict[str, Any], cfg: RouterConfig, mechanisms: Sequence[str]
 ) -> dict[str, str]:
     """threshold name -> explanation, for thresholds at or above the cap of the ONLY evidence
-    mechanism. Such a threshold pauses no session, so its TPR is 0: a finding about the design
+    mechanism whose measured TPR is 0. Above the cap no session can pause, so TPR is 0. Exactly
+    AT the cap, sessions whose evidence saturates the cap still pause (pausing is score >= A),
+    so the explanation is attached only when the TPR really is 0: a finding about the design
     (the cap, mech_cap_frac x A, deliberately stops any single check from pausing a session), not
     a failure of the check. Empty with several mechanisms or with no cap."""
     from adr.contracts import PASSIVE_MECHANISMS
@@ -476,7 +454,7 @@ def cap_findings(
             "at or above it."
         )
         for name, r in summary["results"].items()
-        if r["A"] >= cap - 1e-9
+        if r["A"] >= cap - 1e-9 and r.get("tpr") == 0
     }
 
 

@@ -28,5 +28,13 @@
     "minimum_usable_responses": 500,
     "weight_column": "WTSSNR",
     "ingestion_requirement": "Copy exact wording, value codes, missing-value codes, release identifier, and checksum from the official NORC export into the GSS loader manifest before building the bank."
+  },
+  "pilot_folds": {
+    "k": 4,
+    "seed": "adr-pilot-folds-v1",
+    "decided": "2026-11-18",
+    "function": "adr/replay/folds.py: assign_session_folds",
+    "low_effort_ids": "pilot_data/low_effort_ids.txt (full session_ids; any id not among the pilot sessions is an error)",
+    "rule": "One session-to-fold assignment for every pilot analysis: the router's cross-fitting (scripts/run_real_router.py) and the behaviour-threshold calibration (scripts/calibrate_behaviour.py). Folds are assigned on all pilot sessions before any exclusion; low-effort sessions are dealt across the folds first. Change k or seed only here and in adr/replay/folds.py together, never per run."
   }
 }

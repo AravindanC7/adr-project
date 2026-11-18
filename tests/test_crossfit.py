@@ -36,18 +36,25 @@ from adr.replay.crossfit import (
     resampled_donor,
     router_factory,
     score_policy,
-    session_folds,
     summarize,
     tail_warnings,
     threshold_at,
     threshold_none,
 )
 from adr.replay.donors import Donors
+from adr.replay.folds import assign_session_folds, fold_lists
 from adr.replay.simulate import replay_session
 from adr.router.core import RouterConfig, SPRTRouter
 from adr.router.map_guard import ProvisionalMapError
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def session_folds(sessions, k, seed, stratum=()):
+    """The shared assignment (adr/replay/folds.py) as k lists, for these tests."""
+    return fold_lists(assign_session_folds(sessions, k, str(seed), list(stratum)), k)
+
+
 sys.path.insert(0, str(ROOT / "scripts"))
 import run_real_router
 
@@ -272,10 +279,13 @@ def test_three_thresholds_their_rates_and_tail_warnings():
     warns = tail_warnings(s)
     assert warns[0] == f"1% tail extrapolated from {N_SESSIONS} sessions"
     assert any("A_max" in w and "fewer than 3 real sessions" in w for w in warns)
-    # decoy is the only mechanism: a threshold at the decoy cap pauses nobody (TPR 0)
+    # decoy is the only mechanism: a threshold above the decoy cap pauses nobody (TPR 0); one
+    # exactly AT the cap still pauses the sessions that saturate it, so a finding is attached
+    # only where the TPR really is 0
     cap = 0.65 * cf.nominal_A(RouterConfig())
-    at_cap = [n for n, v in r.items() if v["A"] >= cap - 1e-9]
-    assert all(r[n]["tpr"] == 0 and r[n]["honest_pause_rate"] == 0 for n in at_cap)
+    above = [n for n, v in r.items() if v["A"] > cap + 1e-9]
+    assert all(r[n]["tpr"] == 0 and r[n]["honest_pause_rate"] == 0 for n in above)
+    at_cap = [n for n, v in r.items() if v["A"] >= cap - 1e-9 and v["tpr"] == 0]
     found = cf.cap_findings(s, RouterConfig(), ["decoy"])
     assert set(found) == set(at_cap)
     assert all("finding, not a failure" in t and "0.65A" in t for t in found.values())
@@ -444,6 +454,7 @@ def _cmd(tmp_path, *extra):
         "--run-id",
         "r",
         *extra,
+        *([] if "--low-effort" in extra else ["--no-low-effort"]),
     ]
 
 
@@ -497,8 +508,9 @@ def test_low_effort_sessions_are_spread_across_folds():
         counts = [len(set(f) & set(ps[:6])) for f in f6]
         assert sum(counts) == 6 and max(counts) - min(counts) <= 1
         assert max(map(len, f6)) - min(map(len, f6)) <= 1
-    # ids that are not sessions are ignored; no stratum = the plain deal
-    assert session_folds(ps, 4, 0, stratum=["nope"]) == session_folds(ps, 4, 0)
+    # an id that is not a session stops the run (a typo must not drop the stratification)
+    with pytest.raises(ValueError, match="not among"):
+        session_folds(ps, 4, 0, stratum=["nope"])
 
 
 # ---------------------------------------------------------------- headline and cap variants
@@ -601,7 +613,8 @@ def test_cap_finding_is_printed_next_to_tpr_at_1pct(tmp_path):
     assert proc.returncode == 0, proc.stderr[-3000:]
     out = tmp_path / "real-router" / "r"
     th = pd.read_csv(out / "thresholds.csv").set_index(["policy", "threshold"])
-    at_cap = th.loc[("router", "A_0.01"), "A"] >= 0.65 * cf.nominal_A(RouterConfig()) - 1e-9
+    row = th.loc[("router", "A_0.01")]
+    at_cap = row["A"] >= 0.65 * cf.nominal_A(RouterConfig()) - 1e-9 and row["tpr"] == 0
     line = next(x for x in proc.stdout.splitlines() if x.startswith("HEADLINE"))
     assert ("finding, not a failure" in line) == at_cap
     first = (out / "comparison.md").read_text().splitlines()[0]
@@ -620,6 +633,9 @@ def test_headline_carries_the_cap_finding_when_the_1pct_threshold_is_at_the_cap(
     }
     found = cf.cap_findings(summ, RouterConfig(), ["decoy"])
     assert set(found) == {"A_0.01", "A_max"}
+    # at the cap but some session saturated it and paused: TPR > 0, so no "TPR = 0" finding
+    summ_hit = {**summ, "results": {**summ["results"], "A_0.01": {"A": cap, "tpr": 1.0}}}
+    assert set(cf.cap_findings(summ_hit, RouterConfig(), ["decoy"])) == {"A_max"}
     text = run_real_router.headline_text(summ, found["A_0.01"])
     assert text.startswith("HEADLINE (pilot): router TPR at 5% FPR = 0.80 [0.60, 0.90]")
     assert "Secondary: TPR at 1% FPR = 0.00 [0.00, 0.00]" in text
@@ -629,3 +645,53 @@ def test_headline_carries_the_cap_finding_when_the_1pct_threshold_is_at_the_cap(
         cf.cap_findings(summ, RouterConfig(**run_real_router.CAP_VARIANTS["no_cap"]), ["decoy"])
         == {}
     )
+
+
+# ---------------------------------------------------------------- shared fold assignment
+def _run_folds(tmp_path, *extra):
+    proc = subprocess.run(
+        _cmd(tmp_path, *extra),
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    return proc
+
+
+def test_run_real_router_folds_are_the_shared_assignment(tmp_path):
+    """The script's folds are exactly adr/replay/folds.assign_session_folds with the recorded
+    K and seed (what scripts/calibrate_behaviour.py imports), and excluding the low-effort
+    sessions keeps everyone else in the same fold."""
+    from adr.replay.folds import DEFAULT_K, DEFAULT_SEED
+
+    _files(tmp_path)
+    low = tmp_path / "low_effort_ids.txt"
+    low.write_text("\n".join(session_ids()[:4]) + "\n")
+    proc = _run_folds(tmp_path, "--low-effort", str(low))
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    cfg = __import__("yaml").safe_load((tmp_path / "real-router" / "r" / "config.yaml").read_text())
+    expected = fold_lists(
+        assign_session_folds(session_ids(), DEFAULT_K, DEFAULT_SEED, session_ids()[:4]), DEFAULT_K
+    )
+    assert cfg["folds"] == expected
+    assert (cfg["fold_k"], cfg["fold_seed"]) == (DEFAULT_K, DEFAULT_SEED)
+
+    (tmp_path / "x").mkdir()
+    _files(tmp_path / "x")
+    proc = _run_folds(tmp_path / "x", "--low-effort", str(low), "--exclude-sessions", str(low))
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    cfg_x = __import__("yaml").safe_load(
+        (tmp_path / "x" / "real-router" / "r" / "config.yaml").read_text()
+    )
+    gone = set(session_ids()[:4])
+    assert cfg_x["folds"] == [[s for s in f if s not in gone] for f in expected]
+
+
+def test_run_real_router_stops_on_an_unknown_low_effort_id(tmp_path):
+    _files(tmp_path)
+    low = tmp_path / "low_effort_ids.txt"
+    low.write_text(session_ids()[0] + "\nd3ba4f10\n")  # a prefix is not a session id
+    proc = _run_folds(tmp_path, "--low-effort", str(low))
+    assert proc.returncode != 0 and "not among" in proc.stderr

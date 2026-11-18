@@ -4,14 +4,18 @@ held-out honest sessions by session-level cross-fitting (adr/replay/crossfit.py)
     python scripts/run_real_router.py \\
         --ai-outcomes results/outcomes/v1-cp-L0-quiz-mmlu-200-s5.parquet ... \\
         --pilot-outcomes results/outcomes/pilot-2026-11-13.parquet \\
-        [--low-effort pilot_data/low_effort_ids.txt] [--exclude-sessions FILE] [--folds 4]
+        [--low-effort FILE | --no-low-effort] [--exclude-sessions FILE]
         [--alpha 0.01] [--cap-variant per_mech|passive_group|open_text_group ...] [--final]
 
 What it does:
   1. Reads the AI rows (any files or folders) and the pilot rows (data_origin "pilot"). The unit
-     is the session (one pilot session_id); one person may span sessions. --low-effort FILE lists
-     the low-effort sessions (one session_id per line): they are spread across the folds.
-     --exclude-sessions FILE drops the listed sessions, for the with/without low-effort run.
+     is the session (one pilot session_id); one person may span sessions. Folds come from
+     adr/replay/folds.assign_session_folds, shared with scripts/calibrate_behaviour.py: K and
+     the seed string are the ones recorded in configs/data_decisions.json ("pilot_folds"), and
+     the low-effort sessions (--low-effort, default pilot_data/low_effort_ids.txt, full ids;
+     any id that is not a pilot session stops the run) are spread across the folds.
+     Folds are assigned on ALL pilot sessions; --exclude-sessions FILE then drops the listed
+     sessions from their folds, so the with/without low-effort runs use the same folds.
   2. Keeps only the mechanisms that have BOTH AI and human rows, and says which ones.
   3. Replays on the pilot bank (--bank, default server/pilot_items.json: what the router would
      serve). Honest sessions are replayed from their own rows. The AI runs answered other items, so an AI
@@ -65,9 +69,16 @@ from adr.replay.crossfit import (
     deploy_config,
     router_factory,
     score_policy,
-    session_folds,
     summarize,
     tail_warnings,
+)
+from adr.replay.folds import (
+    DEFAULT_K,
+    DEFAULT_SEED,
+    LOW_EFFORT_FILE,
+    assign_session_folds,
+    fold_lists,
+    read_low_effort,
 )
 from adr.replay.quick_map import CALIBRATION_FRAC, SPLIT_SEED, split_rows
 from adr.router.core import RouterConfig
@@ -155,12 +166,29 @@ def main() -> None:
     ap.add_argument("--ai-outcomes", nargs="+", required=True, help="AI outcome files/folders")
     ap.add_argument("--pilot-outcomes", nargs="+", required=True, help="pilot outcome file(s)")
     ap.add_argument("--exclude-sessions", help="file: human session_ids to drop, one per line")
-    ap.add_argument(
+    low = ap.add_mutually_exclusive_group()
+    low.add_argument(
         "--low-effort",
-        help="file: low-effort session_ids, one per line (e.g. pilot_data/low_effort_ids.txt); "
-        "they are spread across the folds",
+        default=str(LOW_EFFORT_FILE),
+        help="file: low-effort session_ids, full ids, one per line (default %(default)s); they "
+        "are spread across the folds. Any id that is not a pilot session stops the run",
     )
-    ap.add_argument("--folds", type=int, default=4)
+    low.add_argument(
+        "--no-low-effort",
+        action="store_true",
+        help="no low-effort stratification (synthetic data and tests only)",
+    )
+    ap.add_argument(
+        "--folds",
+        type=int,
+        default=DEFAULT_K,
+        help="K; keep the recorded default (configs/data_decisions.json) for reported runs",
+    )
+    ap.add_argument(
+        "--fold-seed",
+        default=DEFAULT_SEED,
+        help="fold seed string; keep the recorded default for reported runs",
+    )
     ap.add_argument("--alpha", type=float, default=0.01, help="max honest pause rate per fold")
     ap.add_argument(
         "--cap-variant",
@@ -184,7 +212,9 @@ def main() -> None:
     ap.add_argument("--bank", default="server/pilot_items.json", help="the pilot bank JSON")
     ap.add_argument("--assessment-id", help="replay one part of the bank (default: the flow)")
     ap.add_argument("--betas", default=",".join(str(b) for b in BETAS))
-    ap.add_argument("--seed", type=int, default=0, help="fold split and replay seed")
+    ap.add_argument(
+        "--seed", type=int, default=0, help="replay and bootstrap seed (folds: --fold-seed)"
+    )
     ap.add_argument("--boot", type=int, default=200, help="bootstrap draws over sessions")
     ap.add_argument(
         "--n-synthetic", type=int, default=500, help="resampled honest sessions per fold"
@@ -211,6 +241,13 @@ def main() -> None:
             "no pilot rows (respondent_kind human, data_origin pilot) in "
             f"{args.pilot_outcomes}. Without them use scripts/run_replay.py."
         )
+    # Folds on ALL pilot sessions, before any exclusion: the same folds in every variant of the
+    # run, and the same as scripts/calibrate_behaviour.py's (adr/replay/folds.py).
+    low_effort = [] if args.no_low_effort else args.low_effort
+    assignment = assign_session_folds(
+        human["session_id"].unique(), args.folds, args.fold_seed, low_effort
+    )
+    low_found = [] if args.no_low_effort else read_low_effort(args.low_effort)
     excluded = read_exclusions(args.exclude_sessions)
     human, not_found = exclude_sessions(human, excluded)
     if not_found:
@@ -274,14 +311,9 @@ def main() -> None:
                 )
     cfg = replace(RouterConfig(), **CAP_VARIANTS[variants_cap[0]])
 
-    low_effort = read_exclusions(args.low_effort)
-    low_found = sorted(low_effort & set(sessions))
-    if low_effort and len(low_found) < len(low_effort):
-        print(
-            f"WARNING: {len(low_effort) - len(low_found)} --low-effort ids are not (kept) pilot "
-            "sessions"
-        )
-    folds = session_folds(sessions, args.folds, args.seed, stratum=low_found)
+    folds = fold_lists(assignment, args.folds, keep=sessions)
+    if any(not f for f in folds):
+        raise SystemExit(f"a fold is empty after the exclusions: sizes {[len(f) for f in folds]}")
     print(
         f"{len(sessions)} honest sessions in {args.folds} folds of {[len(f) for f in folds]} "
         f"(one person may span sessions; the session is the unit); low-effort sessions per "
@@ -438,7 +470,11 @@ def main() -> None:
                 "passive": list(passive),
                 "n_sessions": len(sessions),
                 "folds": folds,
-                "fold_seed": args.seed,
+                "fold_k": args.folds,
+                "fold_seed": args.fold_seed,
+                "fold_assignment": "adr/replay/folds.assign_session_folds, on all pilot "
+                "sessions before exclusions",
+                "replay_seed": args.seed,
                 "excluded_sessions": sorted(excluded),
                 "excluded_not_found": not_found,
                 "alphas": alphas,
