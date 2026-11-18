@@ -36,12 +36,18 @@ def heldout_mask(df: pd.DataFrame) -> pd.Series:
 
 
 def final_eval_rows(heldout: pd.DataFrame, heldout_model: str) -> pd.DataFrame:
-    """--final: the held-out rows that may be evaluated. AI rows come only from the decided
-    held-out model (configs/data_decisions.json), so rows from an earlier held-out model (the
-    gemini-flash smoke runs, logged with heldout_model=True) never enter the final evaluation.
-    Human rows (the held-out survey) are kept."""
-    ai = heldout["respondent_kind"] == "ai"
-    return heldout[~ai | (heldout["model"] == heldout_model)]
+    """--final: the held-out rows that may be evaluated. Keeps
+      * every row from the decided held-out model (configs/data_decisions.json),
+      * rows from training models on the held-out survey (the unseen-survey test),
+      * human rows.
+    Drops only AI rows from any OTHER model flagged heldout_model=True: an earlier held-out
+    model (the gemini-flash smoke runs) must never enter the final evaluation."""
+    stale = (
+        heldout["respondent_kind"].eq("ai")
+        & heldout["heldout_model"].astype(bool)
+        & heldout["model"].ne(heldout_model)
+    )
+    return heldout[~stale]
 
 
 def fit_rows(df: pd.DataFrame) -> pd.DataFrame:
