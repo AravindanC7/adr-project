@@ -1,7 +1,7 @@
 """Behaviour-check threshold sweep on held-out pilot folds (step #42). Owner: Harshini.
 
     python scripts/calibrate_behaviour.py
-    python scripts/calibrate_behaviour.py --k 5 --seed 0 --targets 0.02 0.05
+    python scripts/calibrate_behaviour.py --targets 0.02 0.05
 
 Every pilot respondent is an honest human, so any paste / focus_loss / too_fast outcome on the
 pilot is a false flag. This script shows how that honest flag rate moves as each threshold of
@@ -12,8 +12,11 @@ How
     answer it keeps telemetry counts and timings, the item's passage + question word count, and
     the answer's LENGTH (the "untyped" paste rule needs it). Answer text is read in memory only
     and never stored, printed or written.
-  * Folds: sessions are split into K folds (fixed seed); the low-effort sessions are dealt
-    across the folds first so every fold gets at most one more of them. Every rate in the output
+  * Folds: adr.replay.folds.assign_session_folds (PR #30), the one fold assignment shared with
+    the router's cross-fitting, at its defaults (K and seed recorded in
+    configs/data_decisions.json "pilot_folds"). The low-effort sessions (--exclude-sessions
+    prefixes, matched to full session ids) are passed explicitly as low_effort, so they are dealt
+    across the folds first and every fold gets at most one more of them. Every rate in the output
     is a rate on ONE held-out fold; nothing is computed on all the data at once.
   * Sweeps (first match wins, as in behaviour.py; the thresholds not being swept stay at
     behaviour.py's defaults):
@@ -31,10 +34,6 @@ thresholds as parameters (vectorised). At the defaults it is checked answer by a
 behaviour.py's own score() and against the live outcomes the server stored; the run stops if
 either disagrees.
 
-Fold assignment is a small stand-in for PR #30's adr/replay/crossfit.session_folds (same idea:
-seeded, stratum dealt round-robin first); switch to that once #30 is merged so #42's thresholds
-and the router's cross-fitting use the same folds.
-
 Outputs (aggregates only: counts and rates per fold / setting), in --out:
   folds.csv      one row per (sessions, setting, fold): n_answers and per-outcome rates
   summary.csv    per (sessions, setting): pooled rate and mean / min / max over folds
@@ -46,7 +45,6 @@ from __future__ import annotations
 
 import argparse
 import itertools
-import random
 import sys
 from collections import Counter
 from collections.abc import Iterable, Sequence
@@ -60,6 +58,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from adr.contracts import Response, Telemetry, parse_variant_id
 from adr.mechanisms import behaviour
+from adr.replay.folds import DEFAULT_K, DEFAULT_SEED, assign_session_folds
 from server.clean import load_bank, plain_rendered
 from server.store import read_session
 
@@ -209,28 +208,17 @@ def sanity_check(df: pd.DataFrame, expected: dict[str, int] | None) -> dict[str,
 
 
 # ------------------------------------------------------------------ folds
-def assign_folds(
-    session_ids: Iterable[str], k: int, seed: int, spread: Iterable[str] = ()
-) -> dict[str, int]:
-    """session -> fold in 0..k-1. Seeded; sessions in `spread` are shuffled and dealt
-    round-robin first, the rest continue the same deal, so `spread` is spread over the folds
-    (at most one apart) and fold sizes differ by at most one. Stand-in for PR #30's
-    crossfit.session_folds."""
-    unique = sorted(set(session_ids))
-    if k < 2:
-        raise ValueError("need at least 2 folds")
-    if len(unique) < k:
-        raise ValueError(f"{len(unique)} sessions cannot fill {k} folds")
-    marked = set(spread)
-    first = [s for s in unique if s in marked]
-    rest = [s for s in unique if s not in marked]
-    random.Random(f"behaviour-cal:{seed}:spread").shuffle(first)
-    random.Random(f"behaviour-cal:{seed}").shuffle(rest)
-    return {s: i % k for i, s in enumerate(first + rest)}
-
-
 def match_prefixes(session_ids: Iterable[str], prefixes: Sequence[str]) -> set[str]:
-    return {s for s in session_ids if any(s.startswith(p) for p in prefixes)}
+    """Full session ids for the given code prefixes. Each prefix must match exactly one
+    session: a typo or an ambiguous prefix would otherwise silently change the low-effort set."""
+    sids = sorted(set(session_ids))
+    out: set[str] = set()
+    for p in prefixes:
+        hits = [s for s in sids if s.startswith(p)]
+        if len(hits) != 1:
+            raise SystemExit(f"STOP: session prefix {p!r} matches {len(hits)} sessions, not 1")
+        out.update(hits)
+    return out
 
 
 # ------------------------------------------------------------------ sweeps
@@ -360,7 +348,8 @@ NOTES = """* Thresholds are set from the HUMAN side only. The AI-side behaviour 
 * A setting at the edge of a grid means the target may need a wider grid (pass e.g.
   --floor-ms 0:2000:250 or --away-ms 1000:30000:1000); 'none' means no setting in the grid kept
   the other folds at or under the target.
-* Folds: stand-in for PR #30's crossfit.session_folds; switch to that once #30 merges."""
+* Folds: assign_session_folds() from PR #30 (adr.replay.folds), the same folds the router's
+  cross-fitting uses; low-effort ids passed explicitly."""
 
 
 def markdown(summary: pd.DataFrame, sel: pd.DataFrame, counts: dict[str, int], meta: dict) -> str:
@@ -477,8 +466,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--data-dir", type=Path, default=ROOT / "pilot_data")
     p.add_argument("--bank", type=Path, default=ROOT / "server" / "pilot_items.json")
     p.add_argument("--out", type=Path, default=ROOT / "results" / "calibration" / "behaviour")
-    p.add_argument("--k", type=int, default=5)
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--k", type=int, default=DEFAULT_K, help="folds; default = the shared pilot_folds K"
+    )
+    p.add_argument(
+        "--seed",
+        default=DEFAULT_SEED,
+        help="fold seed string; default = the shared pilot_folds seed",
+    )
     p.add_argument(
         "--exclude-sessions",
         nargs="*",
@@ -506,7 +501,7 @@ def main(argv: list[str] | None = None) -> int:
     counts = sanity_check(df, None if args.no_expected else EXPECTED_PILOT)
     sessions = sorted(df["session_id"].unique())
     low = match_prefixes(sessions, args.exclude_sessions)
-    folds = assign_folds(sessions, args.k, args.seed, spread=low)
+    folds = assign_session_folds(sessions, k=args.k, seed=args.seed, low_effort=sorted(low))
     variants = {"all": set()}
     if low:
         variants["excluding_low_effort"] = low

@@ -2,14 +2,14 @@
 
 import json
 
-import numpy as np
 import pandas as pd
 import pytest
 
+import scripts.calibrate_behaviour as cal
+from adr.replay.folds import DEFAULT_K, DEFAULT_SEED
 from scripts.calibrate_behaviour import (
     OUTCOMES,
     Thresholds,
-    assign_folds,
     fold_table,
     load_features,
     main,
@@ -174,21 +174,34 @@ def test_selection_uses_other_folds_only(pilot):
     assert row["train_rate"] == 0 and row["heldout_rate"] == 0
 
 
-def test_assign_folds_deterministic_and_spreads_low_effort():
-    sids = [f"s{i:02d}" for i in range(44)]
-    low = {"s03", "s17", "s29", "s40"}
-    a = assign_folds(sids, 5, 0, spread=low)
-    assert a == assign_folds(list(reversed(sids)), 5, 0, spread=low)
-    assert a != assign_folds(sids, 5, 1, spread=low)
-    assert len({a[s] for s in low}) == 4  # four low-effort sessions, four different folds
-    sizes = np.bincount(list(a.values()), minlength=5)
-    assert sizes.max() - sizes.min() <= 1
-    with pytest.raises(ValueError):
-        assign_folds(sids[:3], 5, 0)
-
-
 def test_match_prefixes():
-    assert match_prefixes(["d3ba4f10abc", "ffff"], ["d3ba4f10", "0a87374a"]) == {"d3ba4f10abc"}
+    assert match_prefixes(["d3ba4f10abc", "ffff"], ["d3ba4f10"]) == {"d3ba4f10abc"}
+    with pytest.raises(SystemExit):  # a prefix matching no session stops the run
+        match_prefixes(["d3ba4f10abc", "ffff"], ["d3ba4f10", "0a87374a"])
+    with pytest.raises(SystemExit):  # an ambiguous prefix stops the run
+        match_prefixes(["d3ba4f10abc", "d3ba4f10xyz"], ["d3ba4f10"])
+
+
+def test_main_uses_shared_folds_with_low_effort_passed(pilot, tmp_path, monkeypatch):
+    data, bank = pilot
+    calls = []
+    real = cal.assign_session_folds
+
+    def spy(session_ids, **kw):
+        calls.append((sorted(session_ids), kw))
+        return real(session_ids, **kw)
+
+    monkeypatch.setattr(cal, "assign_session_folds", spy)
+    argv = ["--data-dir", str(data), "--bank", str(bank), "--out", str(tmp_path / "out")]
+    argv += ["--exclude-sessions", "03aa", "07aa", "--no-expected", "--floor-ms", "1000"]
+    argv += ["--per-word-ms", "100", "--key-gap-ms", "30", "--away-ms", "2000"]
+    argv += ["--paste-chars", "20"]
+    assert main(argv) == 0
+    assert len(calls) == 1
+    sids, kw = calls[0]
+    assert sids == [f"{i:02d}aaaaaa" for i in range(10)]
+    # full ids, passed explicitly (never read from pilot_data/), at the shared defaults
+    assert kw == {"k": DEFAULT_K, "seed": DEFAULT_SEED, "low_effort": ["03aaaaaa", "07aaaaaa"]}
 
 
 def test_outputs_hold_no_text(pilot, tmp_path):
