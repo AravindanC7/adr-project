@@ -96,7 +96,7 @@ def test_every_eligible_question_carries_its_check(traps):
     # q1, q2 are decoy-eligible; s1 is canary-eligible; everything else is plain.
     assert [bool(it["aux"]) for it in quiz] == [True, True, False]
     assert [bool(it["aux"]) for it in survey] == [True, False, False, False, False]
-    assert quiz[0]["aux"]["at"] == "after_stem" and quiz[0]["aux"]["style"] == "clip"
+    assert quiz[0]["aux"]["at"] == "after_stem" and quiz[0]["aux"]["style"] == "clip_aria"
     assert "marigold" in survey[0]["aux"]["text"]
     # Only the hidden text itself, never the decoy index or the answer key behind it.
     assert "decoy_option_index" not in json.dumps(quiz) and "canary_token" not in json.dumps(survey)
@@ -129,6 +129,20 @@ def test_answers_are_scored_by_the_check_they_carried(traps):
     step = respond(traps, step, "I like the people. marigold0").json()
     history = traps.get(f"/session/{step['session_id']}").json()["history"]
     assert history[0][1] == "followed_instruction"
+
+
+def _first_aux_style(app):
+    step = TestClient(app).post("/session/start", json={"assessment_id": "stub-quiz"}).json()
+    return step["item"]["aux"]["style"]
+
+
+def test_default_hiding_style_is_clip_aria(monkeypatch):
+    # Safe for screen-reader users; the final evaluation and the pilot pass clip explicitly.
+    monkeypatch.delenv("ADR_HIDE", raising=False)
+    assert _first_aux_style(create_app(mechanisms={"decoy": StubDecoy()})) == "clip_aria"
+    assert _first_aux_style(create_app(mechanisms={"decoy": StubDecoy()}, hide="clip")) == "clip"
+    monkeypatch.setenv("ADR_HIDE", "clip")  # what scripts/run_pilot.ps1 sets
+    assert _first_aux_style(create_app(mechanisms={"decoy": StubDecoy()})) == "clip"
 
 
 @pytest.mark.parametrize("hide", ["clip", "clear", "clip_aria"])
