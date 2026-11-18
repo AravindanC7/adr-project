@@ -141,6 +141,12 @@ class Trace:
     running: np.ndarray
     checks: np.ndarray
     total_checks: int
+    cleared: bool = False  # the replay ended "cleared" (score reached B; checks stopped there)
+
+    def cleared_at(self, threshold: float) -> bool:
+        """Cleared when deployed at `threshold`: it reached B before ever reaching `threshold`.
+        Clearing is final (no more checks, score frozen), so that is: cleared and score < threshold."""
+        return self.cleared and self.score < threshold
 
     def checks_at(self, threshold: float) -> int:
         """Active checks served before pausing at `threshold` (all of them if never paused)."""
@@ -156,7 +162,9 @@ def trace(result: ReplayResult, who: str, fold: int, prior: float) -> Trace:
     )
     checks = active if len(active) else np.array([0])
     score = float(max(prior, running.max()))
-    return Trace(who, fold, score, running, checks, result.checks_run)
+    return Trace(
+        who, fold, score, running, checks, result.checks_run, result.final.status == "cleared"
+    )
 
 
 # ------------------------------------------------------------------ donors
@@ -304,8 +312,8 @@ def threshold_none(scores: Sequence[float]) -> float:
 def rates(
     real: list[Trace], ai: list[list[Trace]], synthetic: list[float], thresholds: dict[str, float]
 ) -> dict[str, dict[str, float]]:
-    """Per threshold: TPR, real and resampled honest pause rates, checks per honest session, and
-    how many real sessions reach it."""
+    """Per threshold: TPR, real and resampled honest pause rates, checks per honest session, the
+    share of honest sessions cleared (reached B first), and how many real sessions reach it."""
     out = {}
     for name, a in thresholds.items():
         ai_hits = [np.mean([t.score >= a for t in per_fold]) for per_fold in ai]
@@ -317,6 +325,7 @@ def rates(
             if len(synthetic)
             else math.nan,
             "checks_per_honest_session": float(np.mean([t.checks_at(a) for t in real])),
+            "honest_cleared_rate": float(np.mean([t.cleared_at(a) for t in real])),
             "n_real_at_or_above": int(sum(t.score >= a for t in real)),
         }
     return out

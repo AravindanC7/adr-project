@@ -13,6 +13,7 @@ Each step:
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass
 
@@ -31,6 +32,8 @@ from adr.contracts import (
 )
 from adr.router.selection import utility
 from adr.router.sprt import capped_delta, sigmoid, wald_thresholds
+
+_CLEAR_TOL = 1e-9  # nats
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,9 @@ class RouterConfig:
     attack_mode: str | None = None # which failure-map cells to use; None = pooled over modes
     upper: float | None = None     # override A (after empirical calibration, step #42)
     lower: float | None = None     # override B
+    # False = never clear (router_noclear): keeps checking a low score. B still floors each
+    # mechanism's total, so both policies bound evidence the same way.
+    clear: bool = True
 
 
 def _cap_keys(groups: dict[str, tuple[str, ...]] | None) -> dict[str, str]:
@@ -109,6 +115,11 @@ class SPRTRouter:
             raise ValueError("mech_cap_frac must be > 0 (or None for no cap)")
         # Per-mechanism cap in nats, from A after any `upper` override.
         self.mech_cap = None if config.mech_cap_frac is None else config.mech_cap_frac * self.A
+        # Each mechanism's (or group's) total is bounded to [B, +cap]: one check alone can reach
+        # B (clear) but not A (review). None when there is no cap, or B is not finite.
+        self.mech_floor = (
+            self.B if self.mech_cap is not None and math.isfinite(self.B) else None
+        )
         self._cap_key = _cap_keys(config.mech_group_caps)
         self._assessments: dict[str, Assessment] = {}
         self._variant_index: dict[str, RenderedItem] = {
@@ -159,7 +170,8 @@ class SPRTRouter:
             if cell is not None:
                 key = self.cap_key(mech)  # the mechanism, or the group it shares a cap with
                 total = new.contrib.get(key, 0.0)
-                delta = capped_delta(total, cell.llr(outcome), self.mech_cap)
+                # Bounded to [B, +cap]: B from this config, so it follows calibration.
+                delta = capped_delta(total, cell.llr(outcome), self.mech_cap, self.mech_floor)
                 new.contrib[key] = total + delta
         new.score += delta
         new.history.append((variant_id, outcome, delta))
@@ -193,7 +205,8 @@ class SPRTRouter:
     def _status(self, state: SessionState) -> str:
         if state.status == "review" or state.score >= self.A:
             return "review"
-        if state.score <= self.B:
+        # Tolerance: a mechanism at its floor makes score == B up to float rounding of the deltas.
+        if self.cfg.clear and state.score <= self.B + _CLEAR_TOL:
             return "cleared"
         if state.score >= self.cfg.escalate_frac * self.A:
             return "escalated"
