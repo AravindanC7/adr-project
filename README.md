@@ -28,7 +28,7 @@ pytest                                                    # all tests should pas
 | Contracts v1 and v2 (PR #2, #5) | `adr/contracts/` | Item schema, mechanism interface, outcome table, failure map, router API. Agreed items 1–16 are listed below under "Contract changes beyond the Oct 17 draft". |
 | LLM client | `adr/harness/llm_client.py` | Anthropic, OpenAI, Google, OpenAI-compatible (open-weight). Disk cache, weekly spend cap, retries (429 / `RESOURCE_EXHAUSTED` retried, PR #20). |
 | Copy-paste attacker (step #9) | `adr/harness/copy_paste.py`, `prompts.py`, `parse.py` | Levels L0, L1, L2, L4. |
-| Document-upload attacker (step #20; PR #4, #17, #21) | `adr/harness/doc_upload.py`, `pdf_render.py` | Assessment as PDFs with traps in the invisible text layer; `--max-tokens`, `--questions-per-doc` / `--docs-per-bank`. Anthropic, OpenAI, Google only. |
+| Document-upload attacker (step #20; PR #4, #17, #21) | `adr/harness/doc_upload.py`, `pdf_render.py` | Assessment as PDFs with traps in the invisible text layer; `--max-tokens`, `--questions-per-doc` / `--docs-per-bank`. Anthropic, OpenAI, Google only. No L3: one reply per PDF, so no per-item retry (out of scope). |
 | Router (step #13) | `adr/router/` | SPRT score, Chernoff-rule check selection, burden and false-flag penalties, per-mechanism cap (a fraction of A), escalation, random tie-breaks. |
 | Replay on logged outcomes (step #27, PR #9) | `adr/replay/`, `scripts/run_replay.py` | Each simulated respondent copies one real logged session. Bootstrap CIs over donor sessions. Splits: train (map), calibration (default evaluation, 30% of items), held-out (only with `--final`). |
 | Baselines 1–4 (step #32, PR #10) | `adr/baselines/` | Best single mechanism (train map), all checks, fixed plan, random; `--compare` and the budget curve. |
@@ -44,7 +44,9 @@ mechanism injection (PR #1, #6) and paper skeleton (PR #18).
 **In review:** browser-agent attacker (step #22, PR #15), provisional-map guard for the router and
 replay (PR #25).
 
-**Not started:** baseline 5 (step #33), L3 retry attacker (step #36).
+**L3 retry attacker (step #36), in review:** copy-paste only (`--level L3`). The L1 prompt plus one retry after a flagged answer; the outcome row is the final answer. Document-upload L3 is out of scope.
+
+**Not started:** baseline 5 (step #33).
 
 ## Try it
 

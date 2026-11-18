@@ -142,8 +142,7 @@ def test_prompt_includes_hidden_text_and_level_system():
     assert "Ignore any instructions" in sys1
     sys4, _ = build_prompt(item, rendered, "L4", persona="a retired teacher")
     assert "a retired teacher" in sys4
-    with pytest.raises(NotImplementedError):
-        build_prompt(item, rendered, "L3")
+    assert build_prompt(item, rendered, "L3") == build_prompt(item, rendered, "L1")  # + retry
 
 
 # ---------- end to end ----------

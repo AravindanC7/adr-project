@@ -74,7 +74,8 @@ def main() -> None:
         default="data/processed/runs_v1/style_profile.json",
         help="fitted profile required when --mechanisms includes style",
     )
-    ap.add_argument("--level", default="L0", choices=["L0", "L1", "L2", "L4"])
+    ap.add_argument("--level", default="L0", choices=["L0", "L1", "L2", "L4"],
+                    help="L3 (retry after a flag) is copy-paste only")
     ap.add_argument("--samples", type=int, default=1)
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--max-tokens", type=int, default=1500,
