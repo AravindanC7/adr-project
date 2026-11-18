@@ -28,8 +28,9 @@ pytest                                                    # all tests should pas
 | Contracts v1 and v2 (PR #2, #5) | `adr/contracts/` | Item schema, mechanism interface, outcome table, failure map, router API. Agreed items 1–16 are listed below under "Contract changes beyond the Oct 17 draft". |
 | LLM client | `adr/harness/llm_client.py` | Anthropic, OpenAI, Google, OpenAI-compatible (open-weight). Disk cache, weekly spend cap, retries (429 / `RESOURCE_EXHAUSTED` retried, PR #20). |
 | Copy-paste attacker (step #9) | `adr/harness/copy_paste.py`, `prompts.py`, `parse.py` | Levels L0, L1, L2, L4. |
-| Document-upload attacker (step #20; PR #4, #17, #21) | `adr/harness/doc_upload.py`, `pdf_render.py` | Assessment as PDFs with traps in the invisible text layer; `--max-tokens`, `--questions-per-doc` / `--docs-per-bank`. Anthropic, OpenAI, Google only. |
+| Document-upload attacker (step #20; PR #4, #17, #21) | `adr/harness/doc_upload.py`, `pdf_render.py` | Assessment as PDFs with traps in the invisible text layer; `--max-tokens`, `--questions-per-doc` / `--docs-per-bank`. Anthropic, OpenAI, Google only. No L3: one reply per PDF, so no per-item retry (out of scope). |
 | Browser-agent attacker (step #22, PR #15) | `adr/harness/browser_agent.py`, `scripts/run_browser_agent.py` | Drives the real page in Chromium (Playwright); reads it as innerText or the accessibility tree, never pixels. |
+| L3 retry attacker (step #36, PR #29) | `adr/harness/copy_paste.py`, `prompts.py` | Copy-paste only (`--level L3`): the L1 prompt plus one retry after a flagged answer; the outcome row is the final answer. Document-upload L3 is out of scope. L3 is left out of pooled map cells (see "Build the failure-mode map"). |
 | Router (step #13) | `adr/router/` | SPRT score, Chernoff-rule check selection, burden and false-flag penalties, per-mechanism cap (a fraction of A), escalation, random tie-breaks. |
 | Replay on logged outcomes (step #27, PR #9) | `adr/replay/`, `scripts/run_replay.py` | Each simulated respondent copies one real logged session. Bootstrap CIs over donor sessions. Splits: train (map), calibration (default evaluation, 30% of items), held-out (only with `--final`). |
 | Baselines 1–4 (step #32, PR #10) | `adr/baselines/` | Best single mechanism (train map), all checks, fixed plan, random; `--compare` and the budget curve. |
@@ -43,7 +44,7 @@ pytest                                                    # all tests should pas
 Also on `main`: Archana's loaders and mechanisms (PR #3, #7, #8, #19) and Harshini's respondent page and
 mechanism injection (PR #1, #6) and paper skeleton (PR #18).
 
-**Not started:** baseline 5 (step #33), L3 retry attacker (step #36).
+**Not started:** baseline 5 (step #33).
 
 ## Try it
 
@@ -123,6 +124,12 @@ held-out models and the held-out survey, applies the agreed add-one smoothing, a
 95% intervals by resampling whole sessions.
 It emits a mechanism/item-type cell only when both AI and human evidence exist; it never fills a
 missing class with invented observations.
+
+**L3 rows stay out of pooled cells.** On items where the first answer was not flagged, an L3 row
+is the cached L1 answer, so pooling L3 with L1 would count those answers twice. L3 gets its own
+cells (`attacker_level: L3`), but every cell pooled over attacker levels (no `attacker_level`)
+leaves it out (`NOT_POOLED_LEVELS` in `adr/map/builder.py`; the temporary replay map in
+`adr/replay/quick_map.py` does the same).
 
 Before the pilot rows arrive, build the provisional AI side explicitly:
 

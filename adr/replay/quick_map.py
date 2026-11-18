@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from adr.contracts import FailureMap, MapCell
+from adr.map.builder import NOT_POOLED_LEVELS
 
 TEMPORARY_NOTE = (
     "TEMPORARY quick map from adr/replay/quick_map.py (counts + add-one smoothing, no CIs). "
@@ -52,7 +53,8 @@ def quick_failure_map(
     df: pd.DataFrame, version: str = "quick-temporary", prior: float = 1.0
 ) -> FailureMap:
     """One cell per (mechanism, item_type) pooled over attack modes, plus one per attack mode
-    seen in the AI rows (sharing the pooled human counts: people have no attack mode)."""
+    seen in the AI rows (sharing the pooled human counts: people have no attack mode). All cells
+    pool over attacker levels, so L3 rows are left out (NOT_POOLED_LEVELS)."""
     rows = fit_rows(df)
     rows = rows[rows["mechanism"].notna()]
     if rows.empty:
@@ -68,6 +70,7 @@ def quick_failure_map(
     no_human: list[str] = []
     for (mech, item_type), part in rows.groupby(["mechanism", "item_type"], sort=True):
         ai = part[part["respondent_kind"] == "ai"]
+        ai = ai[~ai["attacker_level"].isin(NOT_POOLED_LEVELS)]  # every cell here is pooled
         human = counts(part[part["respondent_kind"] == "human"])
         if not human:
             no_human.append(f"{mech}/{item_type}")
