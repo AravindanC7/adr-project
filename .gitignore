@@ -29,3 +29,4 @@ pilot_data/
 server/pilot_items.json
 # teammate dry run answers (#35): never in git
 dry_run_data/
+results/baseline5/outcomes/

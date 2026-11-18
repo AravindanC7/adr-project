@@ -44,7 +44,7 @@ pytest                                                    # all tests should pas
 Also on `main`: Archana's loaders and mechanisms (PR #3, #7, #8, #19) and Harshini's respondent page and
 mechanism injection (PR #1, #6) and paper skeleton (PR #18).
 
-**Not started:** baseline 5 (step #33).
+**Baseline 5 (step #33), in review:** published survey traps (Wang et al. (CSCW 2025) prompt injection, Westwood 2025 attention checks) re-tested on gpt-mini, copy-paste L0 and L2. `adr/baselines/published_traps.py`, `scripts/baseline5.py`, results in `results/baseline5/`.
 
 ## Try it
 
