@@ -157,3 +157,28 @@ def build_doc_prompt(
         system = system.format(persona=persona)
     user = DOC_USER_PROMPT.format(kind=kind, n=n_questions)
     return system, [{"role": "user", "content": user}]
+
+
+BA_PROMPT_VERSION = "ba-v1"
+
+BA_USER_PROMPT = (
+    "You are filling in a web form for someone. This is what the current question on the page "
+    "shows:\n\n{observation}\n\n{hint}"
+)
+
+
+def build_browser_prompt(
+    observation: str, item_type: str, level: str, persona: str = DEFAULT_PERSONA
+) -> tuple[str | None, list[dict[str, str]]]:
+    """Return (system, messages) for one question as a browser agent sees it: `observation` is
+    the page region as text or as an accessibility snapshot. System prompts are the copy-paste
+    ones; the reply format is FORMAT_HINT's."""
+    if level == "L3":
+        raise NotImplementedError("L3 (retry after a flag) needs a feedback loop; step #36")
+    if level not in SYSTEM_BY_LEVEL:
+        raise ValueError(f"unknown attacker level {level!r}")
+    system = SYSTEM_BY_LEVEL[level]
+    if system and "{persona}" in system:
+        system = system.format(persona=persona)
+    user = BA_USER_PROMPT.format(observation=observation.strip(), hint=FORMAT_HINT[item_type])
+    return system, [{"role": "user", "content": user}]

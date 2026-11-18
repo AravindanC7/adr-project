@@ -393,7 +393,9 @@ The server scores the response with the mechanism's `score()`, calls `router.upd
 
 All human data is **pre-2020**, before LLMs. This means a classifier might learn "old vs new writing" instead of "human vs AI." The held-out splits are our main defense:
 
-- **Held-out model:** chosen **Mon Oct 26** (step #16), before any large run. It never contributes to the failure map, thresholds or any tuning. It is used only for the final RQ2–RQ4 evaluation.
+- **Held-out model: `claude-haiku`** (`claude-haiku-5-5`). It never contributes to the failure map, thresholds or any tuning. It runs **only once, in the final `--final` RQ2–RQ4 evaluation**; never run it on the real banks before that.
+  - **Decision, Tue Nov 17 (team):** `claude-haiku` replaces `gemini-flash`, because Gemini now needs a $50 minimum prepay. No `claude-haiku` rows existed in `results/outcomes/` when this was decided. Recorded in `configs/data_decisions.json` (`heldout_model`) and set with `heldout: true` in `configs/models.yaml`.
+  - History: `gemini-flash` was chosen on **Mon Oct 26** (step #16), before any large run. It is no longer used.
 - **Held-out survey:** one ASURRE survey (decided in step #18) is excluded from all fitting.
 - Models: the team mixes providers (e.g. one OpenAI, one Anthropic, one Google, one open-weight). The **weekly API spend cap** is set at kickoff. Use the open-weight model for bulk runs where possible.
 
