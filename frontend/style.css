@@ -184,6 +184,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 .card.enter { animation: pop-in 0.3s ease; }
 .card { position: relative; }
 
+/* Reading text above the question. One p, line breaks kept (docs/frontend.md). */
+.passage {
+  margin: 0 0 1.25rem;
+  padding: 0.9rem 1.1rem;
+  border-left: 6px solid var(--accent);
+  border-radius: 0 14px 14px 0;
+  background: var(--accent-soft);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  outline: none;   /* focused on load, like the stem (h2) */
+}
+
 /* Extra item text (docs/frontend.md). */
 .aux { margin: 0; }
 .aux-clip {
