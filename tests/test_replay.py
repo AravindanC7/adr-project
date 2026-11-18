@@ -134,7 +134,7 @@ def test_no_observation_is_skipped_and_never_scored():
 # ---------- quick map ----------
 def test_quick_map_refuses_heldout_rows():
     held = rows_to_frame([
-        _row("g", "x:1", "decoy", "picked_decoy", model="gemini-flash", heldout=True),
+        _row("g", "x:1", "decoy", "picked_decoy", model="claude-haiku", heldout=True),
         _row("h", "x:2", "decoy", "picked_decoy", kind="human", split="heldout_survey"),
     ])
     with pytest.raises(ValueError, match="held-out"):
@@ -153,7 +153,7 @@ def test_three_splits_are_disjoint_by_item_and_never_touch_heldout():
     rows = [_row(f"ai-{s}", f"x:{i}", "decoy", "picked_decoy") for s in range(2) for i in range(10)]
     rows += [_row("hu", f"o:{i}", "canary", "clean", kind="human", item_type="open_text")
              for i in range(10)]
-    rows += [_row("held", "x:0", "decoy", "picked_decoy", model="gemini-flash", heldout=True),
+    rows += [_row("held", "x:0", "decoy", "picked_decoy", model="claude-haiku", heldout=True),
              _row("hs", "h:1", "decoy", "picked_correct", kind="human", split="heldout_survey")]
     df = rows_to_frame(rows)
     sp = split_rows(df)                                    # default: 30%, seed 0
@@ -253,16 +253,16 @@ def _run_replay(tmp_path, path, *extra):
 
 
 def test_run_replay_defaults_to_the_calibration_split_and_never_reads_heldout(tmp_path):
-    held = [_row("held-0", "handwritten:q1", "decoy", "picked_decoy", model="gemini-flash",
+    held = [_row("held-0", "handwritten:q1", "decoy", "picked_decoy", model="claude-haiku",
                  heldout=True)]
     out, m = _run_replay(tmp_path, _stub_table(tmp_path, held))
     assert m["evaluated_on"] == "calibration" and m["final"] is False
     assert "FINAL EVALUATION" not in out
     groups = m["outcome_sources"]["router"]
-    assert all("gemini-flash" not in g for g in groups)            # held-out model never read
+    assert all("claude-haiku" not in g for g in groups)            # held-out model never read
     out, m = _run_replay(tmp_path, _stub_table(tmp_path, held), "--final")
     assert "FINAL EVALUATION ON HELD-OUT DATA" in out and m["evaluated_on"] == "heldout"
-    assert any("gemini-flash" in g for g in m["outcome_sources"]["router"])
+    assert any("claude-haiku" in g for g in m["outcome_sources"]["router"])
 
 
 def test_run_replay_final_with_human_only_heldout_rows_reports_honest_side(tmp_path):

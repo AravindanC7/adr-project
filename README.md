@@ -135,7 +135,9 @@ All six sources are public. Download each one yourself and put the raw files whe
 | IPIP Big Five, 50 items (Open-Source Psychometrics Project) | Reverse-keyed item pairs for contradiction-type opinion traps | [openpsychometrics.org/_rawdata](https://openpsychometrics.org/_rawdata/): [`BIG5.zip`](https://openpsychometrics.org/_rawdata/BIG5.zip) | `data/raw/ipip/BIG5/BIG5/{data.csv,codebook.txt}` (unzip into `data/raw/ipip/BIG5/`) |
 | ASURRE source surveys (Wang, Mamaev, Leckie 2026): Nature PhD Students 2019, Springer Nature Social Media 2017, OSMI Mental Health in Tech 2017–18 | Open-ended human answers: the writing-style signal and canary false positives | Via the data section of [arXiv 2609.17317](https://arxiv.org/abs/2609.17317) | Configs `data/raw/asurre/configs/{phd2019,springer_2017,osmi_mh}.json`; the response spreadsheets each config names under `"source"` go in `data/raw/asurre/raw/` |
 
-**Held out:** the OSMI Mental Health in Tech 2017–18 survey (`asurre_osmi_2017_18`). It is excluded from all fitting: the failure map, thresholds and the style profile. It is used only for the final evaluation (`--final`). The team locked this before any fitting, using the "smallest source" rule recorded in `configs/data_decisions.json`. The held-out *model* (gemini-flash) is set in `configs/models.yaml`.
+**Held out:** the OSMI Mental Health in Tech 2017–18 survey (`asurre_osmi_2017_18`). It is excluded from all fitting: the failure map, thresholds and the style profile. It is used only for the final evaluation (`--final`). The team locked this before any fitting, using the "smallest source" rule recorded in `configs/data_decisions.json`.
+
+**Held-out model:** `claude-haiku`, set with `heldout: true` in `configs/models.yaml`. **Decision, Nov 17:** it replaces gemini-flash, because Gemini now needs a $50 minimum prepay; the decision is recorded in `configs/data_decisions.json`. claude-haiku never contributes to the failure map, thresholds or any tuning, and runs only once, in the final `--final` evaluation. Don't run it on the real banks before then. Smoke tests on the 4 handwritten `--stub` items are fine.
 
 ### Build the banks
 

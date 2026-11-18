@@ -13,7 +13,7 @@ models:
     model_id: claude-haiku-5-5
     price_in_per_mtok: null
     price_out_per_mtok: null
-    heldout: false
+    heldout: true   # the held-out model (claude-haiku, team decision Nov 17): final evaluation only
 
   - name: gpt-small
     provider: openai
@@ -36,4 +36,4 @@ models:
     model_id: "<fill in at kickoff>"
     price_in_per_mtok: null
     price_out_per_mtok: null
-    heldout: true   # example only: the team picks the held-out model on Mon Oct 26
+    heldout: false  # not used: $50 prepay minimum (Nov 17)
