@@ -1,10 +1,13 @@
 """Pilot cleaning (#39): saved sessions -> outcome-table rows."""
 
 import json
+from dataclasses import asdict
 
 import pytest
 
-from adr.contracts.outcome import read_outcomes
+from adr.contracts import OUTCOME_LABELS
+from adr.contracts.outcome import COLUMNS, read_outcomes
+from adr.mechanisms.style import StyleProfile
 from server.clean import clean, main
 
 AGREE = ["Disagree", "Slightly disagree", "Neutral", "Slightly agree", "Agree"]
@@ -156,6 +159,19 @@ def by_check(rows):
     return {(r.item_id, r.mechanism): r.outcome for r in rows}
 
 
+def profile(mid=1e9, high=1e9):
+    """Synthetic style profile. The default cutoffs are out of reach, so every answer is "low";
+    profile(0, 0) puts every answer at "high"."""
+    return StyleProfile(
+        feature_means=(4.0, 0.8, 4.5, 15.0, 0.1),
+        feature_stds=(1.0, 0.1, 0.5, 5.0, 0.05),
+        mid_threshold=mid,
+        high_threshold=high,
+        n_training=20,
+        sources=("synthetic",),
+    )
+
+
 def test_only_finished_consented_sessions_are_used(setup):
     data, bank = setup
     session(data, "a" * 32, full())
@@ -257,6 +273,7 @@ def test_command_writes_a_valid_outcome_table_and_a_run_record(setup, tmp_path, 
                 "dry-1",
                 "--out",
                 str(out),
+                "--no-style",  # style has its own test; keep this one off the local profile
             ]
         )
         == 0
@@ -267,6 +284,71 @@ def test_command_writes_a_valid_outcome_table_and_a_run_record(setup, tmp_path, 
     assert "sessions_used: 1" in config and "not finished" in config
     assert "1 of 2 sessions used" in capsys.readouterr().out
     assert "I learned to cook" not in df.to_string()  # no answer text in the table
+
+
+def test_style_is_on_by_default_and_needs_a_profile(setup, tmp_path, capsys):
+    data, bank = setup
+    session(data, "a" * 32, full())
+    session(data, "b" * 32, full(text=""))  # empty answer: no style observation
+    out = tmp_path / "results"
+    args = ["--data", str(data), "--bank", str(bank), "--run-id", "p", "--out", str(out)]
+    with pytest.raises(SystemExit):  # default on: a missing profile stops the run
+        main([*args, "--style-profile", str(tmp_path / "missing.json")])
+    assert "no style profile" in capsys.readouterr().err
+
+    prof = tmp_path / "style_profile.json"
+    prof.write_text(json.dumps({"profile": asdict(profile(0, 0))}), encoding="utf-8")
+    assert main([*args, "--style-profile", str(prof)]) == 0
+    df = read_outcomes(out / "outcomes" / "p.parquet")
+    assert list(df.columns) == COLUMNS  # no new column, no text column
+    style = df[df["mechanism"] == "style"]
+    assert list(style["session_id"]) == ["a" * 32] and set(style["outcome"]) == {"high"}
+    assert len(df) == 2 * (5 * 2 + 3) + 1
+    config = (out / "runs" / "p" / "config.yaml").read_text(encoding="utf-8")
+    assert "no_observation: 1" in config and "style:high: 1" in config
+    assert "no observation (empty answer): 1" in capsys.readouterr().out
+    assert "I learned to cook" not in df.to_string()
+
+    assert main([*args, "--style-profile", str(tmp_path / "missing.json"), "--no-style"]) == 0
+    df = read_outcomes(out / "outcomes" / "p.parquet")
+    assert "style" not in set(df["mechanism"].dropna()) and len(df) == 2 * (5 * 2 + 3)
+
+
+def test_style_rows_only_for_open_text_answers(setup):
+    data, bank = setup
+    session(data, "a" * 32, full())
+    without, _ = clean(data, bank, origin="pilot", run_id="r")
+    rows, rep = clean(data, bank, origin="pilot", run_id="r", style_profile=profile())
+    style = [r for r in rows if r.mechanism == "style"]
+    assert len(style) == 1 and len(rows) == len(without) + 1  # nothing else changes
+    (row,) = style
+    assert row.item_id == "handwritten:o1" and row.item_type == "open_text"
+    assert row.variant_id == "handwritten:o1|style|0" and row.outcome == "low"
+    assert row.outcome in OUTCOME_LABELS["style"]
+    assert row.respondent_kind == "human" and row.data_origin == "pilot"
+    assert row.raw_ref.startswith("a" * 32 + ".jsonl#L")
+    assert rep.rows[("style", "low")] == 1 and rep.style_no_observation == 0
+    assert by_check(rows)[("handwritten:o1", "canary")] == "clean"  # served check kept
+    high, _ = clean(data, bank, origin="pilot", run_id="r", style_profile=profile(0, 0))
+    assert by_check(high)[("handwritten:o1", "style")] == "high"
+
+
+@pytest.mark.parametrize("answer", ["", "   ", None, 3])
+def test_unscorable_open_text_is_no_observation(setup, answer):
+    data, bank = setup
+    session(data, "a" * 32, full(text=answer))
+    rows, rep = clean(data, bank, origin="pilot", run_id="r", style_profile=profile())
+    assert not any(r.mechanism == "style" for r in rows)
+    assert rep.style_no_observation == 1 and not any(m == "style" for m, _ in rep.rows)
+
+
+def test_style_rows_hold_no_answer_text(setup):
+    data, bank = setup
+    secret = "Zanzibar quokka marmalade expedition"
+    session(data, "a" * 32, full(text=secret))
+    rows, _ = clean(data, bank, origin="pilot", run_id="r", style_profile=profile())
+    dumped = json.dumps([r.model_dump() for r in rows])
+    assert "Zanzibar" not in dumped and "quokka" not in dumped
 
 
 def test_an_item_missing_from_the_bank_stops_the_run(setup):
