@@ -275,6 +275,53 @@ def test_run_replay_final_with_human_only_heldout_rows_reports_honest_side(tmp_p
     assert overall["checks_per_honest_person"] is not None
 
 
+def test_run_replay_final_reads_only_the_decided_heldout_model(tmp_path):
+    """Old gemini-flash smoke rows were logged with heldout_model=True; --final must skip them
+    and evaluate only claude-haiku (configs/data_decisions.json)."""
+    held = [_row(f"gem-{s}", "handwritten:q1", "decoy", "picked_decoy", model="gemini-flash",
+                 heldout=True) for s in range(2)]
+    held.append(_row("haiku-0", "handwritten:q1", "decoy", "picked_correct",
+                     model="claude-haiku", heldout=True))
+    out, m = _run_replay(tmp_path, _stub_table(tmp_path, held), "--final")
+    groups = m["outcome_sources"]["router"]
+    assert any("claude-haiku" in g for g in groups)
+    assert all("gemini-flash" not in g for g in groups)
+    import yaml
+
+    cfg = yaml.safe_load((tmp_path / "runs" / "r" / "config.yaml").read_text(encoding="utf-8"))
+    assert cfg["heldout_model"] == "claude-haiku" and cfg["n_rows_heldout_read"] == 1
+    assert "dropped 2 held-out AI rows" in out and "gemini-flash" in out
+
+
+def test_run_replay_final_refuses_when_only_a_stale_heldout_model_has_rows(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    held = [_row("gem-0", "handwritten:q1", "decoy", "picked_decoy", model="gemini-flash",
+                 heldout=True)]
+    root = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [sys.executable, str(root / "scripts" / "run_replay.py"), "--stub", "--outcomes",
+         str(_stub_table(tmp_path, held)), "--n", "20", "--boot", "20", "--policies", "router",
+         "--results-dir", str(tmp_path), "--run-id", "r", "--final"],
+        cwd=root, capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert proc.returncode != 0 and "no held-out rows" in proc.stderr
+
+
+def test_final_eval_rows_keeps_humans_and_only_the_named_model():
+    from adr.replay.quick_map import final_eval_rows
+
+    df = rows_to_frame([
+        _row("g", "x:1", "decoy", "picked_decoy", model="gemini-flash", heldout=True),
+        _row("h", "x:1", "decoy", "picked_correct", model="claude-haiku", heldout=True),
+        _row("p", "x:1", "decoy", "picked_correct", kind="human", split="heldout_survey"),
+    ])
+    kept = final_eval_rows(df, "claude-haiku")
+    assert sorted(kept["session_id"]) == ["h", "p"]
+
+
 # ---------- sanity: replaying synthetic rows ~ simulating from the map ----------
 def test_replaying_synthetic_rows_matches_simulate_session():
     fmap = synthetic_failure_map()

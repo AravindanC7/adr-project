@@ -34,6 +34,15 @@ def heldout_mask(df: pd.DataFrame) -> pd.Series:
     return df["heldout_model"].astype(bool) | (df["split"] != "train")
 
 
+def final_eval_rows(heldout: pd.DataFrame, heldout_model: str) -> pd.DataFrame:
+    """--final: the held-out rows that may be evaluated. AI rows come only from the decided
+    held-out model (configs/data_decisions.json), so rows from an earlier held-out model (the
+    gemini-flash smoke runs, logged with heldout_model=True) never enter the final evaluation.
+    Human rows (the held-out survey) are kept."""
+    ai = heldout["respondent_kind"] == "ai"
+    return heldout[~ai | (heldout["model"] == heldout_model)]
+
+
 def fit_rows(df: pd.DataFrame) -> pd.DataFrame:
     """The rows a map may be fitted on: train split, not the held-out model."""
     return df[~heldout_mask(df)]
