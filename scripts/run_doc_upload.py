@@ -7,7 +7,7 @@ Quick checks (no data needed yet; uses the 4 handwritten test items and stub tra
 Real run, once Archana's loaders and mechanisms exist:
     python scripts/run_doc_upload.py --assessment data/processed/quiz_slice.json \
         --items data/processed/items.jsonl --variants data/processed/variants.jsonl \
-        --mechanisms decoy,opinion_trap --models claude-haiku,gpt-mini --level L0
+        --mechanisms decoy,opinion_trap --models gpt-mini --level L0
 
 --max-tokens caps the one reply that answers the whole document (default 1500). A reply that
 hits it is cut off; it is logged as a warning in errors.jsonl and counted in config.yaml
@@ -74,7 +74,8 @@ def main() -> None:
         default="data/processed/runs_v1/style_profile.json",
         help="fitted profile required when --mechanisms includes style",
     )
-    ap.add_argument("--level", default="L0", choices=["L0", "L1", "L2", "L4"])
+    ap.add_argument("--level", default="L0", choices=["L0", "L1", "L2", "L4"],
+                    help="L3 (retry after a flag) is copy-paste only")
     ap.add_argument("--samples", type=int, default=1)
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--max-tokens", type=int, default=1500,

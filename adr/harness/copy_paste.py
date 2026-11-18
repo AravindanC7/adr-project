@@ -8,6 +8,12 @@ For every model, every sample, and every variant of every item, it:
   4. scores it with the variant's mechanism (and any passive mechanisms passed in),
   5. writes one outcome row per (response, mechanism).
 
+L3 (retry after a flag, step #36): the first call is the L1 prompt. If that answer's outcome is
+an AI flag (prompts.FLAG_OUTCOMES), the model gets ONE follow-up message in the same conversation
+(prompts.RETRY_FEEDBACK, which names no mechanism, hidden text or answer) and answers again. The
+outcome row is the FINAL answer's; responses.jsonl keeps the first answer, whether it was flagged,
+and the retry.
+
 Outputs:
   results/outcomes/<run_id>.parquet          the outcome rows (the contract)
   results/runs/<run_id>/config.yaml          what was run, for reproducibility
@@ -42,7 +48,14 @@ from adr.contracts import (
 from adr.contracts.outcome import utc_now
 from adr.harness.llm_client import LLMClient, SpendCapExceeded
 from adr.harness.parse import parse_answer
-from adr.harness.prompts import DEFAULT_PERSONA, PROMPT_VERSION, build_prompt
+from adr.harness.prompts import (
+    DEFAULT_PERSONA,
+    PROMPT_VERSION,
+    RETRY_PROMPT_VERSION,
+    build_prompt,
+    build_retry_messages,
+    is_flag,
+)
 
 
 @dataclass
@@ -90,6 +103,28 @@ def observe(
         return None
 
 
+def _first_outcome(mech: Mechanism, rendered: RenderedItem, resp: Response) -> str | None:
+    """Outcome of an L3 first answer, only to decide on the retry (no row, nothing counted)."""
+    try:
+        return mech.score(rendered, resp, None)
+    except NoObservation:
+        return None
+
+
+def _l3_summary(responses: list[dict]) -> dict:
+    """How often L3 first answers were flagged, and what the retry did (checked variants only)."""
+    checked = [r for r in responses if "flagged" in r]
+    flagged = [r for r in checked if r["flagged"]]
+    retry_flagged = [r for r in flagged if r.get("final_flagged")]
+    return {
+        "n_checked_answers": len(checked),
+        "n_first_flagged": len(flagged),
+        "n_retries": len(flagged),
+        "n_retry_still_flagged": len(retry_flagged),
+        "n_retry_got_away": len(flagged) - len(retry_flagged),
+    }
+
+
 def _git_commit() -> str | None:
     try:
         return subprocess.run(
@@ -114,6 +149,11 @@ def run_copy_paste(
         client.spec(m)  # fail fast on an unknown model
     if cfg.n_samples > 1 and not cfg.temperature:
         raise ValueError("n_samples > 1 with temperature 0 repeats the same answer; raise it")
+    l3 = cfg.attacker_level == "L3"
+    # Rows of an L3 run carry both text versions; the first call itself uses cfg.prompt_version.
+    row_prompt_version = (
+        f"{cfg.prompt_version}+{RETRY_PROMPT_VERSION}" if l3 else cfg.prompt_version
+    )
 
     jobs: list[_Job] = []
     for item_id in assessment.item_ids:
@@ -135,8 +175,11 @@ def run_copy_paste(
     errors: list[dict] = []
     skipped: Counter[str] = Counter()  # mechanism -> NoObservation count
     stopped_for_budget = False
+    n_truncated = 0  # replies cut off at max_tokens (finish_reason "length"), first or retry
 
     def work(job: _Job):
+        """One item for one model and sample. Returns (job, final completion, first completion
+        or None, first answer, first outcome); the first-* values are set only for L3."""
         system, messages = build_prompt(job.item, job.rendered, cfg.attacker_level, cfg.persona)
         try:
             out = client.complete(
@@ -144,10 +187,25 @@ def run_copy_paste(
                 max_tokens=cfg.max_tokens, prompt_version=cfg.prompt_version,
                 sample_idx=job.sample_idx,
             )
+            mech_name = job.rendered.mechanism
+            if not (l3 and mech_name):
+                return job, out, None, None, None
+            first_answer = parse_answer(job.item, out.text)
+            first_resp = Response(session_id="l3-first", item_id=job.item.item_id,
+                                  variant_id=job.rendered.variant_id, answer=first_answer,
+                                  raw_text=out.text)
+            first_outcome = _first_outcome(mechanisms[mech_name], job.rendered, first_resp)
+            if not is_flag(mech_name, first_outcome):
+                return job, out, None, first_answer, first_outcome
+            retry = client.complete(  # max one retry per item
+                job.model, build_retry_messages(messages, out.text), system=system,
+                temperature=cfg.temperature, max_tokens=cfg.max_tokens,
+                prompt_version=RETRY_PROMPT_VERSION, sample_idx=job.sample_idx,
+            )
+            return job, retry, out, first_answer, first_outcome
         except Exception as e:
             e.adr_job = job  # type: ignore[attr-defined]  # so the error log can say which call
             raise
-        return job, out
 
     def _where(e: Exception) -> dict:
         job = getattr(e, "adr_job", None)
@@ -160,7 +218,7 @@ def run_copy_paste(
         futures = [pool.submit(work, j) for j in jobs]
         for fut in as_completed(futures):
             try:
-                job, out = fut.result()
+                job, out, first, first_answer, first_outcome = fut.result()
             except SpendCapExceeded as e:
                 stopped_for_budget = True
                 errors.append({**_where(e), "error": str(e)})
@@ -176,8 +234,25 @@ def run_copy_paste(
             answer = parse_answer(job.item, out.text)
             resp = Response(session_id=session_id, item_id=job.item.item_id,
                             variant_id=job.rendered.variant_id, answer=answer, raw_text=out.text)
-            responses.append({**resp.model_dump(), "model": job.model, "cache_key": out.cache_key,
-                              "cached": out.cached})
+            record = {**resp.model_dump(), "model": job.model, "cache_key": out.cache_key,
+                      "cached": out.cached, "finish_reason": out.finish_reason}
+            truncated = out.truncated
+            if l3 and job.rendered.mechanism:
+                # top-level answer/raw_text = the FINAL answer (the one the outcome row scores)
+                record["first_outcome"] = first_outcome
+                record["flagged"] = first is not None
+                record["first"] = None
+                if first is not None:
+                    record["first"] = {
+                        "answer": first_answer, "raw_text": first.text,
+                        "cache_key": first.cache_key, "cached": first.cached,
+                        "finish_reason": first.finish_reason,
+                    }
+                    record["retry_prompt_version"] = RETRY_PROMPT_VERSION
+                    truncated = truncated or first.truncated
+            if truncated:
+                n_truncated += 1
+            responses.append(record)
 
             base = dict(
                 run_id=cfg.run_id, session_id=session_id, respondent_kind="ai",
@@ -185,13 +260,16 @@ def run_copy_paste(
                 attacker_level=cfg.attacker_level, assessment_type=job.item.assessment_type,
                 item_type=job.item.item_type, item_id=job.item.item_id, split=job.item.split,
                 heldout_model=spec.heldout, variant_id=job.rendered.variant_id,
-                raw_ref=f"llm-cache:{out.cache_key}", prompt_version=cfg.prompt_version,
+                raw_ref=f"llm-cache:{out.cache_key}", prompt_version=row_prompt_version,
             )
             mech_name = job.rendered.mechanism
             if mech_name:
                 outcome = observe(mech_name, mechanisms[mech_name], job.rendered, resp, skipped)
             else:
                 outcome = "none"
+            if "flagged" in record:  # L3: the final answer's outcome (after the retry, if any)
+                record["final_outcome"] = outcome
+                record["final_flagged"] = is_flag(mech_name, outcome)
             if outcome is not None:
                 rows.append(OutcomeRow(**base, mechanism=mech_name, outcome=outcome))
             for p_name, p_mech in passive.items():
@@ -219,6 +297,8 @@ def run_copy_paste(
         "n_skipped_observations": sum(skipped.values()),
         "skipped_observations": dict(sorted(skipped.items())),  # per mechanism: NoObservation
         "stopped_for_budget": stopped_for_budget,
+        "n_truncated_replies": n_truncated,
+        **({"l3": _l3_summary(responses)} if l3 else {}),
     }, sort_keys=False, allow_unicode=True), encoding="utf-8")
     with (run_dir / "responses.jsonl").open("w", encoding="utf-8") as f:
         for r in sorted(responses, key=lambda r: (r["model"], r["session_id"], r["variant_id"])):

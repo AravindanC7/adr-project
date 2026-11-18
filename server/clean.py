@@ -23,6 +23,11 @@ Rows per answered item (all respondent_kind="human", data_origin=pilot|dry_run)
     (no observation). PROVISIONAL rule: the mechanism
     itself doesn't score pairs yet (adr/mechanisms/opinion_trap.py), so Archana should confirm
     it before #40 uses it. --no-pairs turns it off.
+  * the writing-style check (high / mid / low) for every open-text answer, scored here against
+    the ASURRE training profile (scripts/prepare_style_profile.py). Style is passive: it observes
+    every open-text answer whatever check was served, so it doesn't use the bank's
+    eligible_mechanisms. An empty or skipped answer is no observation: no row, only a count.
+    --no-style turns it off; --style-profile picks another profile file.
 
 Nothing here contains answer text: rows hold outcomes. raw_ref points back to the session file
 and line. Open-text answers are still personal data, so the script lists any that look like
@@ -46,15 +51,20 @@ import yaml
 from adr.contracts import (
     HumanDistribution,
     Item,
+    NoObservation,
     OutcomeRow,
+    RenderedItem,
     Response,
+    make_variant_id,
     parse_variant_id,
 )
 from adr.contracts.outcome import write_outcomes
 from adr.mechanisms.opinion_trap import OpinionTrapMechanism
+from adr.mechanisms.style import StyleMechanism, StyleProfile, load_style_profile
 from server.store import read_session
 
 ROOT = Path(__file__).resolve().parent.parent
+STYLE_PROFILE = ROOT / "data" / "processed" / "runs_v1" / "style_profile.json"
 PERSONAL = {
     "email": re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),
     "phone": re.compile(r"(?:\+?\d[\s().-]?){9,}"),
@@ -72,6 +82,7 @@ class Report:
     rows: Counter = field(default_factory=Counter)  # (mechanism, outcome) -> count
     flagged: list[dict[str, str]] = field(default_factory=list)
     consent_versions: Counter = field(default_factory=Counter)
+    style_no_observation: int = 0  # open-text answers style couldn't score (empty / skipped)
 
 
 def load_bank(path: Path) -> tuple[dict[str, Item], dict[str, HumanDistribution], dict[str, str]]:
@@ -115,6 +126,16 @@ def outcome_row(
     )
 
 
+def plain_rendered(item: Item) -> RenderedItem:
+    """The item as a plain variant. Style is passive and only reads the response."""
+    return RenderedItem(
+        item_id=item.item_id,
+        mechanism=None,
+        variant_id=make_variant_id(item.item_id, None),
+        visible={"stem": item.stem},
+    )
+
+
 def clean(
     data_dir: Path,
     bank_path: Path,
@@ -123,9 +144,12 @@ def clean(
     run_id: str,
     pairs: bool = True,
     exclude: frozenset[str] = frozenset(),
+    style_profile: StyleProfile | None = None,
 ) -> tuple[list[OutcomeRow], Report]:
+    """style_profile=None scores no style rows (the command line loads one by default)."""
     items, dists, _ = load_bank(bank_path)
     trap = OpinionTrapMechanism(dists)
+    style = StyleMechanism(style_profile) if style_profile is not None else None
     report = Report()
     rows: list[OutcomeRow] = []
 
@@ -183,6 +207,19 @@ def clean(
                 else:
                     found.append((rendered.variant_id, outcome))
 
+            if style is not None and item.item_type == "open_text":
+                style_id = make_variant_id(item.item_id, "style")
+                response = Response(
+                    session_id=sid,
+                    item_id=item.item_id,
+                    variant_id=style_id,
+                    answer=rec["answer"] if isinstance(rec["answer"], str) else None,
+                )
+                try:
+                    found.append((style_id, style.score(plain_rendered(item), response, None)))
+                except NoObservation:
+                    report.style_no_observation += 1
+
             for variant_id, outcome in found:
                 row = outcome_row(run_id, origin, sid, item, variant_id, outcome, where)
                 rows.append(row)
@@ -221,7 +258,20 @@ def main(argv: list[str] | None = None) -> int:
         help="session code to drop (repeatable)",
     )
     p.add_argument("--no-pairs", action="store_true", help="don't score IPIP pair contradictions")
+    p.add_argument(
+        "--style-profile",
+        type=Path,
+        default=STYLE_PROFILE,
+        help="fitted style profile (built by scripts/prepare_style_profile.py)",
+    )
+    p.add_argument("--no-style", action="store_true", help="don't score the writing-style check")
     args = p.parse_args(argv)
+    if not args.no_style and not args.style_profile.is_file():
+        p.error(
+            f"no style profile at {args.style_profile}: run scripts/prepare_style_profile.py, "
+            "pass --style-profile, or use --no-style"
+        )
+    profile = None if args.no_style else load_style_profile(args.style_profile)
 
     rows, rep = clean(
         args.data,
@@ -230,6 +280,7 @@ def main(argv: list[str] | None = None) -> int:
         run_id=args.run_id,
         pairs=not args.no_pairs,
         exclude=frozenset(args.exclude),
+        style_profile=profile,
     )
     out = write_outcomes(rows, args.out / "outcomes" / f"{args.run_id}.parquet")
     run_dir = args.out / "runs" / args.run_id
@@ -241,6 +292,13 @@ def main(argv: list[str] | None = None) -> int:
         "bank": str(args.bank.name),
         "bank_sha256_12": file_hash(args.bank),
         "pair_contradictions": not args.no_pairs,
+        "style": None
+        if args.no_style
+        else {
+            "profile": args.style_profile.name,
+            "profile_sha256_12": file_hash(args.style_profile),
+            "no_observation": rep.style_no_observation,
+        },
         "session_files": rep.files,
         "sessions_used": len(rep.used),
         "dropped": rep.dropped,
@@ -256,6 +314,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  dropped {name}: {why}")
     for (m, o), n in sorted(rep.rows.items()):
         print(f"  {m:13} {o:22} {n}")
+    if profile is not None:
+        styled = {o: n for (m, o), n in sorted(rep.rows.items()) if m == "style"}
+        print(f"  style: {styled}, no observation (empty answer): {rep.style_no_observation}")
     if rep.flagged:
         print(f"\nCHECK {len(rep.flagged)} open-text answer(s) by hand before sharing raw files:")
         for f in rep.flagged:

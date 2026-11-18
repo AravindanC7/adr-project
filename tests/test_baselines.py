@@ -149,7 +149,7 @@ def test_best_single_never_looks_at_heldout_rows():
                  _row(f"a{s}", "handwritten:o1", "canary", "clean"),
                  # ... the held-out model always follows the canary, with more rows
                  *[_row(f"g{s}{k}", "handwritten:o1", "canary", "followed_instruction",
-                        model="gemini-flash", heldout=True) for k in range(5)]]
+                        model="claude-haiku", heldout=True) for k in range(5)]]
     table = rows_to_frame(rows)
     assert best_single_mechanism(quick_failure_map(table), a, items, variants)[0] == "decoy"
     # the held-out rows would have changed the choice: so they really were left out
