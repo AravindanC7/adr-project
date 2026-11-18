@@ -695,3 +695,34 @@ def test_run_real_router_stops_on_an_unknown_low_effort_id(tmp_path):
     low.write_text(session_ids()[0] + "\nd3ba4f10\n")  # a prefix is not a session id
     proc = _run_folds(tmp_path, "--low-effort", str(low))
     assert proc.returncode != 0 and "not among" in proc.stderr
+
+
+# ---------------------------------------------------------------- review H3: per-group reporting
+def _gt(who, score, sources=(0, 0, 0, 0)):
+    return cf.Trace(who, 0, score, np.array([score]), np.array([1]), 3, sources=sources)
+
+
+def test_rates_report_tpr_per_ai_group():
+    ai = [
+        [_gt("ai:m:copy_paste:L0|a", 5.0)],
+        [_gt("ai:m:copy_paste:L0|b", 1.0)],
+        [_gt("ai:m:doc_upload:L3|c", 5.0)],
+    ]
+    r = cf.rates([_gt("h", 0.0)], ai, [0.0], {"A": 2.0})["A"]
+    assert r["tpr"] == pytest.approx(2 / 3)
+    assert r["tpr[m:copy_paste:L0]"] == 0.5 and r["tpr[m:doc_upload:L3]"] == 1.0
+    one = cf.rates([_gt("h", 0.0)], ai[:2], [0.0], {"A": 2.0})["A"]
+    assert not any(k.startswith("tpr[") for k in one)  # one group: pooled TPR only
+
+
+def test_ai_sources_count_same_type_fallback_and_missing_per_group():
+    ai = [
+        [_gt("ai:m:copy_paste:L0|a", 1.0, (2, 0, 0, 1)), _gt("ai:m:copy_paste:L0|a", 1.0, (4, 0, 0, 1))],
+        [_gt("ai:m:doc_upload:L0|c", 1.0, (0, 3, 0, 0))],
+    ]
+    src = cf.ai_sources(ai)
+    assert src["m:copy_paste:L0"] == {
+        "sessions": 1, "checks": 3.0, "same_type": 3.0, "fallback": 0.0, "synthetic": 0.0,
+        "missing": 1.0,
+    }
+    assert src["m:doc_upload:L0"]["fallback"] == 3.0

@@ -426,6 +426,14 @@ def main() -> None:
         print(f"no budget_curve.png ({e}); pip install -e '.[plot]'")
 
     warnings = tail_warnings(results["router"])
+    for g, v in (results["router"].get("ai_sources_by_group") or {}).items():
+        print(
+            f"AI group {g}: {v['sessions']} sessions; per session {v['checks']:.1f} checks, "
+            f"{v['same_type']:.1f} same-type, {v['fallback']:.1f} fallback, "
+            f"{v['missing']:.1f} missing"
+        )
+        if v["missing"] > 0:
+            print(f"WARNING: AI group {g} has checks with no rows (missing): they count as misses")
     print(f"\n{headline}")
     for name, text in findings.items():
         if name != "A_0.01":
@@ -520,6 +528,41 @@ COLUMNS = (
 ORDER = ("A_0.05", "A_0.01", "A_max")  # headline first
 
 
+def _columns(results: dict[str, dict]) -> list[str]:
+    """COLUMNS, with TPR per AI group (tpr[model:attack_mode:level]) after the pooled TPR when
+    there is more than one group (review H3)."""
+    keys = {k for summ in results.values() for r in summ["results"].values() for k in r}
+    groups = sorted(k for k in keys if k.startswith("tpr["))
+    return [COLUMNS[0], *groups, *COLUMNS[1:]]
+
+
+def sources_text(results: dict[str, dict]) -> str:
+    """Per AI group: sessions and, per session (mean over the fold maps, router policy), the
+    checks served and where their outcomes came from (review H3)."""
+    src = results["router"].get("ai_sources_by_group") or {}
+    if not src:
+        return ""
+    lines = [
+        "",
+        (
+            "AI groups (router): checks per session and where their outcomes came from, mean per "
+            "session over the fold maps. same_type = the session's own rows on another item of the "
+            "same item_type (e.g. quiz MCQ decoy rows answer survey MCQ items: both are mcq); "
+            "fallback = another session of the group; missing = no row at all, so the check gives no "
+            "evidence and the session stays near the prior (it counts as a miss)."
+        ),
+        "",
+        "| AI group | sessions | checks | same_type | fallback | synthetic | missing |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for g, v in src.items():
+        lines.append(
+            f"| {g} | {v['sessions']} | {v['checks']:.1f} | {v['same_type']:.1f} | "
+            f"{v['fallback']:.1f} | {v['synthetic']:.1f} | {v['missing']:.1f} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def plain(obj):
     """Tuples (e.g. inside mech_group_caps) to lists, so YAML and JSON can write them."""
     return json.loads(json.dumps(obj, default=str))
@@ -573,15 +616,15 @@ def write_comparison(
                 "n_sessions": summ["n_sessions"],
                 "n_ai_sessions": summ["n_ai_sessions"],
             }
-            for c in COLUMNS:
-                row[c] = v[c]
+            for c in _columns(results):
+                row[c] = v.get(c)
                 row[f"{c}_lo"], row[f"{c}_hi"] = ci.get(c) or (None, None)
             rows.append(row)
     table = pd.DataFrame(rows)
     table.to_csv(out / "comparison.csv", index=False)
     lines = [
-        "| policy | threshold | A | " + " | ".join(COLUMNS) + " |",
-        "|---|---|---|" + "---|" * len(COLUMNS),
+        "| policy | threshold | A | " + " | ".join(_columns(results)) + " |",
+        "|---|---|---|" + "---|" * len(_columns(results)),
     ]
     for name, summ in results.items():
         for t in _ordered(summ):
@@ -589,7 +632,7 @@ def write_comparison(
             ci = summ["ci95"][t]
             lines.append(
                 f"| {name} | {t} | {_fmt(v['A'], ci.get('A'))} | "
-                + " | ".join(_fmt(v[c], ci.get(c)) for c in COLUMNS)
+                + " | ".join(_fmt(v.get(c), ci.get(c)) for c in _columns(results))
                 + " |"
             )
     n = next(iter(results.values()))["n_sessions"]
@@ -604,7 +647,8 @@ def write_comparison(
         + "\n".join(lines)
         + "\n"
         + "".join(f"\n- {note}" for note in notes)
-        + ("\n" if notes else ""),
+        + ("\n" if notes else "")
+        + sources_text(results),
         encoding="utf-8",
     )
 

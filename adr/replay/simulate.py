@@ -38,6 +38,8 @@ class ReplayResult:
     fallbacks: int                 # outcomes taken from another session of the same group
     synthetic: int                 # outcomes drawn from the failure map: no logged row
     skipped: int                   # NoObservation: no evidence given to the router
+    same_type: int = 0             # outcomes from this session's own rows on another item of the
+                                   # same item_type (AI sessions on the pilot bank)
 
     @property
     def kind(self) -> str:
@@ -93,4 +95,5 @@ def replay_session(
         fallbacks=donor.fallbacks,
         synthetic=donor.synthetic,
         skipped=skipped,
+        same_type=getattr(donor, "same_type", 0),
     )
