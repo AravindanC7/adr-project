@@ -447,16 +447,18 @@ def create_app(
         # behaviour check (#25) then scores every answer from its telemetry. Style and the
         # opinion trap come with #28.
         rendered = by_variant[choice.variant_id]
-        scored_id, outcome = choice.variant_id, "none"
+        outcome: str | None = "none"
         if rendered.mechanism:
             try:
                 outcome = mechanisms[rendered.mechanism].score(rendered, response, req.telemetry)
             except NoObservation:
-                # Nothing to score (e.g. an empty answer): no evidence either way. The router
-                # still has to know the item was shown, so it is recorded as the plain variant.
-                scored_id = make_variant_id(choice.item_id, None)
-        s.outcomes.append((scored_id, outcome))
-        s.state = router.update(s.state, scored_id, outcome)
+                # Nothing to score (e.g. a too-short answer): no evidence either way. Contract
+                # (router_api.py): update(..., None) marks the variant shown so the session
+                # moves on, adds no evidence, and no outcome is recorded for this check.
+                outcome = None
+        if outcome is not None:
+            s.outcomes.append((choice.variant_id, outcome))
+        s.state = router.update(s.state, choice.variant_id, outcome)
         try:
             seen = BEHAVIOUR.score(
                 rendered, response, req.telemetry, passage=items[choice.item_id].passage
