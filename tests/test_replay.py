@@ -310,16 +310,52 @@ def test_run_replay_final_refuses_when_only_a_stale_heldout_model_has_rows(tmp_p
     assert proc.returncode != 0 and "no held-out rows" in proc.stderr
 
 
-def test_final_eval_rows_keeps_humans_and_only_the_named_model():
+def _final_frame():
+    return rows_to_frame([
+        _row("gem-t", "x:1", "decoy", "picked_decoy", model="gemini-flash", heldout=True),
+        _row("gem-s", "x:1", "decoy", "picked_decoy", model="gemini-flash", heldout=True,
+             split="heldout_survey"),
+        _row("haiku-t", "x:1", "decoy", "picked_correct", model="claude-haiku", heldout=True),
+        _row("haiku-s", "x:1", "decoy", "picked_correct", model="claude-haiku", heldout=True,
+             split="heldout_survey"),
+        _row("gpt-s", "x:1", "decoy", "picked_decoy", model="gpt-mini",
+             split="heldout_survey"),
+        _row("hu-s", "x:1", "decoy", "picked_correct", kind="human", split="heldout_survey"),
+    ])
+
+
+def test_final_eval_rows_keeps_every_row_of_the_decided_heldout_model():
     from adr.replay.quick_map import final_eval_rows
 
-    df = rows_to_frame([
-        _row("g", "x:1", "decoy", "picked_decoy", model="gemini-flash", heldout=True),
-        _row("h", "x:1", "decoy", "picked_correct", model="claude-haiku", heldout=True),
-        _row("p", "x:1", "decoy", "picked_correct", kind="human", split="heldout_survey"),
-    ])
-    kept = final_eval_rows(df, "claude-haiku")
-    assert sorted(kept["session_id"]) == ["h", "p"]
+    kept = set(final_eval_rows(_final_frame(), "claude-haiku")["session_id"])
+    assert {"haiku-t", "haiku-s"} <= kept
+
+
+def test_final_eval_rows_keeps_training_models_on_the_heldout_survey():
+    from adr.replay.quick_map import final_eval_rows
+
+    kept = set(final_eval_rows(_final_frame(), "claude-haiku")["session_id"])
+    assert {"gpt-s", "hu-s"} <= kept           # the unseen-survey test, and its humans
+
+
+def test_final_eval_rows_drops_only_other_heldout_flagged_models():
+    from adr.replay.quick_map import final_eval_rows
+
+    kept = set(final_eval_rows(_final_frame(), "claude-haiku")["session_id"])
+    assert kept == {"haiku-t", "haiku-s", "gpt-s", "hu-s"}   # gemini-flash gone on both splits
+
+
+def test_run_replay_final_evaluates_training_models_on_the_heldout_survey(tmp_path):
+    held = [_row(f"gpt-s{s}", "handwritten:q1", "decoy", "picked_decoy", model="gpt-mini",
+                 split="heldout_survey") for s in range(2)]
+    held.append(_row("gem-0", "handwritten:q1", "decoy", "picked_decoy", model="gemini-flash",
+                     heldout=True))
+    out, m = _run_replay(tmp_path, _stub_table(tmp_path, held), "--final")
+    groups = m["outcome_sources"]["router"]
+    assert m["evaluated_on"] == "heldout"
+    assert any("gpt-mini" in g for g in groups)               # unseen-survey rows are read
+    assert all("gemini-flash" not in g for g in groups)
+    assert "dropped 1 held-out AI rows" in out
 
 
 # ---------- sanity: replaying synthetic rows ~ simulating from the map ----------

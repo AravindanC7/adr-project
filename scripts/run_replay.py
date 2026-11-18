@@ -30,8 +30,9 @@ Three splits (adr/replay/quick_map.py):
                items, so sessions are shorter than the real thing.
   held-out     the held-out model and the held-out survey. Read ONLY with --final, which prints
                a banner: report those numbers, never tune on them (AGENTS.md section 8).
-               AI rows count only from the held-out model named in
-               configs/data_decisions.json; rows from an earlier held-out model are dropped.
+               It keeps the held-out model named in configs/data_decisions.json and the
+               training models' rows on the held-out survey; AI rows from any other model
+               flagged as held out (an earlier held-out model) are dropped, with a warning.
 If the evaluated rows have no AI respondents, only the honest-side metrics (false flags,
 burden) are computed. Writes results/runs/<run_id>/metrics.json and config.yaml.
 
@@ -160,8 +161,9 @@ def load_logged(args, warnings: list[str]):
         dropped = splits.heldout[~splits.heldout.index.isin(eval_rows.index)]
         if not dropped.empty:
             others = sorted(dropped["model"].dropna().unique())
-            warnings.append(f"--final: dropped {len(dropped)} held-out AI rows from models other "
-                            f"than the decided held-out model {heldout_model!r}: {others}")
+            warnings.append(f"--final: dropped {len(dropped)} held-out AI rows from held-out-"
+                            f"flagged models other than the decided held-out model "
+                            f"{heldout_model!r}: {others}")
         if eval_rows.empty:
             raise SystemExit(f"--final: there are no held-out rows (held-out model "
                              f"{heldout_model!r} or held-out survey)")
