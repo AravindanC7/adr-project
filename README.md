@@ -79,15 +79,17 @@ python scripts/diagnose_router.py --synthetic survey
 # A_max (pauses none of the real sessions) are secondary. The unit is the session: one person
 # may span sessions. The map is strict (never --ai-only); only mechanisms with both AI and human
 # rows are used. Needs the pilot bank (server/pilot_items.json). Options: --exclude-sessions FILE
-# (low-effort sensitivity run), --cap-variant per_mech passive_group open_text_group (compare
-# cap designs), --final (held-out rows). About 25 min with the defaults.
+# (low-effort sensitivity run), --cap-variant per_mech passive_group open_text_group no_cap
+# (compare cap designs; no_cap is an ablation row only, never the headline), --final (held-out
+# rows). With decoy as the only check, TPR at 1% = 0 is expected: the cap (0.65A) stops any
+# single check from pausing a session, and the output says so. About 25 min with the defaults.
 python scripts/run_real_router.py \
     --ai-outcomes results/outcomes/v1-cp-L0-quiz-mmlu-200-s5.parquet \
                   results/outcomes/v1-cp-L0-quiz-arc-200-s5.parquet \
                   results/outcomes/v1-du-L0-quiz-mmlu-200-q20.parquet \
                   results/outcomes/v1-du-L0-quiz-arc-200-q20.parquet \
     --pilot-outcomes results/outcomes/pilot-2026-11-13.parquet \
-    --low-effort pilot_data/low_effort_ids.txt
+    --low-effort pilot_data/low_effort_ids.txt --cap-variant per_mech no_cap
 # -> results/real-router/<run_id>/: comparison.csv/.md, thresholds.csv (A_k per fold),
 #    budget_curve.csv/.png, metrics.json, config.yaml
 ```

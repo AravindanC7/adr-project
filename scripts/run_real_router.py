@@ -61,7 +61,7 @@ from adr.harness.registry import get_mechanism
 from adr.replay.compare import BETAS
 from adr.replay.crossfit import (
     all_maps,
-    cap_warnings,
+    cap_findings,
     deploy_config,
     router_factory,
     score_policy,
@@ -72,12 +72,14 @@ from adr.replay.crossfit import (
 from adr.replay.quick_map import CALIBRATION_FRAC, SPLIT_SEED, split_rows
 from adr.router.core import RouterConfig
 
-# Cap designs to compare (RouterConfig.mech_group_caps): which mechanisms share ONE evidence cap.
-CAP_VARIANTS: dict[str, dict[str, tuple[str, ...]] | None] = {
-    "per_mech": None,  # every mechanism has its own cap (the default)
-    "passive_group": {"passive": tuple(sorted(PASSIVE_MECHANISMS))},  # behaviour + style
-    "open_text_group": {"open_text": ("canary", "style")},  # the two open-text signals
+# Cap designs to compare, as RouterConfig changes from the default.
+CAP_VARIANTS: dict[str, dict] = {
+    "per_mech": {},  # every mechanism has its own cap (the default)
+    "passive_group": {"mech_group_caps": {"passive": tuple(sorted(PASSIVE_MECHANISMS))}},
+    "open_text_group": {"mech_group_caps": {"open_text": ("canary", "style")}},
+    "no_cap": {"mech_cap_frac": None},  # ABLATION only: one check may decide on its own
 }
+ABLATIONS = {"no_cap": "router[no_cap] (ablation: single check may decide)"}
 EXTRA_ALPHA = 0.05  # always reported too
 HEADLINE = "A_0.05"  # the pilot headline: TPR at 5% FPR (1% is secondary: a far tail)
 
@@ -166,8 +168,10 @@ def main() -> None:
         choices=list(CAP_VARIANTS),
         default=["per_mech"],
         help="cap design(s): per_mech (default), passive_group (behaviour + style share one "
-        "cap), open_text_group (canary + style share one cap). The first is used for every "
-        "policy; each extra one adds a router[<variant>] row, on the same calibration split",
+        "cap), open_text_group (canary + style share one cap), no_cap (ablation: cap off). The "
+        "first is used for every policy and the headline; each extra one adds a "
+        "router[<variant>] row on the same folds and split, with thresholds from the same "
+        "procedure. no_cap can only be an extra (ablation) row",
     )
     ap.add_argument(
         "--group-passive", action="store_true", help="same as --cap-variant passive_group"
@@ -254,8 +258,13 @@ def main() -> None:
             else [v for v in variants_cap if v != "passive_group"]
         )
         variants_cap = ["passive_group", *rest]
+    if variants_cap[0] in ABLATIONS:
+        raise SystemExit(
+            f"{variants_cap[0]} is an ablation only, never the main design or the "
+            "headline: list a main design first, e.g. --cap-variant per_mech no_cap"
+        )
     for v in variants_cap:
-        groups = CAP_VARIANTS[v] or {}
+        groups = CAP_VARIANTS[v].get("mech_group_caps") or {}
         for g, members in groups.items():
             present = [m for m in members if m in mechanisms]
             if len(present) < 2:
@@ -263,7 +272,7 @@ def main() -> None:
                     f"NOTE: cap variant {v} has no effect here: of {g} = {list(members)}, only "
                     f"{present or 'none'} have both AI and human rows."
                 )
-    cfg = RouterConfig(mech_group_caps=CAP_VARIANTS[variants_cap[0]])
+    cfg = replace(RouterConfig(), **CAP_VARIANTS[variants_cap[0]])
 
     low_effort = read_exclusions(args.low_effort)
     low_found = sorted(low_effort & set(sessions))
@@ -325,9 +334,10 @@ def main() -> None:
             )
         )
 
-    for v in variants_cap[1:]:  # extra cap designs: the router only, same split and folds
-        name = f"router[{v}]"
-        results[name] = run("router", replace(cfg, mech_group_caps=CAP_VARIANTS[v]))
+    for v in variants_cap[1:]:  # extra cap designs: the router only, same split and folds;
+        # thresholds from the same procedure on this design's own honest scores
+        name = ABLATIONS.get(v, f"router[{v}]")
+        results[name] = run("router", replace(RouterConfig(), **CAP_VARIANTS[v]))
         r = results[name]["results"]
         print(
             f"  {name:15s} "
@@ -358,7 +368,17 @@ def main() -> None:
 
     out = Path(args.results_dir) / "real-router" / run_id
     out.mkdir(parents=True, exist_ok=True)
-    write_comparison(results, out)
+    findings = cap_findings(results["router"], cfg, mechanisms)
+    headline = headline_text(results["router"], findings.get("A_0.01"))
+    notes = [f"{name}: {text}" for name, text in findings.items() if name != "A_0.01"]
+    notes += [
+        f"{label} is an ablation (the evidence cap switched off, so a single check may decide on "
+        "its own): never the headline. Its thresholds come from the same procedure on its own "
+        "honest scores, on the same folds."
+        for v, label in ABLATIONS.items()
+        if label in results
+    ]
+    write_comparison(results, out, headline, notes)
     write_thresholds(results, out)
     pd.DataFrame(curve).to_csv(out / "budget_curve.csv", index=False)
     try:  # scripts/ is not a package: load the plotting script by path
@@ -373,9 +393,11 @@ def main() -> None:
     except ImportError as e:  # matplotlib missing: the CSV is still written
         print(f"no budget_curve.png ({e}); pip install -e '.[plot]'")
 
-    warnings = tail_warnings(results["router"]) + cap_warnings(results["router"], cfg, mechanisms)
-    headline = headline_text(results["router"])
+    warnings = tail_warnings(results["router"])
     print(f"\n{headline}")
+    for name, text in findings.items():
+        if name != "A_0.01":
+            print(f"NOTE ({name}): {text}")
     for w in warnings:
         print(("" if w.startswith("1% tail") else "WARNING: ") + w)
     router_th = results["router"]["thresholds"]
@@ -388,6 +410,7 @@ def main() -> None:
         json.dumps(
             {
                 "headline": headline,
+                "cap_findings": findings,
                 "warnings": warnings,
                 "final": args.final,
                 "mechanisms": mechanisms,
@@ -464,16 +487,17 @@ def _ci_text(ci) -> str:
     return f"[{ci[0]:.2f}, {ci[1]:.2f}]" if ci else "[no CI]"
 
 
-def headline_text(summ: dict) -> str:
+def headline_text(summ: dict, finding_1pct: str | None = None) -> str:
     """TPR at 5% FPR is the pilot headline; TPR at 1% FPR (a tail the pilot cannot pin down) is
-    reported with its CI as secondary."""
+    reported with its CI as secondary, followed by the cap explanation when it applies."""
     h, s1 = summ["results"]["A_0.05"], summ["results"]["A_0.01"]
-    return (
+    text = (
         f"HEADLINE (pilot): router TPR at 5% FPR = {h['tpr']:.2f} "
         f"{_ci_text(summ['ci95']['A_0.05'].get('tpr'))} (A = {h['A']:.2f}). "
         f"Secondary: TPR at 1% FPR = {s1['tpr']:.2f} "
         f"{_ci_text(summ['ci95']['A_0.01'].get('tpr'))} (A = {s1['A']:.2f})."
     )
+    return f"{text} {finding_1pct}" if finding_1pct else text
 
 
 def _ordered(summ: dict) -> list[str]:
@@ -487,7 +511,9 @@ def _fmt(v, ci) -> str:
     return f"{v:.3f}" if not ci else f"{v:.3f} [{ci[0]:.3f}, {ci[1]:.3f}]"
 
 
-def write_comparison(results: dict[str, dict], out: Path) -> None:
+def write_comparison(
+    results: dict[str, dict], out: Path, headline: str, notes: list[str] = ()
+) -> None:
     """One row per policy and threshold (A_0.01, A_0.05, A_max): the threshold, TPR, the real
     honest pause rate and checks per honest session, with 95% CIs (bootstrap over sessions)."""
     rows = []
@@ -526,13 +552,17 @@ def write_comparison(results: dict[str, dict], out: Path) -> None:
             )
     n = next(iter(results.values()))["n_sessions"]
     (out / "comparison.md").write_text(
-        f"{headline_text(results['router'])}\n\n"
+        f"{headline}\n\n"
         "Thresholds from replayed honest sessions (cross-fitted: every honest score uses a map "
         "that never saw that session). A_0.05 (headline) / A_0.01: smallest threshold pausing at "
         "most 5% / 1% of the resampled honest sessions; A_max: lowest threshold pausing none of "
         f"the {n} real sessions. 95% CIs: bootstrap over honest sessions (resampled sessions "
         f"regenerated per draw) and AI sessions. 1% tail extrapolated from {n} sessions. The unit "
-        "is the session: one person may span sessions.\n\n" + "\n".join(lines) + "\n",
+        "is the session: one person may span sessions.\n\n"
+        + "\n".join(lines)
+        + "\n"
+        + "".join(f"\n- {note}" for note in notes)
+        + ("\n" if notes else ""),
         encoding="utf-8",
     )
 

@@ -276,8 +276,11 @@ def test_three_thresholds_their_rates_and_tail_warnings():
     cap = 0.65 * cf.nominal_A(RouterConfig())
     at_cap = [n for n, v in r.items() if v["A"] >= cap - 1e-9]
     assert all(r[n]["tpr"] == 0 and r[n]["honest_pause_rate"] == 0 for n in at_cap)
-    assert len(cf.cap_warnings(s, RouterConfig(), ["decoy"])) == len(at_cap)
-    assert cf.cap_warnings(s, RouterConfig(), ["decoy", "behaviour"]) == []
+    found = cf.cap_findings(s, RouterConfig(), ["decoy"])
+    assert set(found) == set(at_cap)
+    assert all("finding, not a failure" in t and "0.65A" in t for t in found.values())
+    assert cf.cap_findings(s, RouterConfig(), ["decoy", "behaviour"]) == {}
+    assert cf.cap_findings(s, RouterConfig(mech_cap_frac=None), ["decoy"]) == {}
 
 
 # ---------------------------------------------------------------- bootstrap
@@ -520,12 +523,20 @@ def test_headline_is_tpr_at_5pct_with_1pct_secondary():
 
 def test_cap_variants():
     v = run_real_router.CAP_VARIANTS
-    assert v["per_mech"] is None
-    assert set(v["passive_group"]["passive"]) == {"behaviour", "style"}
-    assert set(v["open_text_group"]["open_text"]) == {"canary", "style"}
+    assert v["per_mech"] == {}
+    assert set(v["passive_group"]["mech_group_caps"]["passive"]) == {"behaviour", "style"}
+    assert set(v["open_text_group"]["mech_group_caps"]["open_text"]) == {"canary", "style"}
+    assert v["no_cap"] == {"mech_cap_frac": None}
+    assert run_real_router.ABLATIONS["no_cap"] == (
+        "router[no_cap] (ablation: single check may decide)"
+    )
     item = _item("arc:cap-2")
-    for groups in (v["passive_group"], v["open_text_group"]):  # valid router configs
-        SPRTRouter({item.item_id: item}, {}, _passive_map(), RouterConfig(mech_group_caps=groups))
+    for change in v.values():  # every variant is a valid router config
+        SPRTRouter({item.item_id: item}, {}, _passive_map(), RouterConfig(**change))
+    assert (
+        SPRTRouter({item.item_id: item}, {}, _passive_map(), RouterConfig(**v["no_cap"])).mech_cap
+        is None
+    )
 
 
 def test_run_real_router_low_effort_and_cap_variants(tmp_path):
@@ -541,6 +552,7 @@ def test_run_real_router_low_effort_and_cap_variants(tmp_path):
             "per_mech",
             "passive_group",
             "open_text_group",
+            "no_cap",
         ),
         cwd=ROOT,
         capture_output=True,
@@ -555,8 +567,65 @@ def test_run_real_router_low_effort_and_cap_variants(tmp_path):
     assert "cap variant passive_group has no effect here" in proc.stdout  # decoy only
     out = tmp_path / "real-router" / "r"
     th = pd.read_csv(out / "thresholds.csv")
-    assert {"router[passive_group]", "router[open_text_group]"} <= set(th.policy)
+    ablation = "router[no_cap] (ablation: single check may decide)"
+    assert {"router[passive_group]", "router[open_text_group]", ablation} <= set(th.policy)
+    md = (out / "comparison.md").read_text()
+    assert md.startswith("HEADLINE (pilot): router TPR at 5% FPR")  # the main router only
+    assert f"{ablation} is an ablation" in md and "never the headline" in md
     cfg = __import__("yaml").safe_load((out / "config.yaml").read_text())
-    assert cfg["cap_variants"] == ["per_mech", "passive_group", "open_text_group"]
+    assert cfg["cap_variants"] == ["per_mech", "passive_group", "open_text_group", "no_cap"]
     assert cfg["low_effort_per_fold"] == [1, 1, 1, 1]
     assert json.loads((out / "metrics.json").read_text())["headline"].startswith("HEADLINE")
+
+
+def test_no_cap_can_only_be_an_ablation(tmp_path):
+    _files(tmp_path)
+    proc = subprocess.run(
+        _cmd(tmp_path, "--cap-variant", "no_cap", "per_mech"),
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert proc.returncode != 0 and "ablation only" in proc.stderr
+
+
+def test_cap_finding_is_printed_next_to_tpr_at_1pct(tmp_path):
+    """Decoy only, cap on: the explanation sits next to TPR at 1% exactly when the 1% threshold
+    is at or above the cap, in the output and in comparison.md."""
+    _files(tmp_path)
+    proc = subprocess.run(
+        _cmd(tmp_path), cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=False
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    out = tmp_path / "real-router" / "r"
+    th = pd.read_csv(out / "thresholds.csv").set_index(["policy", "threshold"])
+    at_cap = th.loc[("router", "A_0.01"), "A"] >= 0.65 * cf.nominal_A(RouterConfig()) - 1e-9
+    line = next(x for x in proc.stdout.splitlines() if x.startswith("HEADLINE"))
+    assert ("finding, not a failure" in line) == at_cap
+    first = (out / "comparison.md").read_text().splitlines()[0]
+    assert ("finding, not a failure" in first) == at_cap
+
+
+def test_headline_carries_the_cap_finding_when_the_1pct_threshold_is_at_the_cap():
+    cap = 0.65 * cf.nominal_A(RouterConfig())
+    summ = {
+        "results": {
+            "A_0.05": {"A": 2.2, "tpr": 0.8},
+            "A_0.01": {"A": cap, "tpr": 0.0},
+            "A_max": {"A": cap + 0.01, "tpr": 0.0},
+        },
+        "ci95": {"A_0.05": {"tpr": (0.6, 0.9)}, "A_0.01": {"tpr": (0.0, 0.0)}, "A_max": {}},
+    }
+    found = cf.cap_findings(summ, RouterConfig(), ["decoy"])
+    assert set(found) == {"A_0.01", "A_max"}
+    text = run_real_router.headline_text(summ, found["A_0.01"])
+    assert text.startswith("HEADLINE (pilot): router TPR at 5% FPR = 0.80 [0.60, 0.90]")
+    assert "Secondary: TPR at 1% FPR = 0.00 [0.00, 0.00]" in text
+    assert text.index("1% FPR = 0.00") < text.index("finding, not a failure")
+    assert "decoy as the only check" in text and "correctly stops any single check" in text
+    assert (
+        cf.cap_findings(summ, RouterConfig(**run_real_router.CAP_VARIANTS["no_cap"]), ["decoy"])
+        == {}
+    )

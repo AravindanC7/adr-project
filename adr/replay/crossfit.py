@@ -454,25 +454,30 @@ def tail_warnings(summary: dict[str, Any]) -> list[str]:
     return out
 
 
-def cap_warnings(
+def cap_findings(
     summary: dict[str, Any], cfg: RouterConfig, mechanisms: Sequence[str]
-) -> list[str]:
-    """With ONE evidence mechanism, the per-mechanism cap bounds every session's score: a
-    threshold at or above it can never pause anyone, so its TPR is 0 by construction."""
+) -> dict[str, str]:
+    """threshold name -> explanation, for thresholds at or above the cap of the ONLY evidence
+    mechanism. Such a threshold pauses no session, so its TPR is 0: a finding about the design
+    (the cap, mech_cap_frac x A, deliberately stops any single check from pausing a session), not
+    a failure of the check. Empty with several mechanisms or with no cap."""
     from adr.contracts import PASSIVE_MECHANISMS
 
     evidence = [m for m in mechanisms if m in ACTIVE_MECHANISMS or m in PASSIVE_MECHANISMS]
     if len(evidence) != 1 or cfg.mech_cap_frac is None:
-        return []
-    cap = cfg.mech_cap_frac * nominal_A(cfg)
-    return [
-        f"{name} = {r['A']:.3g} is at or above the {evidence[0]} cap ({cap:.3g} nats = "
-        f"mech_cap_frac {cfg.mech_cap_frac:g} x A {nominal_A(cfg):.3g}): with one mechanism no "
-        "score can pass the cap, so this threshold pauses nobody and its TPR is 0 by "
-        "construction, not because the check fails"
+        return {}
+    a0 = nominal_A(cfg)
+    cap = cfg.mech_cap_frac * a0
+    return {
+        name: (
+            f"TPR = 0 here is a finding, not a failure: with {evidence[0]} as the only check, the "
+            f"per-mechanism cap ({cfg.mech_cap_frac:g}A = {cap:.2f} nats, A = {a0:.2f}) correctly "
+            f"stops any single check from pausing a session, and this threshold ({r['A']:.2f}) is "
+            "at or above it."
+        )
         for name, r in summary["results"].items()
         if r["A"] >= cap - 1e-9
-    ]
+    }
 
 
 def router_factory(
