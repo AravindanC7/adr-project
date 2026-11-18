@@ -12,7 +12,9 @@ models:
     # Standard prompts up to 100k tokens; ADR harness prompts are far below this threshold.
     price_in_per_mtok: 0.10
     price_out_per_mtok: 0.50
-    heldout: false
+    # Held-out model since Nov 17 (team decision; replaces gemini-flash): final --final
+    # evaluation only. Never run it on the real banks for fitting, thresholds or tuning.
+    heldout: true
 
   - name: gpt-mini
     provider: openai
@@ -26,7 +28,7 @@ models:
     model_id: gemini-3.5-flash
     price_in_per_mtok: 1.50
     price_out_per_mtok: 9.00
-    heldout: true   # Team-approved held-out model (step #16); final evaluation only.
+    heldout: false  # not used: $50 prepay minimum (Nov 17)
 
   - name: open-weight
     provider: openai_compatible

@@ -10,6 +10,11 @@ import pandas as pd
 
 from adr.contracts import OUTCOME_LABELS, FailureMap, MapCell, smooth
 
+# Attacker levels kept out of every pooled cell (attacker_level None). L3 rows on items the
+# first answer was not flagged are the cached L1 answers, so pooling L3 would count those L1
+# answers twice. L3 still gets its own cells (attacker_level "L3").
+NOT_POOLED_LEVELS = frozenset({"L3"})
+
 
 def _counts(frame: pd.DataFrame, labels: tuple[str, ...]) -> dict[str, int]:
     observed = Counter(str(value) for value in frame["outcome"])
@@ -170,6 +175,8 @@ def build_failure_map(
                 selected_ai = selected_ai[selected_ai["attack_mode"].eq(attack_mode)]
             if attacker_level is not None:
                 selected_ai = selected_ai[selected_ai["attacker_level"].eq(attacker_level)]
+            else:  # pooled over levels
+                selected_ai = selected_ai[~selected_ai["attacker_level"].isin(NOT_POOLED_LEVELS)]
             if selected_ai.empty:
                 continue
             source_run_ids.update(str(value) for value in selected_ai["run_id"].unique())
@@ -197,7 +204,10 @@ def build_failure_map(
     if not cells:
         requirement = "AI outcome rows" if ai_only else "both AI and human outcome rows"
         raise ValueError(f"no mechanism/item type has {requirement}")
-    exclusion_note = "Held-out models and held-out survey rows excluded."
+    exclusion_note = (
+        "Held-out models and held-out survey rows excluded. "
+        f"Attacker levels {sorted(NOT_POOLED_LEVELS)} excluded from pooled cells."
+    )
     ai_only_note = (
         "AI-only provisional map: cells without human observations use prior-only human "
         "probabilities and must not be used by the router."

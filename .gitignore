@@ -14,6 +14,7 @@ venv/
 data/raw/*
 data/processed/*
 cache/llm/*
+cache/llm-fake/
 results/outcomes/*
 results/runs/*
 # real pilot answers: never in git (docs/pilot/README.md)

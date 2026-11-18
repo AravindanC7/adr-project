@@ -134,7 +134,7 @@ def test_no_observation_is_skipped_and_never_scored():
 # ---------- quick map ----------
 def test_quick_map_refuses_heldout_rows():
     held = rows_to_frame([
-        _row("g", "x:1", "decoy", "picked_decoy", model="gemini-flash", heldout=True),
+        _row("g", "x:1", "decoy", "picked_decoy", model="claude-haiku", heldout=True),
         _row("h", "x:2", "decoy", "picked_decoy", kind="human", split="heldout_survey"),
     ])
     with pytest.raises(ValueError, match="held-out"):
@@ -153,7 +153,7 @@ def test_three_splits_are_disjoint_by_item_and_never_touch_heldout():
     rows = [_row(f"ai-{s}", f"x:{i}", "decoy", "picked_decoy") for s in range(2) for i in range(10)]
     rows += [_row("hu", f"o:{i}", "canary", "clean", kind="human", item_type="open_text")
              for i in range(10)]
-    rows += [_row("held", "x:0", "decoy", "picked_decoy", model="gemini-flash", heldout=True),
+    rows += [_row("held", "x:0", "decoy", "picked_decoy", model="claude-haiku", heldout=True),
              _row("hs", "h:1", "decoy", "picked_correct", kind="human", split="heldout_survey")]
     df = rows_to_frame(rows)
     sp = split_rows(df)                                    # default: 30%, seed 0
@@ -253,16 +253,16 @@ def _run_replay(tmp_path, path, *extra):
 
 
 def test_run_replay_defaults_to_the_calibration_split_and_never_reads_heldout(tmp_path):
-    held = [_row("held-0", "handwritten:q1", "decoy", "picked_decoy", model="gemini-flash",
+    held = [_row("held-0", "handwritten:q1", "decoy", "picked_decoy", model="claude-haiku",
                  heldout=True)]
     out, m = _run_replay(tmp_path, _stub_table(tmp_path, held))
     assert m["evaluated_on"] == "calibration" and m["final"] is False
     assert "FINAL EVALUATION" not in out
     groups = m["outcome_sources"]["router"]
-    assert all("gemini-flash" not in g for g in groups)            # held-out model never read
+    assert all("claude-haiku" not in g for g in groups)            # held-out model never read
     out, m = _run_replay(tmp_path, _stub_table(tmp_path, held), "--final")
     assert "FINAL EVALUATION ON HELD-OUT DATA" in out and m["evaluated_on"] == "heldout"
-    assert any("gemini-flash" in g for g in m["outcome_sources"]["router"])
+    assert any("claude-haiku" in g for g in m["outcome_sources"]["router"])
 
 
 def test_run_replay_final_with_human_only_heldout_rows_reports_honest_side(tmp_path):
@@ -273,6 +273,89 @@ def test_run_replay_final_with_human_only_heldout_rows_reports_honest_side(tmp_p
     assert "NO AI ROWS IN THE HELDOUT ROWS" in out
     assert overall["n_ai"] == 0 and overall["tpr_at_1pct_fpr"] is None
     assert overall["checks_per_honest_person"] is not None
+
+
+def test_run_replay_final_reads_only_the_decided_heldout_model(tmp_path):
+    """Old gemini-flash smoke rows were logged with heldout_model=True; --final must skip them
+    and evaluate only claude-haiku (configs/data_decisions.json)."""
+    held = [_row(f"gem-{s}", "handwritten:q1", "decoy", "picked_decoy", model="gemini-flash",
+                 heldout=True) for s in range(2)]
+    held.append(_row("haiku-0", "handwritten:q1", "decoy", "picked_correct",
+                     model="claude-haiku", heldout=True))
+    out, m = _run_replay(tmp_path, _stub_table(tmp_path, held), "--final")
+    groups = m["outcome_sources"]["router"]
+    assert any("claude-haiku" in g for g in groups)
+    assert all("gemini-flash" not in g for g in groups)
+    import yaml
+
+    cfg = yaml.safe_load((tmp_path / "runs" / "r" / "config.yaml").read_text(encoding="utf-8"))
+    assert cfg["heldout_model"] == "claude-haiku" and cfg["n_rows_heldout_read"] == 1
+    assert "dropped 2 held-out AI rows" in out and "gemini-flash" in out
+
+
+def test_run_replay_final_refuses_when_only_a_stale_heldout_model_has_rows(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    held = [_row("gem-0", "handwritten:q1", "decoy", "picked_decoy", model="gemini-flash",
+                 heldout=True)]
+    root = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [sys.executable, str(root / "scripts" / "run_replay.py"), "--stub", "--outcomes",
+         str(_stub_table(tmp_path, held)), "--n", "20", "--boot", "20", "--policies", "router",
+         "--results-dir", str(tmp_path), "--run-id", "r", "--final"],
+        cwd=root, capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert proc.returncode != 0 and "no held-out rows" in proc.stderr
+
+
+def _final_frame():
+    return rows_to_frame([
+        _row("gem-t", "x:1", "decoy", "picked_decoy", model="gemini-flash", heldout=True),
+        _row("gem-s", "x:1", "decoy", "picked_decoy", model="gemini-flash", heldout=True,
+             split="heldout_survey"),
+        _row("haiku-t", "x:1", "decoy", "picked_correct", model="claude-haiku", heldout=True),
+        _row("haiku-s", "x:1", "decoy", "picked_correct", model="claude-haiku", heldout=True,
+             split="heldout_survey"),
+        _row("gpt-s", "x:1", "decoy", "picked_decoy", model="gpt-mini",
+             split="heldout_survey"),
+        _row("hu-s", "x:1", "decoy", "picked_correct", kind="human", split="heldout_survey"),
+    ])
+
+
+def test_final_eval_rows_keeps_every_row_of_the_decided_heldout_model():
+    from adr.replay.quick_map import final_eval_rows
+
+    kept = set(final_eval_rows(_final_frame(), "claude-haiku")["session_id"])
+    assert {"haiku-t", "haiku-s"} <= kept
+
+
+def test_final_eval_rows_keeps_training_models_on_the_heldout_survey():
+    from adr.replay.quick_map import final_eval_rows
+
+    kept = set(final_eval_rows(_final_frame(), "claude-haiku")["session_id"])
+    assert {"gpt-s", "hu-s"} <= kept           # the unseen-survey test, and its humans
+
+
+def test_final_eval_rows_drops_only_other_heldout_flagged_models():
+    from adr.replay.quick_map import final_eval_rows
+
+    kept = set(final_eval_rows(_final_frame(), "claude-haiku")["session_id"])
+    assert kept == {"haiku-t", "haiku-s", "gpt-s", "hu-s"}   # gemini-flash gone on both splits
+
+
+def test_run_replay_final_evaluates_training_models_on_the_heldout_survey(tmp_path):
+    held = [_row(f"gpt-s{s}", "handwritten:q1", "decoy", "picked_decoy", model="gpt-mini",
+                 split="heldout_survey") for s in range(2)]
+    held.append(_row("gem-0", "handwritten:q1", "decoy", "picked_decoy", model="gemini-flash",
+                     heldout=True))
+    out, m = _run_replay(tmp_path, _stub_table(tmp_path, held), "--final")
+    groups = m["outcome_sources"]["router"]
+    assert m["evaluated_on"] == "heldout"
+    assert any("gpt-mini" in g for g in groups)               # unseen-survey rows are read
+    assert all("gemini-flash" not in g for g in groups)
+    assert "dropped 1 held-out AI rows" in out
 
 
 # ---------- sanity: replaying synthetic rows ~ simulating from the map ----------
