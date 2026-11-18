@@ -170,3 +170,17 @@ def test_trace_cleared_at_counts_only_sessions_that_reached_b_first():
     assert cleared.cleared_at(2.0)        # paused at 2.0? never: it cleared at B first
     assert not cleared.cleared_at(1.0)    # deployed at 1.0 it pauses before clearing
     assert not Trace("t", 0, 1.0, run, np.array([1, 2, 3]), 3).cleared_at(2.0)
+
+
+def test_rates_report_ai_sessions_wrongly_cleared():
+    import numpy as np
+
+    from adr.replay.crossfit import Trace, rates
+
+    def t(who, score, cleared):
+        return Trace(who, 0, score, np.array([score]), np.array([1]), 1, cleared=cleared)
+
+    ai = [[t("ai|a", 0.2, True), t("ai|a", 0.2, False)], [t("ai|b", 3.0, False)]]
+    r = rates([t("h", 0.0, True)], ai, [0.0], {"A": 2.0})["A"]
+    assert r["ai_cleared_rate"] == pytest.approx(0.25)  # session a: cleared under 1 of 2 maps
+    assert r["honest_cleared_rate"] == 1.0

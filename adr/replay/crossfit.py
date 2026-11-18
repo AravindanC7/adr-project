@@ -313,7 +313,8 @@ def rates(
     real: list[Trace], ai: list[list[Trace]], synthetic: list[float], thresholds: dict[str, float]
 ) -> dict[str, dict[str, float]]:
     """Per threshold: TPR, real and resampled honest pause rates, checks per honest session, the
-    share of honest sessions cleared (reached B first), and how many real sessions reach it."""
+    share of honest sessions cleared (reached B first), the share of AI sessions wrongly cleared,
+    and how many real sessions reach it."""
     out = {}
     for name, a in thresholds.items():
         ai_hits = [np.mean([t.score >= a for t in per_fold]) for per_fold in ai]
@@ -326,6 +327,10 @@ def rates(
             else math.nan,
             "checks_per_honest_session": float(np.mean([t.checks_at(a) for t in real])),
             "honest_cleared_rate": float(np.mean([t.cleared_at(a) for t in real])),
+            # AI sessions wrongly cleared: reached B before `a` (mean over the fold maps)
+            "ai_cleared_rate": float(np.mean([np.mean([t.cleared_at(a) for t in f]) for f in ai]))
+            if ai
+            else math.nan,
             "n_real_at_or_above": int(sum(t.score >= a for t in real)),
         }
     return out

@@ -510,7 +510,13 @@ def main() -> None:
     )
 
 
-COLUMNS = ("tpr", "honest_pause_rate", "honest_cleared_rate", "checks_per_honest_session")
+COLUMNS = (
+    "tpr",
+    "ai_cleared_rate",
+    "honest_pause_rate",
+    "honest_cleared_rate",
+    "checks_per_honest_session",
+)
 ORDER = ("A_0.05", "A_0.01", "A_max")  # headline first
 
 
