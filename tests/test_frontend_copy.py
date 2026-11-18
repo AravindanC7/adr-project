@@ -118,6 +118,7 @@ def test_copied_text_equals_copy_text_and_trap_is_invisible(page, title):
         aux = pg.locator("#item .aux")
         assert aux.count() == 1
         assert pg.locator("#item .passage").count() == 0  # stub items have no passage
+        assert pg.evaluate("() => document.activeElement.id") == "stem"
         box = aux.bounding_box()
         color = aux.evaluate("e => getComputedStyle(e).color")
         if hide == "clear":
@@ -236,6 +237,8 @@ def test_passage_is_shown_above_the_stem_and_copied_once(chromium, tmp_path, dec
             order = pg.evaluate("""() => [...document.getElementById("item").children]
                                    .map(e => e.id || e.className)""")
             assert order.index("passage") < order.index("stem")
+            assert passage.evaluate("e => e === document.activeElement")  # focus starts here
+            assert passage.get_attribute("tabindex") == "-1"  # focusable, not a tab stop
             assert pg.evaluate(SELECT_ITEM).rstrip("\n") == text
             pg.goto(f"http://127.0.0.1:{port}/")
     finally:

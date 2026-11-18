@@ -37,7 +37,9 @@ copy-paste, document export and browser agents still get (`adr/mechanisms/CANARY
   gives the `passage + "\n\n" + rest` that the harness's `copy_text` builds. Hidden text
   placed `before_stem` goes between the passage and the stem, as in the harness. The server
   takes the passage from the `Item` (variants never carry it) and sends it with the visible
-  item; the page sets it with `textContent`, so markup in it shows as text.
+  item; the page sets it with `textContent`, so markup in it shows as text. When a question
+  has a passage, focus goes to the passage (`tabindex="-1"`, so it is not a tab stop) instead
+  of the stem, so a screen reader starts at the top.
 
 `tests/test_frontend_copy.py` checks the copied text in a real Chromium, including a real
 Ctrl+C into the clipboard.

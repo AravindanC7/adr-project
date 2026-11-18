@@ -124,9 +124,13 @@ function renderOpenText(area, item, onChange) {
 }
 
 // Reading text for the question, if any, above the stem (see docs/frontend.md).
+// Returns the passage element (focusable but not in the tab order), or null.
 function placePassage(text) {
-  if (text == null) return;
-  $("stem").before(el("p", { className: "passage", textContent: text }));
+  if (text == null) return null;
+  const node = el("p", { className: "passage", textContent: text });
+  node.tabIndex = -1;
+  $("stem").before(node);
+  return node;
 }
 
 // Extra item text from the server, placed where it says (see docs/frontend.md).
@@ -180,11 +184,11 @@ function render(step) {
   area.replaceChildren();
   for (const old of document.querySelectorAll("#item .aux, #item .passage")) old.remove();
   getAnswer = renderer(area, current, refresh);
-  placePassage(current.passage);   // first, so text placed before the stem goes after it
+  const passage = placePassage(current.passage);   // first, so text placed before the stem goes after it
   placeAux(current.aux);
   refresh();
   show("question");
-  $("stem").focus();
+  (passage || $("stem")).focus();   // start at the top: the passage when there is one
   ItemTelemetry.start(area);
 }
 

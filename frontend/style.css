@@ -193,6 +193,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   background: var(--accent-soft);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  outline: none;   /* focused on load, like the stem (h2) */
 }
 
 /* Extra item text (docs/frontend.md). */
