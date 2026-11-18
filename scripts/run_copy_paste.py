@@ -7,7 +7,7 @@ Quick checks (no data needed yet; uses the 4 handwritten test items and stub tra
 Real run, once Archana's loaders and mechanisms exist:
     python scripts/run_copy_paste.py --assessment data/processed/quiz_slice.json \
         --items data/processed/items.jsonl --variants data/processed/variants.jsonl \
-        --mechanisms decoy,opinion_trap --models claude-small,open-weight --level L0
+        --mechanisms decoy,opinion_trap --models gpt-mini,open-weight --level L0
 
 Files: --items is one Item per line, --variants one RenderedItem per line, --assessment one
 Assessment object, all as JSON matching adr/contracts.

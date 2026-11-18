@@ -7,7 +7,7 @@ Quick checks (no data needed yet; uses the 4 handwritten test items and stub tra
 Real run, once Archana's loaders and mechanisms exist:
     python scripts/run_doc_upload.py --assessment data/processed/quiz_slice.json \
         --items data/processed/items.jsonl --variants data/processed/variants.jsonl \
-        --mechanisms decoy,opinion_trap --models claude-haiku,gpt-mini --level L0
+        --mechanisms decoy,opinion_trap --models gpt-mini --level L0
 
 --max-tokens caps the one reply that answers the whole document (default 1500). A reply that
 hits it is cut off; it is logged as a warning in errors.jsonl and counted in config.yaml
