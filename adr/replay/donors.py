@@ -15,6 +15,13 @@ each so a result can say how much of it was real:
      failure map's p_ai / p_human for that cell.
 If neither exists, `Donor.outcome` raises NoObservation and the replay skips the check.
 
+Same-type draws (optional, `type_match_kinds`): when a donor session never saw the replayed item
+at all (e.g. AI runs on the MMLU/ARC banks replayed on the pilot bank), it can answer check M on
+item I from ITS OWN outcomes for mechanism M on items of the same item_type, drawn without
+replacement. That keeps the session's real behaviour and its correlations; it assumes items of
+one type are exchangeable, the same assumption as the failure map's per-item-type cells. Counted
+as `same_type`.
+
 Respondent groups:
   AI:    (model, attack_mode, attacker_level)   e.g. gpt-mini / copy_paste / L0
   human: data_origin                            e.g. public_human, pilot, dry_run
@@ -75,10 +82,13 @@ class Donor:
     _items: dict[str, Item]
     _fmap: FailureMap | None
     _rng: random.Random
+    _own_type: dict[Key, list[str]] = field(default_factory=dict)  # (item_type, mech) -> outcomes
     fallbacks: int = 0  # answered from another session of the same group
+    same_type: int = 0  # answered from this session's own rows on another item of the same type
     synthetic: int = 0  # answered from the failure map: no logged row anywhere
     missing: int = 0    # no row and no map cell: NoObservation was raised
     sources: list[tuple[str, str, str]] = field(default_factory=list)  # (item, mech, source)
+    _type_queue: dict[Key, list[str]] = field(default_factory=dict)
 
     @property
     def kind(self) -> str:
@@ -88,6 +98,11 @@ class Donor:
         key = (item_id, mechanism)
         if key in self._own:
             return self._draw(key, self._own[key], "session")
+        item_type = self._items[item_id].item_type if item_id in self._items else None
+        if (item_type, mechanism) in self._own_type:
+            self.same_type += 1
+            self.sources.append((item_id, mechanism, "same_type"))
+            return self._next_same_type((item_type, mechanism))
         if key in self._pooled:
             self.fallbacks += 1
             return self._draw(key, self._pooled[key], "fallback")
@@ -108,6 +123,15 @@ class Donor:
         self.missing += 1
         raise NoObservation(f"no logged row and no map cell for {mechanism} on {item_id}")
 
+    def _next_same_type(self, key: Key) -> str:
+        """Without replacement: shuffle this session's outcomes once, take them in turn, and
+        reshuffle only if the replayed assessment needs more than the session has."""
+        queue = self._type_queue.setdefault(key, [])
+        if not queue:
+            queue.extend(self._own_type[key])
+            self._rng.shuffle(queue)
+        return queue.pop()
+
     def _draw(self, key: Key, outcomes: list[str], source: str) -> str:
         self.sources.append((*key, source))
         return outcomes[0] if len(outcomes) == 1 else self._rng.choice(outcomes)
@@ -122,8 +146,11 @@ class Donors:
         items: dict[str, Item] | None = None,
         fallback_map: FailureMap | None = None,
         extra_groups: tuple[Group, ...] = (),
+        type_match_kinds: tuple[str, ...] = (),
     ):
         self.items = items or {}
+        self.type_match_kinds = type_match_kinds
+        self._session_types: dict[Group, dict[str, dict[Key, list[str]]]] = defaultdict(dict)
         self.fallback_map = fallback_map
         self._sessions: dict[Group, dict[str, dict[Key, list[str]]]] = defaultdict(dict)
         self._pooled: dict[Group, dict[Key, list[str]]] = defaultdict(lambda: defaultdict(list))
@@ -139,6 +166,11 @@ class Donors:
                 row["outcome"]
             )
             self._pooled[g][key].append(row["outcome"])
+            if g.kind in type_match_kinds:
+                tkey = (row["item_type"], row["mechanism"])
+                self._session_types[g].setdefault(row["session_id"], {}).setdefault(
+                    tkey, []
+                ).append(row["outcome"])
         for g in extra_groups:  # e.g. a human group with no rows: every draw is synthetic
             self._sessions.setdefault(g, {})
 
@@ -154,7 +186,20 @@ class Donors:
         rng = random.Random(f"{seed}:{group.label}")
         sessions = self.sessions(group)
         session_id = rng.choice(sessions) if sessions else None
+        return self._donor(group, session_id, rng)
+
+    def respondent_from(self, group: Group, session_id: str, seed: int) -> Donor:
+        """A simulated respondent copying exactly `session_id` (cross-fitting replays every
+        held-out person once, rather than sampling)."""
+        if session_id not in self._sessions.get(group, {}):
+            raise KeyError(f"no session {session_id!r} in group {group.label}")
+        return self._donor(group, session_id, random.Random(f"{seed}:{group.label}:{session_id}"))
+
+    def _donor(self, group: Group, session_id: str | None, rng: random.Random) -> Donor:
         own = self._sessions[group][session_id] if session_id is not None else {}
+        own_type = (
+            self._session_types.get(group, {}).get(session_id, {}) if session_id is not None else {}
+        )
         return Donor(
             group=group,
             session_id=session_id,
@@ -163,4 +208,5 @@ class Donors:
             _items=self.items,
             _fmap=self.fallback_map,
             _rng=rng,
+            _own_type=own_type,
         )
