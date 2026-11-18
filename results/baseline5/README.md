@@ -126,7 +126,8 @@ version `cp-v1`.
 - **Which code ran.** The L0 and L2 configs say `git_commit: e34b6da`, but that is the commit
   checked out *at the end of the run*, and the trap code was not committed yet: it was first
   committed in `5ae2ef1`, five minutes after the runs. Run configs now record HEAD when the run
-  starts plus a `git_dirty` flag (`adr/harness/provenance.py`); the L2-generic run records
+  starts plus a `git_dirty` flag for uncommitted changes to tracked files (untracked files
+  are ignored; `adr/harness/provenance.py`); the L2-generic run records
   `308f40e`, `git_dirty: false`. The old configs are left as they were.
 
 ```bash

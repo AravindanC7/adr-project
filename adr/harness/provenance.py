@@ -17,12 +17,14 @@ def _git(*args: str, cwd: Path | None = None) -> str:
 
 
 def git_state(cwd: Path | None = None) -> dict[str, str | bool | None]:
-    """{"git_commit": short HEAD, "git_dirty": True if tracked files are modified or untracked,
-    non-ignored files exist}. git_dirty=True means the code that ran may differ from git_commit
-    (e.g. a new, not yet committed script). Both are None outside a git checkout."""
+    """{"git_commit": short HEAD, "git_dirty": True if any TRACKED file has uncommitted changes
+    (staged or not)}. Untracked files are ignored on purpose: checkouts carry untracked results
+    folders that would otherwise flag every run. So a brand-new script that was never added to
+    git does not set the flag; commit new code before a run. Both are None outside a git
+    checkout."""
     try:
         commit = _git("rev-parse", "--short", "HEAD", cwd=cwd).strip()
-        dirty = bool(_git("status", "--porcelain", cwd=cwd).strip())
+        dirty = bool(_git("status", "--porcelain", "--untracked-files=no", cwd=cwd).strip())
     except Exception:  # noqa: BLE001 - no git, not a repo: record that we don't know
         return {"git_commit": None, "git_dirty": None}
     return {"git_commit": commit, "git_dirty": dirty}
