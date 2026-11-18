@@ -14,9 +14,11 @@ How
     and never stored, printed or written.
   * Folds: adr.replay.folds.assign_session_folds (PR #30), the one fold assignment shared with
     the router's cross-fitting, at its defaults (K and seed recorded in
-    configs/data_decisions.json "pilot_folds"). The low-effort sessions (--exclude-sessions
-    prefixes, matched to full session ids) are passed explicitly as low_effort, so they are dealt
-    across the folds first and every fold gets at most one more of them. Every rate in the output
+    configs/data_decisions.json "pilot_folds"; not overridable here). The low-effort sessions
+    are read from #30's low-effort id file (pilot_data/low_effort_ids.txt: full session ids,
+    one per line, gitignored), so they are dealt across the folds first and every fold gets at
+    most one more of them. A missing or empty file, or an id that is not a finished pilot
+    session, stops the run. Every rate in the output
     is a rate on ONE held-out fold; nothing is computed on all the data at once.
   * Sweeps (first match wins, as in behaviour.py; the thresholds not being swept stay at
     behaviour.py's defaults):
@@ -26,7 +28,7 @@ How
   * Selection: for each split k and target rate, the setting with the highest honest rate still
     <= target on the OTHER K-1 folds is chosen, and its rate on fold k is reported. The spread of
     the chosen settings over the splits says how stable the choice is.
-  * Everything is run twice: all sessions, and without the --exclude-sessions (low-effort) ones.
+  * Everything is run twice: all sessions, and without the low-effort ones.
     The fold assignment is the same in both, so the difference is those sessions alone.
 
 behaviour.py's thresholds are module constants, so the score is re-implemented here with the
@@ -36,7 +38,9 @@ either disagrees.
 
 Outputs (aggregates only: counts and rates per fold / setting), in --out:
   folds.csv      one row per (sessions, setting, fold): n_answers and per-outcome rates
-  summary.csv    per (sessions, setting): pooled rate and mean / min / max over folds
+  summary.csv    per (sessions, setting): mean / min / max over held-out folds, plus
+                 pooled_descriptive_only_* (all folds pooled at a fixed setting: description
+                 only, never for choosing thresholds)
   selection.csv  per (sessions, outcome, target, split): the chosen setting and its held-out rate
   summary.md     the headline tables
 """
@@ -58,16 +62,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from adr.contracts import Response, Telemetry, parse_variant_id
 from adr.mechanisms import behaviour
-from adr.replay.folds import DEFAULT_K, DEFAULT_SEED, assign_session_folds
+from adr.replay.folds import (
+    DEFAULT_K,
+    DEFAULT_SEED,
+    LOW_EFFORT_FILE,
+    assign_session_folds,
+    read_low_effort,
+)
 from server.clean import load_bank, plain_rendered
 from server.store import read_session
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTCOMES = ("paste", "focus_loss", "too_fast", "normal")
 FLAGS = ("paste", "focus_loss", "too_fast")
-# Low-effort pilot sessions (#39 review): honest people answering carelessly. Session code
-# prefixes; a prefix matches the start of the session id.
-LOW_EFFORT = ("d3ba4f10", "04096570", "01fe7650", "0a87374a")
 # What the cleaned pilot table (results/outcomes/pilot-2026-11-13.parquet) holds.
 EXPECTED_PILOT = {"normal": 825, "too_fast": 124, "focus_loss": 99, "paste": 8}
 
@@ -208,17 +215,22 @@ def sanity_check(df: pd.DataFrame, expected: dict[str, int] | None) -> dict[str,
 
 
 # ------------------------------------------------------------------ folds
-def match_prefixes(session_ids: Iterable[str], prefixes: Sequence[str]) -> set[str]:
-    """Full session ids for the given code prefixes. Each prefix must match exactly one
-    session: a typo or an ambiguous prefix would otherwise silently change the low-effort set."""
-    sids = sorted(set(session_ids))
-    out: set[str] = set()
-    for p in prefixes:
-        hits = [s for s in sids if s.startswith(p)]
-        if len(hits) != 1:
-            raise SystemExit(f"STOP: session prefix {p!r} matches {len(hits)} sessions, not 1")
-        out.update(hits)
-    return out
+def low_effort_ids(path: Path, session_ids: Iterable[str]) -> list[str]:
+    """Low-effort session ids from #30's id file. Missing file, empty file, or an id that is not
+    one of `session_ids` stops the run: a silent miss would drop the 'excluding' rows."""
+    try:
+        low = read_low_effort(path)
+    except FileNotFoundError as e:
+        raise SystemExit(f"STOP: {e}") from None
+    if not low:
+        raise SystemExit(f"STOP: low-effort id file {path} lists no session ids")
+    missing = len(set(low) - set(session_ids))
+    if missing:
+        raise SystemExit(
+            f"STOP: {missing} of {len(low)} low-effort id(s) in {path} are not finished pilot "
+            "sessions (full session ids, exact match)"
+        )
+    return low
 
 
 # ------------------------------------------------------------------ sweeps
@@ -271,12 +283,14 @@ def fold_table(
 
 
 def summarise(ft: pd.DataFrame) -> pd.DataFrame:
-    """Per (variant, setting): pooled rate over folds and mean / min / max of the fold rates."""
+    """Per (variant, setting): mean / min / max of the held-out fold rates, and the rate pooled
+    over all folds (pooled_descriptive_only_*: description only, not for choosing thresholds)."""
     keys = ["sessions", "group", *SETTING_COLS]
     g = ft.groupby(keys, sort=False)
     out = g[["n_answers"]].sum()
     for o in OUTCOMES:
-        out[f"pooled_{o}"] = g[f"n_{o}"].sum() / out["n_answers"]
+        # pooled over all folds at a fixed setting: descriptive only, never for selection
+        out[f"pooled_descriptive_only_{o}"] = g[f"n_{o}"].sum() / out["n_answers"]
         out[f"mean_{o}"] = g[f"rate_{o}"].mean()
         out[f"min_{o}"] = g[f"rate_{o}"].min()
         out[f"max_{o}"] = g[f"rate_{o}"].max()
@@ -349,7 +363,7 @@ NOTES = """* Thresholds are set from the HUMAN side only. The AI-side behaviour 
   --floor-ms 0:2000:250 or --away-ms 1000:30000:1000); 'none' means no setting in the grid kept
   the other folds at or under the target.
 * Folds: assign_session_folds() from PR #30 (adr.replay.folds), the same folds the router's
-  cross-fitting uses; low-effort ids passed explicitly."""
+  cross-fitting uses; low-effort ids read from #30's id file (pilot_data/low_effort_ids.txt)."""
 
 
 def markdown(summary: pd.DataFrame, sel: pd.DataFrame, counts: dict[str, int], meta: dict) -> str:
@@ -362,6 +376,16 @@ def markdown(summary: pd.DataFrame, sel: pd.DataFrame, counts: dict[str, int], m
             f"K={meta['k']} folds by session (seed {meta['seed']}), {meta['low_effort']} "
             "low-effort session(s) spread across folds. Every rate is on one held-out fold; "
             "cells are mean over folds (min-max). Aggregates only."
+        ),
+        "",
+        "Sessions per variant: "
+        + ", ".join(f"{v}: {n}" for v, n in meta["variant_sessions"].items())
+        + ".",
+        "",
+        (
+            "summary.csv's pooled_descriptive_only_* columns pool all folds at a fixed setting; "
+            "they are description only. Choose thresholds from the held-out selection below, "
+            "never from the pooled columns."
         ),
         "",
         (
@@ -462,25 +486,17 @@ def grid(spec: str) -> list[float]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Behaviour thresholds vs honest flag rate (#42)")
+    p = argparse.ArgumentParser(
+        description="Behaviour thresholds vs honest flag rate (#42)", allow_abbrev=False
+    )
     p.add_argument("--data-dir", type=Path, default=ROOT / "pilot_data")
     p.add_argument("--bank", type=Path, default=ROOT / "server" / "pilot_items.json")
     p.add_argument("--out", type=Path, default=ROOT / "results" / "calibration" / "behaviour")
     p.add_argument(
-        "--k", type=int, default=DEFAULT_K, help="folds; default = the shared pilot_folds K"
-    )
-    p.add_argument(
-        "--seed",
-        default=DEFAULT_SEED,
-        help="fold seed string; default = the shared pilot_folds seed",
-    )
-    p.add_argument(
-        "--exclude-sessions",
-        nargs="*",
-        default=list(LOW_EFFORT),
-        metavar="CODE",
-        help="low-effort session code prefixes: spread over folds, and dropped in "
-        "the 'excluding' rows",
+        "--low-effort-file",
+        type=Path,
+        default=LOW_EFFORT_FILE,
+        help="full low-effort session ids, one per line (default: #30's pilot_data file)",
     )
     p.add_argument("--targets", nargs="+", type=float, default=[0.02, 0.05])
     p.add_argument("--floor-ms", type=grid, default=grid("500:2000:250"))
@@ -500,11 +516,12 @@ def main(argv: list[str] | None = None) -> int:
         p.error(f"no finished sessions in {args.data_dir}")
     counts = sanity_check(df, None if args.no_expected else EXPECTED_PILOT)
     sessions = sorted(df["session_id"].unique())
-    low = match_prefixes(sessions, args.exclude_sessions)
-    folds = assign_session_folds(sessions, k=args.k, seed=args.seed, low_effort=sorted(low))
-    variants = {"all": set()}
-    if low:
-        variants["excluding_low_effort"] = low
+    low = low_effort_ids(args.low_effort_file, sessions)
+    # K and seed are always the shared pilot_folds defaults: no per-run override
+    folds = assign_session_folds(sessions, low_effort=low)
+    k = DEFAULT_K
+    variants = {"all": set(), "excluding_low_effort": set(low)}
+    variant_sessions = {v: len(set(sessions) - drop) for v, drop in variants.items()}
     sweep = settings(
         {
             "base_floor_ms": args.floor_ms,
@@ -514,9 +531,9 @@ def main(argv: list[str] | None = None) -> int:
             "paste_min_chars": args.paste_chars,
         }
     )
-    ft = fold_table(df, folds, args.k, sweep, variants)
+    ft = fold_table(df, folds, k, sweep, variants)
     summary = summarise(ft)
-    sel = select(ft, args.targets, args.k)
+    sel = select(ft, args.targets, k)
 
     args.out.mkdir(parents=True, exist_ok=True)
     ft.to_csv(args.out / "folds.csv", index=False)
@@ -525,15 +542,17 @@ def main(argv: list[str] | None = None) -> int:
     meta = {
         "sessions": len(sessions),
         "answers": len(df),
-        "k": args.k,
-        "seed": args.seed,
+        "k": k,
+        "seed": DEFAULT_SEED,
         "low_effort": len(low),
+        "variant_sessions": variant_sessions,
     }
     (args.out / "summary.md").write_text(markdown(summary, sel, counts, meta), encoding="utf-8")
     print(
         f"{len(sessions)} sessions, {len(df)} answers, {len(low)} low-effort; "
-        f"defaults {counts}; {len(sweep)} settings x {args.k} folds -> {args.out}"
+        f"defaults {counts}; {len(sweep)} settings x {k} folds -> {args.out}"
     )
+    print("sessions per variant: " + ", ".join(f"{v}: {n}" for v, n in variant_sessions.items()))
     return 0
 
 

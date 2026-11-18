@@ -12,8 +12,8 @@ from scripts.calibrate_behaviour import (
     Thresholds,
     fold_table,
     load_features,
+    low_effort_ids,
     main,
-    match_prefixes,
     sanity_check,
     score,
     select,
@@ -174,16 +174,35 @@ def test_selection_uses_other_folds_only(pilot):
     assert row["train_rate"] == 0 and row["heldout_rate"] == 0
 
 
-def test_match_prefixes():
-    assert match_prefixes(["d3ba4f10abc", "ffff"], ["d3ba4f10"]) == {"d3ba4f10abc"}
-    with pytest.raises(SystemExit):  # a prefix matching no session stops the run
-        match_prefixes(["d3ba4f10abc", "ffff"], ["d3ba4f10", "0a87374a"])
-    with pytest.raises(SystemExit):  # an ambiguous prefix stops the run
-        match_prefixes(["d3ba4f10abc", "d3ba4f10xyz"], ["d3ba4f10"])
+def test_low_effort_ids_stop_on_missing_empty_or_unknown(tmp_path):
+    sids = ["03aaaaaa", "07aaaaaa", "09aaaaaa"]
+    f = tmp_path / "low.txt"
+    with pytest.raises(SystemExit, match="not found"):  # missing file
+        low_effort_ids(f, sids)
+    f.write_text("# no ids yet\n\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="no session ids"):  # empty file
+        low_effort_ids(f, sids)
+    f.write_text("03aaaaaa\n0a87374a\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="not finished pilot"):  # an id matching no session
+        low_effort_ids(f, sids)
+    with pytest.raises(SystemExit):  # prefixes are not ids
+        low_effort_ids(f, ["03aaaaaabbbb", "0a87374abbbb"])
+    f.write_text("07aaaaaa\n03aaaaaa\n", encoding="utf-8")
+    assert low_effort_ids(f, sids) == ["03aaaaaa", "07aaaaaa"]
 
 
-def test_main_uses_shared_folds_with_low_effort_passed(pilot, tmp_path, monkeypatch):
+def run_main(data, bank, out, low_file, *extra):
+    argv = ["--data-dir", str(data), "--bank", str(bank), "--out", str(out)]
+    argv += ["--low-effort-file", str(low_file), "--no-expected", "--floor-ms", "1000"]
+    argv += ["--per-word-ms", "50,100", "--key-gap-ms", "30", "--away-ms", "2000"]
+    argv += ["--paste-chars", "20", *extra]
+    return main(argv)
+
+
+def test_main_uses_shared_folds_with_low_effort_passed(pilot, tmp_path, monkeypatch, capsys):
     data, bank = pilot
+    low_file = tmp_path / "low_effort_ids.txt"
+    low_file.write_text("07aaaaaa\n03aaaaaa\n", encoding="utf-8")
     calls = []
     real = cal.assign_session_folds
 
@@ -192,49 +211,51 @@ def test_main_uses_shared_folds_with_low_effort_passed(pilot, tmp_path, monkeypa
         return real(session_ids, **kw)
 
     monkeypatch.setattr(cal, "assign_session_folds", spy)
-    argv = ["--data-dir", str(data), "--bank", str(bank), "--out", str(tmp_path / "out")]
-    argv += ["--exclude-sessions", "03aa", "07aa", "--no-expected", "--floor-ms", "1000"]
-    argv += ["--per-word-ms", "100", "--key-gap-ms", "30", "--away-ms", "2000"]
-    argv += ["--paste-chars", "20"]
-    assert main(argv) == 0
+    assert run_main(data, bank, tmp_path / "out", low_file) == 0
     assert len(calls) == 1
     sids, kw = calls[0]
     assert sids == [f"{i:02d}aaaaaa" for i in range(10)]
-    # full ids, passed explicitly (never read from pilot_data/), at the shared defaults
-    assert kw == {"k": DEFAULT_K, "seed": DEFAULT_SEED, "low_effort": ["03aaaaaa", "07aaaaaa"]}
+    # the ids from the file, passed explicitly; K and seed left at the shared defaults
+    assert kw == {"low_effort": ["03aaaaaa", "07aaaaaa"]}
+    assert "sessions per variant: all: 10, excluding_low_effort: 8" in capsys.readouterr().out
+    md = (tmp_path / "out" / "summary.md").read_text(encoding="utf-8")
+    assert "Sessions per variant: all: 10, excluding_low_effort: 8." in md
+    assert f"K={DEFAULT_K} folds by session (seed {DEFAULT_SEED})" in md
+
+
+def test_k_and_seed_cannot_be_overridden(pilot, tmp_path):
+    data, bank = pilot
+    low_file = tmp_path / "low.txt"
+    low_file.write_text("03aaaaaa\n", encoding="utf-8")
+    for flag in (["--k", "5"], ["--seed", "0"]):
+        with pytest.raises(SystemExit):
+            run_main(data, bank, tmp_path / "out", low_file, *flag)
+
+
+def test_missing_low_effort_file_stops_the_run(pilot, tmp_path):
+    data, bank = pilot
+    with pytest.raises(SystemExit, match="STOP"):
+        run_main(data, bank, tmp_path / "out", tmp_path / "absent.txt")
+
+
+def test_pooled_columns_are_labelled_descriptive(pilot, tmp_path):
+    data, bank = pilot
+    low_file = tmp_path / "low.txt"
+    low_file.write_text("03aaaaaa\n", encoding="utf-8")
+    assert run_main(data, bank, tmp_path / "out", low_file) == 0
+    cols = pd.read_csv(tmp_path / "out" / "summary.csv").columns
+    assert not [c for c in cols if c.startswith("pooled_") and "descriptive_only" not in c]
+    assert "pooled_descriptive_only_too_fast" in cols
+    md = (tmp_path / "out" / "summary.md").read_text(encoding="utf-8")
+    assert "never from the pooled columns" in md
 
 
 def test_outputs_hold_no_text(pilot, tmp_path):
     data, bank = pilot
     out = tmp_path / "out"
-    assert (
-        main(
-            [
-                "--data-dir",
-                str(data),
-                "--bank",
-                str(bank),
-                "--out",
-                str(out),
-                "--k",
-                "2",
-                "--exclude-sessions",
-                "03aaaaaa",
-                "--no-expected",
-                "--floor-ms",
-                "1000",
-                "--per-word-ms",
-                "50,100",
-                "--key-gap-ms",
-                "30",
-                "--away-ms",
-                "2000",
-                "--paste-chars",
-                "20",
-            ]
-        )
-        == 0
-    )
+    low_file = tmp_path / "low.txt"
+    low_file.write_text("03aaaaaa\n", encoding="utf-8")
+    assert run_main(data, bank, out, low_file) == 0
     for name in ("folds.csv", "summary.csv", "selection.csv", "summary.md"):
         text = (out / name).read_text(encoding="utf-8")
         assert "SECRET" not in text and "passage" not in text.lower()
