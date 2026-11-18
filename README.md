@@ -29,10 +29,12 @@ pytest                                                    # all tests should pas
 | LLM client | `adr/harness/llm_client.py` | Anthropic, OpenAI, Google, OpenAI-compatible (open-weight). Disk cache, weekly spend cap, retries (429 / `RESOURCE_EXHAUSTED` retried, PR #20). |
 | Copy-paste attacker (step #9) | `adr/harness/copy_paste.py`, `prompts.py`, `parse.py` | Levels L0, L1, L2, L4. |
 | Document-upload attacker (step #20; PR #4, #17, #21) | `adr/harness/doc_upload.py`, `pdf_render.py` | Assessment as PDFs with traps in the invisible text layer; `--max-tokens`, `--questions-per-doc` / `--docs-per-bank`. Anthropic, OpenAI, Google only. |
+| Browser-agent attacker (step #22, PR #15) | `adr/harness/browser_agent.py`, `scripts/run_browser_agent.py` | Drives the real page in Chromium (Playwright); reads it as innerText or the accessibility tree, never pixels. |
 | Router (step #13) | `adr/router/` | SPRT score, Chernoff-rule check selection, burden and false-flag penalties, per-mechanism cap (a fraction of A), escalation, random tie-breaks. |
 | Replay on logged outcomes (step #27, PR #9) | `adr/replay/`, `scripts/run_replay.py` | Each simulated respondent copies one real logged session. Bootstrap CIs over donor sessions. Splits: train (map), calibration (default evaluation, 30% of items), held-out (only with `--final`). |
 | Baselines 1–4 (step #32, PR #10) | `adr/baselines/` | Best single mechanism (train map), all checks, fixed plan, random; `--compare` and the budget curve. |
 | Failure-map builder and AI-only mode (PR #22, #24) | `adr/map/`, `scripts/build_failure_map.py`, `plot_failure_map.py` | See "Build the failure-mode map" below. AI-only maps (`--ai-only`) are provisional and must not feed the router. |
+| Provisional-map guard (PR #25) | `adr/router/map_guard.py` | `run_replay.py --map` refuses an `-ai-only` map or any cell with zero human counts unless `--allow-provisional-map` is passed. |
 | Telemetry and behaviour check (PR #11, #14) | `frontend/telemetry.js`, `adr/mechanisms/behaviour.py` | Per-question counts and timings, never keys typed; outcomes paste / focus_loss / too_fast / normal. |
 | Pilot materials (PR #12) | `docs/pilot/`, `server/` (`ADR_PILOT=1`), `server/clean.py` | Consent, debrief, withdraw, recruitment; saved sessions cleaned into outcome rows. |
 | First real gpt-mini runs and M2 figure (PR #23) | `results/m2/`, `scripts/m2_decoy_figure.py`, `item_difficulty.py` | MMLU and ARC, copy-paste and doc upload at L0, plus repeated runs. Inputs and commands: `results/m2/README.md`. |
@@ -40,9 +42,6 @@ pytest                                                    # all tests should pas
 
 Also on `main`: Archana's loaders and mechanisms (PR #3, #7, #8, #19) and Harshini's respondent page and
 mechanism injection (PR #1, #6) and paper skeleton (PR #18).
-
-**In review:** browser-agent attacker (step #22, PR #15), provisional-map guard for the router and
-replay (PR #25).
 
 **Not started:** baseline 5 (step #33), L3 retry attacker (step #36).
 
@@ -57,6 +56,10 @@ python scripts/run_copy_paste.py --stub --models claude-small
 
 # Document-upload attacker: the 4 items as one PDF with invisible traps (same flags):
 python scripts/run_doc_upload.py --stub --fake
+
+# Browser-agent attacker: a model fills in the real web page, reading it as text or as the
+# accessibility tree (needs the server and browser extras):
+python scripts/run_browser_agent.py --stub --fake --observe text   # or --observe a11y
 
 # Router vs early baselines on SYNTHETIC data (about 20 s):
 python scripts/router_synthetic_demo.py
@@ -88,6 +91,18 @@ pytest tests/test_frontend_copy.py                    # skipped if Playwright is
 
 Outputs: `results/outcomes/<run_id>.parquet` (the outcome table) and
 `results/runs/<run_id>/` (config, every parsed response, any errors).
+
+**Browser-agent behaviour rows depend on the run settings, not just the attacker.** The
+behaviour check scores the telemetry the page records, and two settings change it:
+
+- `--typing instant` (the default) enters text with Playwright's `fill()`, which fires no key or
+  paste events. An open-text answer of 20 or more characters then scores `paste` (untyped text).
+  Use `--typing keys` to type key by key.
+- Time on item includes the model's latency. A rerun served from the LLM cache answers almost at
+  once, so it tends to score `too_fast`.
+
+Compare behaviour rows only across runs with the same typing mode and cache state. A
+`--dwell-ms` flag (wait a set time on each question) may be added later.
 
 ### Build the failure-mode map
 
