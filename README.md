@@ -92,6 +92,18 @@ pytest tests/test_frontend_copy.py                    # skipped if Playwright is
 Outputs: `results/outcomes/<run_id>.parquet` (the outcome table) and
 `results/runs/<run_id>/` (config, every parsed response, any errors).
 
+**Browser-agent behaviour rows depend on the run settings, not just the attacker.** The
+behaviour check scores the telemetry the page records, and two settings change it:
+
+- `--typing instant` (the default) enters text with Playwright's `fill()`, which fires no key or
+  paste events. An open-text answer of 20 or more characters then scores `paste` (untyped text).
+  Use `--typing keys` to type key by key.
+- Time on item includes the model's latency. A rerun served from the LLM cache answers almost at
+  once, so it tends to score `too_fast`.
+
+Compare behaviour rows only across runs with the same typing mode and cache state. A
+`--dwell-ms` flag (wait a set time on each question) may be added later.
+
 ### Build the failure-mode map
 
 After AI and human outcome Parquet files are available, build the map and its pooled SVG figure:

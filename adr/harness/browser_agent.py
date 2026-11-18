@@ -168,13 +168,21 @@ def _type(page: Any, locator: Any, text: str, cfg: BrowserAgentConfig) -> None:
         locator.press_sequentially(text, delay=cfg.key_delay_ms)
 
 
+def number_text(answer: float) -> str:
+    """`answer` as text for a number box, exactly: format(x, "g") keeps 6 significant digits
+    (1234567 -> "1.23457e+06"). Whole numbers print without ".0"; others as repr, the shortest
+    text that reads back as the same float."""
+    answer = float(answer)
+    return str(int(answer)) if answer.is_integer() else repr(answer)
+
+
 def fill(page: Any, item_type: str, answer: Any, cfg: BrowserAgentConfig) -> None:
     """Enter `answer` (already parsed) the way a person would, with the page's own controls."""
     area = page.locator("#answer")
     if item_type in ("mcq", "likert"):
         area.locator("label").nth(answer).click()
     elif item_type == "numeric":
-        _type(page, area.locator("input[type=number]"), format(answer, "g"), cfg)
+        _type(page, area.locator("input[type=number]"), number_text(answer), cfg)
     elif item_type == "open_text":
         _type(page, area.locator("textarea"), str(answer), cfg)
     elif item_type == "ranking":

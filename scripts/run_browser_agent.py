@@ -13,6 +13,14 @@ server/stub_items.json) and --assessment picks assessments in it by id (default:
     --hide clip|clear|clip_aria   how the page hides trap text (ADR_HIDE)
 Needs the server and browser extras: pip install -e ".[server,browser]" and
 python -m playwright install chromium.
+
+Behaviour rows depend on typing mode and cache state, not just the attacker:
+    --typing instant uses fill(), which fires no key or paste events, so an open-text answer
+        of 20+ characters scores "paste" (untyped text). --typing keys types key by key.
+    Time on item includes model latency, so a rerun served from the LLM cache tends to score
+        "too_fast".
+Compare behaviour rows only across runs with the same --typing and cache state. A --dwell-ms
+flag (wait a set time on each question) may be added later.
 """
 
 from __future__ import annotations
