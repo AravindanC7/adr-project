@@ -10,7 +10,7 @@ import pytest
 
 from adr.contracts import Item
 from adr.mechanisms.opinion_trap import pair_outcome, pair_side, score_reverse_pairs
-from server.clean import clean, pair_leaning
+from server.clean import clean
 from tests.test_clean import BANK, by_check, full, session, setup  # noqa: F401  (fixture)
 
 ITEMS = {d["item_id"]: Item.model_validate(d) for d in BANK["items"]}
@@ -19,9 +19,10 @@ ANSWERS = [0, 1, 2, 3, 4, None, "4", 7, -1, 2.0]
 PLAUSIBLE = {"ipip:e1": "plausible", "ipip:e2": "plausible"}
 
 
-@pytest.mark.parametrize("answer", ANSWERS)
-def test_pair_side_matches_the_pilot_cleaner(answer):
-    assert pair_side(answer, 5) == pair_leaning(answer, 5)
+# The pilot cleaner calls pair_outcome itself now, so pin the side of every answer here instead.
+@pytest.mark.parametrize("answer, side", list(zip(ANSWERS, [-1, -1, 0, 1, 1, 0, 0, 0, 0, 0])))
+def test_pair_side(answer, side):
+    assert pair_side(answer, 5) == side
 
 
 @pytest.mark.parametrize("e1, e2", list(itertools.product(ANSWERS, ANSWERS)))

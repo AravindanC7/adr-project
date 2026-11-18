@@ -20,9 +20,9 @@ Rows per answered item (all respondent_kind="human", data_origin=pilot|dry_run)
   * for reverse-keyed IPIP pairs, the SECOND item of a pair is "contradiction" when both
     answers lean the same way (both agree, or both disagree); if either answer is neutral,
     missing, non-integer or out of range the second item gets no opinion-trap row at all
-    (no observation). PROVISIONAL rule: the mechanism
-    itself doesn't score pairs yet (adr/mechanisms/opinion_trap.py), so Archana should confirm
-    it before #40 uses it. --no-pairs turns it off.
+    (no observation); "implausible" wins over "contradiction". The rule is the shared
+    pair_outcome in adr/mechanisms/opinion_trap.py, the same one the AI runs use, so human and AI
+    pairs score the same way. PROVISIONAL until Archana confirms it. --no-pairs turns it off.
   * the writing-style check (high / mid / low) for every open-text answer, scored here against
     the ASURRE training profile (scripts/prepare_style_profile.py). Style is passive: it observes
     every open-text answer whatever check was served, so it doesn't use the bank's
@@ -59,7 +59,7 @@ from adr.contracts import (
     parse_variant_id,
 )
 from adr.contracts.outcome import write_outcomes
-from adr.mechanisms.opinion_trap import OpinionTrapMechanism
+from adr.mechanisms.opinion_trap import OpinionTrapMechanism, pair_outcome
 from adr.mechanisms.style import StyleMechanism, StyleProfile, load_style_profile
 from server.store import read_session
 
@@ -91,20 +91,6 @@ def load_bank(path: Path) -> tuple[dict[str, Item], dict[str, HumanDistribution]
     dists = {d["key"]: HumanDistribution(**d) for d in raw.get("human_distributions", [])}
     assessment_type = {a["assessment_id"]: a["assessment_type"] for a in raw["assessments"]}
     return items, dists, assessment_type
-
-
-def leaning(answer: int, n_options: int) -> int:
-    """-1 disagree side, 0 middle, +1 agree side, for an option index on an agree scale."""
-    middle = (n_options - 1) / 2
-    return 0 if answer == middle else (1 if answer > middle else -1)
-
-
-def pair_leaning(answer: Any, n_options: int) -> int:
-    """leaning() for one answer of a reverse-keyed pair; 0 when neutral, missing, non-integer or
-    out of range, so the pair gives no observation."""
-    if type(answer) is not int or not 0 <= answer < n_options:
-        return 0
-    return leaning(answer, n_options)
 
 
 def outcome_row(
@@ -197,14 +183,9 @@ def clean(
                 partner = item.reverse_keyed_with
                 if pairs and partner and partner in answers:
                     n = len(item.options or [])
-                    sides = [pair_leaning(x, n) for x in (rec["answer"], answers[partner])]
-                    if 0 in sides:
-                        pass  # neutral or invalid answer in the pair: no observation, no row
-                    elif sides[0] == sides[1] and outcome != "implausible":
-                        found.append((rendered.variant_id, "contradiction"))
-                    else:
-                        found.append((rendered.variant_id, outcome))
-                else:
+                    # None = neutral or invalid answer in the pair: no observation, no row
+                    outcome = pair_outcome(rec["answer"], answers[partner], n, outcome)
+                if outcome is not None:
                     found.append((rendered.variant_id, outcome))
 
             if style is not None and item.item_type == "open_text":
