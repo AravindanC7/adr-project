@@ -1,15 +1,15 @@
-level,check,source,n_items,n,n_flagged,rate,ci_low,ci_high
-L0,"Wang: prompt injection, closed-ended",this run,12,60,19,0.3167,0.1,0.5667
-L0,"Wang: prompt injection, open-ended",this run,4,20,17,0.85,0.55,1.0
-L0,Westwood: instructed-response item,this run,3,15,0,0.0,0.0,0.0
-L0,Westwood: bogus item,this run,3,15,0,0.0,0.0,0.0
-L0,Westwood: trap question,this run,3,15,0,0.0,0.0,0.0
-L2,"Wang: prompt injection, closed-ended",this run,12,60,0,0.0,0.0,0.0
-L2,"Wang: prompt injection, open-ended",this run,4,20,0,0.0,0.0,0.0
-L2,Westwood: instructed-response item,this run,3,15,0,0.0,0.0,0.0
-L2,Westwood: bogus item,this run,3,15,3,0.2,0.0,0.4667
-L2,Westwood: trap question,this run,3,15,0,0.0,0.0,0.0
-L0,Our decoy (MMLU),RQ4 v1-cp-L0-quiz-mmlu-200-s5,200,1000,639,0.639,0.577,0.701
-L2,Our decoy (MMLU),RQ4 v1-cp-L2-quiz-mmlu-200-s5,200,1000,107,0.107,0.069,0.15
-L0,Our decoy (ARC),RQ4 v1-cp-L0-quiz-arc-200-s5,200,1000,508,0.508,0.445,0.572
-L2,Our decoy (ARC),RQ4 v1-cp-L2-quiz-arc-200-s5,200,1000,22,0.022,0.006,0.043
+level,check,source,n_items,n,n_flagged,rate,ci_low,ci_high,rate_alt,ci_alt_low,ci_alt_high
+L0,"Wang: prompt injection, closed-ended",this run,12,60,19,0.3167,0.1,0.5667,,,
+L0,"Wang: prompt injection, open-ended",this run,4,20,17,0.85,0.55,1.0,,,
+L0,Westwood: instructed-response item,this run,3,15,0,0.0,0.0,0.0,,,
+L0,Westwood: bogus item,this run,3,15,0,0.0,0.0,0.0,0.0,0.0,0.0
+L0,Westwood: trap question,this run,3,15,0,0.0,0.0,0.0,,,
+L2,"Wang: prompt injection, closed-ended",this run,12,60,0,0.0,0.0,0.0,,,
+L2,"Wang: prompt injection, open-ended",this run,4,20,0,0.0,0.0,0.0,,,
+L2,Westwood: instructed-response item,this run,3,15,0,0.0,0.0,0.0,,,
+L2,Westwood: bogus item,this run,3,15,0,0.0,0.0,0.0,0.2,0.0,0.4667
+L2,Westwood: trap question,this run,3,15,0,0.0,0.0,0.0,,,
+L0,Our decoy (MMLU),RQ4 v1-cp-L0-quiz-mmlu-200-s5,200,1000,639,0.639,0.577,0.701,,,
+L2,Our decoy (MMLU),RQ4 v1-cp-L2-quiz-mmlu-200-s5,200,1000,107,0.107,0.069,0.15,,,
+L0,Our decoy (ARC),RQ4 v1-cp-L0-quiz-arc-200-s5,200,1000,508,0.508,0.445,0.572,,,
+L2,Our decoy (ARC),RQ4 v1-cp-L2-quiz-arc-200-s5,200,1000,22,0.022,0.006,0.043,,,

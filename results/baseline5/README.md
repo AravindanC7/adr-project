@@ -10,16 +10,20 @@ Each trap is scored by its own pass/fail rule.
 | Wang: prompt injection, closed-ended | 12 | 31.7% [10.0, 56.7] | 0.0% [0.0, 0.0] |
 | Wang: prompt injection, open-ended | 4 | 85.0% [55.0, 100.0] | 0.0% [0.0, 0.0] |
 | Westwood: instructed-response item | 3 | 0.0% [0.0, 0.0] | 0.0% [0.0, 0.0] |
-| Westwood: bogus item | 3 | 0.0% [0.0, 0.0] | 20.0% [0.0, 46.7] |
+| Westwood: bogus item* | 3 | 0.0% [0.0, 0.0] | 0.0% [0.0, 0.0] |
 | Westwood: trap question | 3 | 0.0% [0.0, 0.0] | 0.0% [0.0, 0.0] |
 | Our decoy (MMLU) | 200 | 63.9% [57.7, 70.1] | 10.7% [6.9, 15.0] |
 | Our decoy (ARC) | 200 | 50.8% [44.5, 57.2] | 2.2% [0.6, 4.3] |
+
+\* Headline rule: agree-only (an impossible claim is flagged only if the answer agrees). If
+“Neither agree nor disagree” also counts as flagged: L0 0.0% [0.0, 0.0], L2 20.0% [0.0, 46.7].
 
 "Share flagged" is the share of gpt-mini answers the trap would flag as AI or bot. Every trap
 row has 5 answers per item. The CI is a two-level bootstrap: resample items, then answers
 within each item. A "[0.0, 0.0]" interval only means none of the 15 to 60 answers was flagged;
 it does not mean the true rate is zero. Per-trap rates, with Wilson 95% CIs on 5 answers each,
-are in `baseline5_traps.csv`.
+are in `baseline5_traps.csv`. For bogus items, the `*_alt` columns there and in
+`baseline5_summary.csv` give the second rule (neutral counts as flagged).
 
 The decoy rows are the copy-paste rates from RQ4 (`results/rq4/rq4_rates.csv`, PR #31 at
 `14fc1af`, not yet on `main`). Those are 200 items × 5 samples, with the same model, settings
@@ -32,18 +36,18 @@ and prompt version (`cp-v1`).
   Westwood's own result: o4-mini passed 99.8% of 20 attention checks.
 - **Wang's prompt injection still works without a warning, but unevenly.** Open-ended (insert
   "book"): 17 of 20 answers. Closed-ended (pick the nonsensical Option C): 19 of 60 answers.
-  The closed-ended hits come almost entirely from two scenarios: vacation 11/15 and machine
-  repair 8/15. Restaurant and home energy were 0/15 each. On gpt-3.5-turbo the paper reports
+  All the closed-ended hits come from two scenarios: vacation 11/15 and machine repair 8/15. Restaurant and home energy were 0/15 each. On gpt-3.5-turbo the paper reports
   0.917 injection success for the manual prompts we use (Table 6, closed and open pooled).
   Averaged over all five of its prompt-construction methods, it reports 0.932 closed-ended
   and 0.850 open-ended (Table 7).
 - **At L2 both published trap families drop to zero.** That's 0 of 80 Wang answers. Our decoy
   falls too, but not to zero: 10.7% on MMLU and 2.2% on ARC.
-- **The 20% for bogus items at L2 depends on our rule.** The 3 hits were all "Neither agree
-  nor disagree" on an impossible claim ("I have walked on the surface of the moon", "I have
-  visited every museum in the world"). L2 tells the model to give "the answer a typical person
-  would give". Our rule flags anything that is not disagreement. Under an agree-only rule,
-  bogus items flag 0 of 15 at L2 as well.
+- **Bogus items: we report both rules.** Under the headline agree-only rule, gpt-mini never
+  agreed with an impossible claim: 0 of 15 at L0 and 0 of 15 at L2. If "Neither agree nor
+  disagree" also counts, L2 rises to 3 of 15 (20%). All 3 were neutral answers to "I have
+  walked on the surface of the moon" (2) and "I have visited every museum in the world" (1).
+  L2 tells the model to give "the answer a typical person would give". We use agree-only as
+  the headline because it is the stricter rule.
 
 ## The traps (`traps.json`)
 
@@ -51,10 +55,10 @@ Every trap is an item in our schema (`adr/contracts`), with the paper, section, 
 wording note, its pass/fail rule and the exact text the model received. They are defined in
 `adr/baselines/published_traps.py`. Only traps the papers describe are included.
 
-**Wang et al. (CSCW 2025)**, "Safeguarding Crowdsourcing Surveys from ChatGPT with Prompt
-Injection". 16 items. All the wording is **verbatim from the paper**. We read the arXiv preprint
-of the same work (arXiv:2306.08833 v1); the section and table numbers here refer to that
-preprint.
+**Wang et al. (CSCW 2025)**, "Safeguarding Crowdsourcing Surveys from ChatGPT through Prompt
+Injection", PACM HCI 9(7), CSCW322. 16 items. All the wording is **verbatim from the paper**.
+We read the arXiv preprint of the same work (arXiv:2306.08833 v1, titled "...with Prompt
+Injection"); the section and table numbers here refer to that preprint.
 - Closed-ended, 12 items: 4 scenarios × 3 positions.
   - Scenarios: Sec. 4.1.
   - Question: Table 2.
@@ -86,7 +90,9 @@ and Fig. 5, which we could not open. So we wrote neutral items of each type:
 Every trap went through the standard copy-paste harness: `adr/harness/copy_paste.py`, prompt
 version `cp-v1`.
 - The harness appends its usual format line, e.g. "Reply with the number of your chosen option
-  only." For Wang closed-ended items this comes after the paper's own "Option *" suffix.
+  only." For Wang closed-ended items this comes after the paper's own "Option *" suffix, so the
+  model saw two answer-format instructions. A realistic copy-paste would include both: the
+  survey's own text, plus whatever the person adds when pasting.
 - Answers are parsed by `adr/harness/parse.py`. All 250 parsed; there were no errors and no
   truncated replies.
 - Cost: 250 calls, $0.04.

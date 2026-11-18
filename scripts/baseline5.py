@@ -55,6 +55,7 @@ def cmd_build(_args) -> None:
     catalog = [{
         "trap_id": t.trap_id, "paper": t.paper, "section": t.section, "trap_type": t.trap_type,
         "wording": t.wording, "rule": t.rule, "flag": t.flag,
+        **({"rule_alt": t.rule_alt, "flag_alt": t.flag_alt} if t.flag_alt else {}),
         "item": t.item.model_dump(mode="json", exclude_defaults=True),
         "copied_text": t.copy_text,
     } for t in traps]
@@ -140,28 +141,38 @@ def cmd_report(args) -> None:
     for level in LEVELS:
         answers = load_answers(level)
         groups: dict[str, list[list[int]]] = {}
+        groups_alt: dict[str, list[list[int]]] = {}
         for t in traps:
             rs = answers.get(t.trap_id, [])
             hits = [int(flags(t, r["answer"])) for r in rs]
             lo, hi = wilson(sum(hits), len(hits))
-            per_trap.append({
+            row = {
                 "level": level, "trap_id": t.trap_id, "paper": t.paper, "section": t.section,
                 "trap_type": t.trap_type, "wording": t.wording, "rule": t.rule,
                 "n": len(hits), "n_flagged": sum(hits),
                 "n_unparsed": sum(r["answer"] is None for r in rs),
                 "rate": round(sum(hits) / len(hits), 4) if hits else "",
-                "ci_low": round(lo, 4), "ci_high": round(hi, 4),
-            })
+                "ci_low": round(lo, 4), "ci_high": round(hi, 4), **_NO_ALT,
+                "rule_alt": "", "n_flagged_alt": "",
+            }
+            if t.flag_alt and hits:  # second rule (bogus items: neutral counts as flagged)
+                alt = [int(flags(t, r["answer"], alt=True)) for r in rs]
+                alo, ahi = wilson(sum(alt), len(alt))
+                row.update(rule_alt=t.rule_alt, n_flagged_alt=sum(alt),
+                           rate_alt=round(sum(alt) / len(alt), 4), ci_alt_low=round(alo, 4),
+                           ci_alt_high=round(ahi, 4))
+                groups_alt.setdefault(family(t), []).append(alt)
+            per_trap.append(row)
             if hits:
                 groups.setdefault(family(t), []).append(hits)
         for fam, per_item in groups.items():
-            k = sum(map(sum, per_item))
-            n = sum(map(len, per_item))
-            lo, hi = bootstrap(per_item)
-            summary.append({"level": level, "check": fam, "source": "this run",
-                            "n_items": len(per_item), "n": n, "n_flagged": k,
-                            "rate": round(k / n, 4), "ci_low": round(lo, 4),
-                            "ci_high": round(hi, 4)})
+            row = {"level": level, "check": fam, "source": "this run", **_pooled(per_item),
+                   **_NO_ALT}
+            if fam in groups_alt:
+                alt = _pooled(groups_alt[fam])
+                row.update(rate_alt=alt["rate"], ci_alt_low=alt["ci_low"],
+                           ci_alt_high=alt["ci_high"])
+            summary.append(row)
     if args.rq4:
         with open(args.rq4, encoding="utf-8") as f:
             for r in csv.DictReader(f):
@@ -171,11 +182,21 @@ def cmd_report(args) -> None:
                         "source": f"RQ4 {r['run_id']}", "n_items": int(r["n_items"]),
                         "n": int(r["n_obs"]), "n_flagged": int(r["picked_decoy"]),
                         "rate": float(r["rate"]), "ci_low": float(r["ci_low"]),
-                        "ci_high": float(r["ci_high"])})
+                        "ci_high": float(r["ci_high"]), **_NO_ALT})
     _write_csv(OUT / "baseline5_traps.csv", per_trap)
     _write_csv(OUT / "baseline5_summary.csv", summary)
     (OUT / "table.md").write_text(_table(summary), encoding="utf-8")
     print(_table(summary))
+
+
+_NO_ALT = {"rate_alt": "", "ci_alt_low": "", "ci_alt_high": ""}
+
+
+def _pooled(per_item: list[list[int]]) -> dict:
+    k, n = sum(map(sum, per_item)), sum(map(len, per_item))
+    lo, hi = bootstrap(per_item)
+    return {"n_items": len(per_item), "n": n, "n_flagged": k, "rate": round(k / n, 4),
+            "ci_low": round(lo, 4), "ci_high": round(hi, 4)}
 
 
 def _write_csv(path: Path, rows: list[dict]) -> None:
@@ -185,20 +206,32 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
         w.writerows(rows)
 
 
-def _pct(r: dict) -> str:
-    return f"{100 * r['rate']:.1f}% [{100 * r['ci_low']:.1f}, {100 * r['ci_high']:.1f}]"
+def _pct(rate: float, lo: float, hi: float) -> str:
+    return f"{100 * rate:.1f}% [{100 * lo:.1f}, {100 * hi:.1f}]"
 
 
 def _table(summary: list[dict]) -> str:
+    """Headline rule in the table; a check with a second rule gets a footnote with its rates."""
     checks = list(dict.fromkeys(r["check"] for r in summary))
     by = {(r["check"], r["level"]): r for r in summary}
     lines = ["| Check | Items | L0: share flagged [95% CI] | L2: share flagged [95% CI] |",
              "|---|---|---|---|"]
+    notes = []
     for c in checks:
-        cells = [_pct(by[(c, lv)]) if (c, lv) in by else "n/a" for lv in LEVELS]
-        n_items = next(by[(c, lv)]["n_items"] for lv in LEVELS if (c, lv) in by)
-        lines.append(f"| {c} | {n_items} | {cells[0]} | {cells[1]} |")
-    return "\n".join(lines) + "\n"
+        rows = [by.get((c, lv)) for lv in LEVELS]
+        cells = [_pct(r["rate"], r["ci_low"], r["ci_high"]) if r else "n/a" for r in rows]
+        n_items = next(r["n_items"] for r in rows if r)
+        label = c
+        if any(r and r["rate_alt"] != "" for r in rows):
+            mark = "*" * (len(notes) + 1)
+            label += mark
+            alt = [_pct(r["rate_alt"], r["ci_alt_low"], r["ci_alt_high"]) if r else "n/a"
+                   for r in rows]
+            notes.append(f"{mark} Headline rule: agree-only (an impossible claim is flagged "
+                         f"only if the answer agrees). If “Neither agree nor disagree” "
+                         f"also counts as flagged: L0 {alt[0]}, L2 {alt[1]}.")
+        lines.append(f"| {label} | {n_items} | {cells[0]} | {cells[1]} |")
+    return "\n".join(lines) + "\n" + "".join(f"\n{n}\n" for n in notes)
 
 
 def main() -> None:
