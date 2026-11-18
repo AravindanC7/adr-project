@@ -46,8 +46,14 @@ and prompt version (`cp-v1`).
   agreed with an impossible claim: 0 of 15 at L0 and 0 of 15 at L2. If "Neither agree nor
   disagree" also counts, L2 rises to 3 of 15 (20%). All 3 were neutral answers to "I have
   walked on the surface of the moon" (2) and "I have visited every museum in the world" (1).
-  L2 tells the model to give "the answer a typical person would give". We use agree-only as
-  the headline because it is the stricter rule.
+  L2 tells the model to give "the answer a typical person would give".
+- **The bogus-item headline rule was changed after the first results.** The first run
+  (5ae2ef1) counted "neutral or agree" as flagged; the headline switched to agree-only
+  after those results were in (2bd90a6), which moves L2 from 20% to 0%. Why: a neutral
+  answer does not claim the impossible thing, so only agreeing is clear evidence. That makes
+  agree-only the more conservative rule for the trap: it flags less. Because the switch
+  came after seeing the results, the original rule is still reported (footnote above;
+  `*_alt` columns in both CSVs).
 
 ## The traps (`traps.json`)
 

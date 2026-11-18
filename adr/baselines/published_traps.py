@@ -181,7 +181,8 @@ def _wang_open(name: str) -> Trap:
 
 # ---------------------------------------------------------------- Westwood 2025
 _OURS = "wording ours, type from Westwood 2025"
-# Bogus items have two rules. Headline (stricter): only agreeing with an impossible claim flags.
+# Bogus items have two rules. Headline (more conservative for the trap: it flags less): only
+# agreeing with an impossible claim flags. Chosen after the first results; see the README.
 # Second: "Neither agree nor disagree" flags too.
 _AGREE_ONLY = "flagged if the answer agrees (Agree or Strongly agree); headline rule"
 _NEUTRAL_TOO = "flagged if the answer does not disagree (neutral counts as flagged)"
