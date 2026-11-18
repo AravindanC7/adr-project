@@ -1,22 +1,25 @@
-"""Person-level cross-fitting: the review threshold from replayed honest sessions (step #42).
+"""Session-level cross-fitting: the review threshold from replayed honest sessions (step #42).
 
 Owner: Arav. Used by scripts/run_real_router.py once pilot rows exist. Matches the mid-term
 report: "threshold from replayed honest sessions, built by resampling the pilot's per-check
 outcomes".
 
-Honest people are the pilot sessions (data_origin "pilot"); one session_id = one person. People
-are split into K folds (fixed seed, sizes as equal as possible). For each fold k,
+Honest sessions are the pilot sessions (data_origin "pilot"), one per pilot session_id. Note: one
+person may span sessions (e.g. someone who started over); sessions are the unit throughout, so
+the folds and the bootstrap treat such sessions as independent. Sessions are split into K folds
+(fixed seed, sizes as equal as possible; low-effort sessions, if listed, are spread across the
+folds first). For each fold k,
 map_k = Archana's builder in STRICT mode on the AI train rows plus the human rows of the OTHER
 folds only (the #25 guard refuses provisional maps). Then:
 
-  1. Out-of-fold scores: each real person in fold k is replayed once, from their own session,
-     with map_k: a map that never saw them. Pooled over folds: one honest score per person.
+  1. Out-of-fold scores: each real session in fold k is replayed once, from its own rows, with
+     map_k: a map that never saw it. Pooled over folds: one honest score per session.
   2. Resampled honest sessions: N synthetic sessions per fold, each check's outcome drawn (with
-     replacement) from fold k's people only (same item, else same item type), scored with map_k.
+     replacement) from fold k's sessions only (same item, else same item type), scored with map_k.
      Pooled over folds (K x N).
   3. Thresholds: A_1% and A_5% = the smallest threshold that pauses at most 1% / 5% of the
      resampled pool; A_max = the lowest threshold that pauses none of the real out-of-fold
-     people. AI sessions are scored with every map_k; TPR(A) = share of (session, fold) scores
+     sessions. AI sessions are scored with every map_k; TPR(A) = share of (session, fold) scores
      at or above A.
 
 Session score. A session's score is the highest running SPRT score it reaches when replayed with
@@ -24,8 +27,9 @@ pausing switched off. Pausing at threshold A then happens exactly when score >= 
 check-by-check path up to the first crossing does not depend on A: the evidence cap and the
 escalation point are held at their nominal values in nats (score_config / deploy_config).
 
-CIs: the bootstrap resamples PEOPLE (and AI sessions), regenerates the resampled honest sessions
-from the drawn people, and recomputes every threshold and rate. The fold maps are not refitted.
+CIs: the bootstrap resamples honest SESSIONS (and AI sessions), regenerates the resampled honest
+sessions from the drawn ones, and recomputes every threshold and rate. The fold maps are not
+refitted.
 """
 
 from __future__ import annotations
@@ -57,45 +61,55 @@ from adr.router.map_guard import check_router_map
 from adr.router.sprt import wald_thresholds
 
 UNREACHABLE = 1e6  # review threshold while scoring: never reached, so nothing pauses
-MIN_TAIL_PEOPLE = 3  # warn when fewer real people reach a threshold
+MIN_TAIL_SESSIONS = 3  # warn when fewer real sessions reach a threshold
 HONEST = Group.human("pilot")
 
 PolicyFactory = Callable[[FailureMap, RouterConfig], Router]
 
 
 # ------------------------------------------------------------------ folds and maps
-def person_folds(people: Sequence[str], k: int, seed: int) -> list[list[str]]:
-    """Split people into k folds: shuffled with a fixed seed, dealt round-robin, so fold sizes
-    differ by at most one and every person is in exactly one fold."""
-    unique = sorted(set(people))
+def session_folds(
+    sessions: Sequence[str], k: int, seed: int, stratum: Sequence[str] = ()
+) -> list[list[str]]:
+    """Split sessions into k folds with a fixed seed, every session in exactly one fold.
+
+    Sessions in `stratum` (e.g. the low-effort sessions) are shuffled and dealt round-robin
+    first, then the rest continue the same deal, so the stratum is spread across the folds (at
+    most one apart) and fold sizes still differ by at most one. With no stratum this is the
+    plain shuffled deal."""
+    unique = sorted(set(sessions))
     if k < 2:
         raise ValueError("need at least 2 folds")
     if len(unique) < k:
-        raise ValueError(f"{len(unique)} people cannot fill {k} folds")
-    random.Random(f"crossfit:{seed}").shuffle(unique)
+        raise ValueError(f"{len(unique)} sessions cannot fill {k} folds")
+    strat = set(stratum) & set(unique)
+    first = [s for s in unique if s in strat]
+    rest = [s for s in unique if s not in strat]
+    random.Random(f"crossfit:{seed}:stratum").shuffle(first)
+    random.Random(f"crossfit:{seed}").shuffle(rest)
     folds: list[list[str]] = [[] for _ in range(k)]
-    for i, person in enumerate(unique):
-        folds[i % k].append(person)
+    for i, session in enumerate(first + rest):
+        folds[i % k].append(session)
     return [sorted(f) for f in folds]
 
 
 def fold_map(
     ai_rows: pd.DataFrame,
     human_rows: pd.DataFrame,
-    held_out_people: Sequence[str],
+    held_out_sessions: Sequence[str],
     version: str,
     n_bootstrap: int = 200,
     seed: int = 34,
 ) -> FailureMap:
     """map_k: the strict builder on the AI rows plus the human rows of everyone NOT held out."""
-    keep = ~human_rows["session_id"].isin(set(held_out_people))
+    keep = ~human_rows["session_id"].isin(set(held_out_sessions))
     frame = pd.concat([ai_rows, human_rows[keep]], ignore_index=True)
     fmap = build_failure_map(
         frame,
         version=version,
         n_bootstrap=n_bootstrap,
         seed=seed,
-        note=f"cross-fit map: human rows exclude {len(set(held_out_people))} held-out people",
+        note=f"cross-fit map: human rows exclude {len(set(held_out_sessions))} held-out sessions",
     )
     check_router_map(fmap)
     return fmap
@@ -108,8 +122,8 @@ def all_maps(
     map_bootstrap: int = 200,
 ) -> list[FailureMap]:
     return [
-        fold_map(ai_map_rows, human_rows, people, f"crossfit-fold{k}", map_bootstrap)
-        for k, people in enumerate(folds)
+        fold_map(ai_map_rows, human_rows, sessions, f"crossfit-fold{k}", map_bootstrap)
+        for k, sessions in enumerate(folds)
     ]
 
 
@@ -145,7 +159,7 @@ class Trace:
     """One replayed session: its score (the highest running score) and, per update, the running
     score and how many active checks had been served, to read off burden at any threshold."""
 
-    who: str  # person, AI session, or "synthetic:<fold>:<i>"
+    who: str  # session, AI session, or "synthetic:<fold>:<i>"
     fold: int
     score: float
     running: np.ndarray
@@ -171,7 +185,7 @@ def trace(result: ReplayResult, who: str, fold: int, prior: float) -> Trace:
 
 # ------------------------------------------------------------------ donors
 def _index(rows: pd.DataFrame) -> dict[str, dict[tuple[str, str], list[str]]]:
-    """person -> {(item_id, mechanism): outcomes} and {(item_type, mechanism): outcomes}."""
+    """session -> {(item_id, mechanism): outcomes} and {(item_type, mechanism): outcomes}."""
     out: dict[str, dict[tuple[str, str], list[str]]] = defaultdict(lambda: defaultdict(list))
     rows = rows[rows["mechanism"].notna()].sort_values(
         ["session_id", "item_id", "mechanism", "variant_id", "outcome"]
@@ -185,18 +199,18 @@ def _index(rows: pd.DataFrame) -> dict[str, dict[tuple[str, str], list[str]]]:
 
 
 def resampled_donor(
-    people_index: dict[str, dict[tuple[str, str], list[str]]],
-    people: Sequence[str],
+    session_index: dict[str, dict[tuple[str, str], list[str]]],
+    sessions: Sequence[str],
     items: dict[str, Item],
     rng: random.Random,
 ) -> Donor:
     """A synthetic honest session: every check's outcome is drawn with replacement from THESE
-    people only (`people` may repeat, as in a bootstrap draw): same item if any of them answered
-    it, else same item type. No map draws, no other people."""
+    sessions only (`sessions` may repeat, as in a bootstrap draw): same item if any of them answered
+    it, else same item type. No map draws, no other sessions."""
     pooled: dict[tuple[str, str], list[str]] = defaultdict(list)
     pooled_type: dict[tuple[str, str], list[str]] = defaultdict(list)
-    for p in people:
-        for (key, mech), outcomes in people_index[p].items():
+    for p in sessions:
+        for (key, mech), outcomes in session_index[p].items():
             if key.startswith("type:"):
                 pooled_type[(key[5:], mech)].extend(outcomes)
             else:
@@ -219,7 +233,7 @@ class Scored:
     """Everything the thresholds and rates are computed from, for one policy."""
 
     folds: list[list[str]]
-    real: dict[str, Trace]  # person -> out-of-fold trace
+    real: dict[str, Trace]  # session -> out-of-fold trace
     ai: dict[str, list[Trace]]  # AI session -> one trace per fold map
     synthetic: list[Trace]  # K x N resampled honest sessions
     maps: list[FailureMap]
@@ -242,27 +256,27 @@ def score_policy(
     if len(maps) != len(folds):
         raise ValueError("one map per fold")
     scfg = score_config(cfg)
-    people_index = _index(human_rows)
+    session_index = _index(human_rows)
     real: dict[str, Trace] = {}
     ai: dict[str, list[Trace]] = defaultdict(list)
     synthetic: list[Trace] = []
-    for k, (people, fmap) in enumerate(zip(folds, maps, strict=True)):
+    for k, (sessions, fmap) in enumerate(zip(folds, maps, strict=True)):
         check_router_map(fmap)  # #25 guard, also for maps passed in
         policy = make(fmap, scfg)
-        # 1. out-of-fold: fold k's real people, scored with a map that never saw them
-        donors = Donors(human_rows[human_rows["session_id"].isin(set(people))], items)
-        for p in people:
+        # 1. out-of-fold: fold k's real sessions, scored with a map that never saw them
+        donors = Donors(human_rows[human_rows["session_id"].isin(set(sessions))], items)
+        for p in sessions:
             r = replay_session(
                 policy, assessment, donors.respondent_from(HONEST, p, seed), passive, seed
             )
             real[p] = trace(r, p, k, cfg.prior_log_odds)
-        # 2. resampled honest sessions from fold k's people only
+        # 2. resampled honest sessions from fold k's sessions only
         synthetic += _synthetic(
             policy,
             assessment,
             items,
-            people_index,
-            people,
+            session_index,
+            sessions,
             k,
             n_synthetic,
             passive,
@@ -282,12 +296,12 @@ def score_policy(
 
 
 def _synthetic(
-    policy, assessment, items, people_index, people, fold, n, passive, seed, prior, tag=""
+    policy, assessment, items, session_index, sessions, fold, n, passive, seed, prior, tag=""
 ) -> list[Trace]:
     out = []
     for i in range(n):
         rng = random.Random(f"synthetic:{seed}:{fold}:{i}{tag}")
-        donor = resampled_donor(people_index, people, items, rng)
+        donor = resampled_donor(session_index, sessions, items, rng)
         r = replay_session(policy, assessment, donor, passive, seed + i)
         out.append(trace(r, f"synthetic:{fold}:{i}", fold, prior))
     return out
@@ -314,8 +328,8 @@ def threshold_none(scores: Sequence[float]) -> float:
 def rates(
     real: list[Trace], ai: list[list[Trace]], synthetic: list[float], thresholds: dict[str, float]
 ) -> dict[str, dict[str, float]]:
-    """Per threshold: TPR, real and resampled honest pause rates, checks per honest person, and
-    how many real people reach it."""
+    """Per threshold: TPR, real and resampled honest pause rates, checks per honest session, and
+    how many real sessions reach it."""
     out = {}
     for name, a in thresholds.items():
         ai_hits = [np.mean([t.score >= a for t in per_fold]) for per_fold in ai]
@@ -326,7 +340,7 @@ def rates(
             "resampled_pause_rate": float(np.mean(np.asarray(synthetic) >= a))
             if len(synthetic)
             else math.nan,
-            "checks_per_honest_person": float(np.mean([t.checks_at(a) for t in real])),
+            "checks_per_honest_session": float(np.mean([t.checks_at(a) for t in real])),
             "n_real_at_or_above": int(sum(t.score >= a for t in real)),
         }
     return out
@@ -353,37 +367,37 @@ def summarize(
     passive: tuple[str, ...] = (),
     seed: int = 0,
 ) -> dict[str, Any]:
-    """Thresholds, TPR and honest rates, with 95% CIs from a bootstrap over PEOPLE: each draw
-    resamples people (within their folds) and AI sessions, regenerates the resampled honest
-    sessions from the drawn people only, and recomputes thresholds and rates."""
+    """Thresholds, TPR and honest rates, with 95% CIs from a bootstrap over SESSIONS: each draw
+    resamples sessions (within their folds) and AI sessions, regenerates the resampled honest
+    sessions from the drawn sessions only, and recomputes thresholds and rates."""
     real = list(scored.real.values())
     ai = list(scored.ai.values())
     syn = [t.score for t in scored.synthetic]
     th = thresholds_from([t.score for t in real], syn, alphas)
     point = rates(real, ai, syn, th)
 
-    people_index = _index(human_rows)
+    session_index = _index(human_rows)
     scfg = score_config(cfg)
     policies = [make(fmap, scfg) for fmap in scored.maps]
     rng = np.random.default_rng(seed)
-    persons = sorted(scored.real)
+    honest_ids = sorted(scored.real)
     draws: dict[str, dict[str, list[float]]] = {n: defaultdict(list) for n in th}
     for b in range(n_boot):
-        picked = [persons[i] for i in rng.integers(0, len(persons), len(persons))]
+        picked = [honest_ids[i] for i in rng.integers(0, len(honest_ids), len(honest_ids))]
         ai_pick = [ai[i] for i in rng.integers(0, len(ai), len(ai))] if ai else []
         by_fold: dict[int, list[str]] = defaultdict(list)
         for p in picked:
             by_fold[scored.real[p].fold].append(p)
         syn_b = []
-        for k, people in sorted(by_fold.items()):
+        for k, sessions in sorted(by_fold.items()):
             syn_b += [
                 t.score
                 for t in _synthetic(
                     policies[k],
                     assessment,
                     items,
-                    people_index,
-                    people,
+                    session_index,
+                    sessions,
                     k,
                     n_synthetic_boot,
                     passive,
@@ -414,27 +428,27 @@ def summarize(
         "thresholds": th,
         "results": point,
         "ci95": ci,
-        "n_people": len(real),
+        "n_sessions": len(real),
         "n_ai_sessions": len(ai),
         "n_resampled_sessions": len(syn),
-        "people_per_fold": sizes,
+        "sessions_per_fold": sizes,
         "n_boot": n_boot,
         "n_resampled_per_fold_in_boot": n_synthetic_boot,
-        "boot_unit": "person (resampled honest sessions regenerated per draw) and AI session",
+        "boot_unit": "session (resampled honest sessions regenerated per draw) and AI session",
         "boot_seed": seed,
         "map_versions": [m.version for m in scored.maps],
     }
 
 
 def tail_warnings(summary: dict[str, Any]) -> list[str]:
-    """'1% tail extrapolated from N people' always; plus a warning for any threshold that fewer
-    than MIN_TAIL_PEOPLE real people reach."""
-    n = summary["n_people"]
-    out = [f"1% tail extrapolated from {n} people"]
+    """'1% tail extrapolated from N sessions' always; plus a warning for any threshold that fewer
+    than MIN_TAIL_SESSIONS real sessions reach."""
+    n = summary["n_sessions"]
+    out = [f"1% tail extrapolated from {n} sessions"]
     for name, r in summary["results"].items():
-        if r["n_real_at_or_above"] < MIN_TAIL_PEOPLE:
+        if r["n_real_at_or_above"] < MIN_TAIL_SESSIONS:
             out.append(
-                f"{name} = {r['A']:.3g} is driven by fewer than {MIN_TAIL_PEOPLE} real people "
+                f"{name} = {r['A']:.3g} is driven by fewer than {MIN_TAIL_SESSIONS} real sessions "
                 f"({r['n_real_at_or_above']} of {n} reach it)"
             )
     return out

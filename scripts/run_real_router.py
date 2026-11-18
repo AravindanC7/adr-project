@@ -1,30 +1,32 @@
 """The first real router + baselines run (step #42): one command, thresholds calibrated on
-held-out PEOPLE by person-level cross-fitting (adr/replay/crossfit.py).
+held-out honest sessions by session-level cross-fitting (adr/replay/crossfit.py).
 
     python scripts/run_real_router.py \\
         --ai-outcomes results/outcomes/v1-cp-L0-quiz-mmlu-200-s5.parquet ... \\
         --pilot-outcomes results/outcomes/pilot-2026-11-13.parquet \\
-        [--exclude-sessions low_effort.txt] [--folds 4] [--alpha 0.01] [--group-passive] [--final]
+        [--low-effort pilot_data/low_effort_ids.txt] [--exclude-sessions FILE] [--folds 4]
+        [--alpha 0.01] [--cap-variant per_mech|passive_group|open_text_group ...] [--final]
 
 What it does:
-  1. Reads the AI rows (any files or folders) and the pilot rows (data_origin "pilot"; one
-     session_id = one person). --exclude-sessions drops the listed people (one session_id per
-     line), for the with/without low-effort sensitivity run.
+  1. Reads the AI rows (any files or folders) and the pilot rows (data_origin "pilot"). The unit
+     is the session (one pilot session_id); one person may span sessions. --low-effort FILE lists
+     the low-effort sessions (one session_id per line): they are spread across the folds.
+     --exclude-sessions FILE drops the listed sessions, for the with/without low-effort run.
   2. Keeps only the mechanisms that have BOTH AI and human rows, and says which ones.
   3. Replays on the pilot bank (--bank, default server/pilot_items.json: what the router would
-     serve). Honest people replay their own sessions. The AI runs answered other items, so an AI
+     serve). Honest sessions are replayed from their own rows. The AI runs answered other items, so an AI
      session answers each check from its own rows on items of the same type (adr/replay/
      donors.py, "same-type draws"): real behaviour, the map's own exchangeability assumption.
   4. AI rows are split by item as in run_replay.py: the map's AI side uses the train items, and
      the AI sessions are scored on the calibration items (on the held-out rows with --final).
   5. Threshold from replayed honest sessions (adr/replay/crossfit.py). For each of K folds of
-     people, map_k = Archana's builder in STRICT mode (never --ai-only) on the AI train rows +
-     the OTHER folds' people. Each real person is scored out of fold (with the map that never
-     saw them), and --n-synthetic honest sessions per fold are resampled from that fold's people
+     sessions, map_k = Archana's builder in STRICT mode (never --ai-only) on the AI train rows +
+     the OTHER folds' sessions. Each real session is scored out of fold (with the map that never
+     saw it), and --n-synthetic honest sessions per fold are resampled from that fold's sessions
      only. Three thresholds: A at 1% and at 5% of the pooled resampled sessions, and A_max =
-     the lowest threshold that pauses none of the real people. AI sessions are scored with
+     the lowest threshold that pauses none of the real sessions. AI sessions are scored with
      every map_k. Done for the router, baselines 1-4 and the router at each beta (the budget
-     curve). CIs resample PEOPLE and regenerate the resampled sessions per draw.
+     curve). CIs resample SESSIONS and regenerate the resampled sessions per draw.
 
 Writes results/real-router/<run_id>/: comparison.csv/.md, thresholds.csv, budget_curve.csv/.png,
 metrics.json and config.yaml. --final reads held-out rows, as run_replay does; never by default.
@@ -61,17 +63,23 @@ from adr.replay.crossfit import (
     all_maps,
     cap_warnings,
     deploy_config,
-    person_folds,
     router_factory,
     score_policy,
+    session_folds,
     summarize,
     tail_warnings,
 )
 from adr.replay.quick_map import CALIBRATION_FRAC, SPLIT_SEED, split_rows
 from adr.router.core import RouterConfig
 
-GROUP_PASSIVE = {"passive": tuple(sorted(PASSIVE_MECHANISMS))}
+# Cap designs to compare (RouterConfig.mech_group_caps): which mechanisms share ONE evidence cap.
+CAP_VARIANTS: dict[str, dict[str, tuple[str, ...]] | None] = {
+    "per_mech": None,  # every mechanism has its own cap (the default)
+    "passive_group": {"passive": tuple(sorted(PASSIVE_MECHANISMS))},  # behaviour + style
+    "open_text_group": {"open_text": ("canary", "style")},  # the two open-text signals
+}
 EXTRA_ALPHA = 0.05  # always reported too
+HEADLINE = "A_0.05"  # the pilot headline: TPR at 5% FPR (1% is secondary: a far tail)
 
 
 def read_rows(paths: list[str]) -> pd.DataFrame:
@@ -91,7 +99,7 @@ def read_exclusions(path: str | None) -> set[str]:
     return {s.strip() for s in lines if s.strip() and not s.strip().startswith("#")}
 
 
-def exclude_people(human: pd.DataFrame, sessions: set[str]) -> tuple[pd.DataFrame, list[str]]:
+def exclude_sessions(human: pd.DataFrame, sessions: set[str]) -> tuple[pd.DataFrame, list[str]]:
     """Drop exactly the listed session_ids. Returns the rows kept and the listed ids that were
     not found (reported, so a typo in the file is visible)."""
     present = set(human["session_id"])
@@ -145,12 +153,24 @@ def main() -> None:
     ap.add_argument("--ai-outcomes", nargs="+", required=True, help="AI outcome files/folders")
     ap.add_argument("--pilot-outcomes", nargs="+", required=True, help="pilot outcome file(s)")
     ap.add_argument("--exclude-sessions", help="file: human session_ids to drop, one per line")
+    ap.add_argument(
+        "--low-effort",
+        help="file: low-effort session_ids, one per line (e.g. pilot_data/low_effort_ids.txt); "
+        "they are spread across the folds",
+    )
     ap.add_argument("--folds", type=int, default=4)
     ap.add_argument("--alpha", type=float, default=0.01, help="max honest pause rate per fold")
     ap.add_argument(
-        "--group-passive",
-        action="store_true",
-        help="behaviour and style share ONE evidence cap (mech_group_caps)",
+        "--cap-variant",
+        nargs="+",
+        choices=list(CAP_VARIANTS),
+        default=["per_mech"],
+        help="cap design(s): per_mech (default), passive_group (behaviour + style share one "
+        "cap), open_text_group (canary + style share one cap). The first is used for every "
+        "policy; each extra one adds a router[<variant>] row, on the same calibration split",
+    )
+    ap.add_argument(
+        "--group-passive", action="store_true", help="same as --cap-variant passive_group"
     )
     ap.add_argument(
         "--final",
@@ -161,7 +181,7 @@ def main() -> None:
     ap.add_argument("--assessment-id", help="replay one part of the bank (default: the flow)")
     ap.add_argument("--betas", default=",".join(str(b) for b in BETAS))
     ap.add_argument("--seed", type=int, default=0, help="fold split and replay seed")
-    ap.add_argument("--boot", type=int, default=200, help="bootstrap draws over people")
+    ap.add_argument("--boot", type=int, default=200, help="bootstrap draws over sessions")
     ap.add_argument(
         "--n-synthetic", type=int, default=500, help="resampled honest sessions per fold"
     )
@@ -188,13 +208,13 @@ def main() -> None:
             f"{args.pilot_outcomes}. Without them use scripts/run_replay.py."
         )
     excluded = read_exclusions(args.exclude_sessions)
-    human, not_found = exclude_people(human, excluded)
+    human, not_found = exclude_sessions(human, excluded)
     if not_found:
         print(
             f"WARNING: {len(not_found)} --exclude-sessions ids are not pilot sessions: "
             f"{not_found[:5]}"
         )
-    people = sorted(human["session_id"].unique())
+    sessions = sorted(human["session_id"].unique())
 
     mechanisms = usable_mechanisms(ai, human)
     if not mechanisms:
@@ -203,8 +223,8 @@ def main() -> None:
     if mechanisms == ["decoy"]:
         print(
             "  -> decoy only: the router has ONE check type, so this run measures how well "
-            "decoys separate AI from people at a person-calibrated threshold; it cannot show "
-            "adaptive selection across mechanisms yet."
+            "decoys separate AI sessions from honest sessions at a threshold calibrated on "
+            "honest sessions; it cannot show adaptive selection across mechanisms yet."
         )
     ai = ai[ai["mechanism"].isna() | ai["mechanism"].isin(mechanisms)]
     human = human[human["mechanism"].isna() | human["mechanism"].isin(mechanisms)]
@@ -226,12 +246,37 @@ def main() -> None:
     if ai_eval.empty:
         raise SystemExit("no AI evaluation rows (raise --calibration-frac)")
 
-    cfg = RouterConfig()
-    if args.group_passive:
-        cfg = replace(cfg, mech_group_caps=GROUP_PASSIVE)
-    folds = person_folds(people, args.folds, args.seed)
+    variants_cap = list(dict.fromkeys(args.cap_variant))  # in order, no repeats
+    if args.group_passive:  # the older flag: passive_group becomes the main design
+        rest = (
+            []
+            if variants_cap == ["per_mech"]
+            else [v for v in variants_cap if v != "passive_group"]
+        )
+        variants_cap = ["passive_group", *rest]
+    for v in variants_cap:
+        groups = CAP_VARIANTS[v] or {}
+        for g, members in groups.items():
+            present = [m for m in members if m in mechanisms]
+            if len(present) < 2:
+                print(
+                    f"NOTE: cap variant {v} has no effect here: of {g} = {list(members)}, only "
+                    f"{present or 'none'} have both AI and human rows."
+                )
+    cfg = RouterConfig(mech_group_caps=CAP_VARIANTS[variants_cap[0]])
+
+    low_effort = read_exclusions(args.low_effort)
+    low_found = sorted(low_effort & set(sessions))
+    if low_effort and len(low_found) < len(low_effort):
+        print(
+            f"WARNING: {len(low_effort) - len(low_found)} --low-effort ids are not (kept) pilot "
+            "sessions"
+        )
+    folds = session_folds(sessions, args.folds, args.seed, stratum=low_found)
     print(
-        f"{len(people)} people in {args.folds} folds of {[len(f) for f in folds]}; "
+        f"{len(sessions)} honest sessions in {args.folds} folds of {[len(f) for f in folds]} "
+        f"(one person may span sessions; the session is the unit); low-effort sessions per "
+        f"fold: {[len(set(f) & set(low_found)) for f in folds]}; "
         f"{len(excluded)} excluded. AI evaluation sessions: "
         f"{ai_eval['session_id'].nunique()} ({'held-out' if args.final else 'calibration'} "
         "items). Fitting the per-fold maps..."
@@ -280,6 +325,15 @@ def main() -> None:
             )
         )
 
+    for v in variants_cap[1:]:  # extra cap designs: the router only, same split and folds
+        name = f"router[{v}]"
+        results[name] = run("router", replace(cfg, mech_group_caps=CAP_VARIANTS[v]))
+        r = results[name]["results"]
+        print(
+            f"  {name:15s} "
+            + "  ".join(f"{t}={x['A']:.2f}: TPR {x['tpr']:.2f}" for t, x in r.items())
+        )
+
     def key(a: float) -> str:
         return f"A_{a:g}"
 
@@ -288,8 +342,10 @@ def main() -> None:
         for a, col in ((0.01, "tpr_at_1pct_fpr"), (0.05, "tpr_at_5pct_fpr")):
             v, ci = summ["results"][key(a)], summ["ci95"][key(a)].get("tpr")
             row[col], (row[f"{col}_lo"], row[f"{col}_hi"]) = v["tpr"], ci or (None, None)
-        v, ci = summ["results"][key(0.01)], summ["ci95"][key(0.01)].get("checks_per_honest_person")
-        row["checks_per_honest_person"] = v["checks_per_honest_person"]
+        # plot_budget_curve.py reads the column "checks_per_honest_person": here it holds checks
+        # per honest SESSION at the 1% threshold
+        v, ci = summ["results"][key(0.01)], summ["ci95"][key(0.01)].get("checks_per_honest_session")
+        row["checks_per_honest_person"] = v["checks_per_honest_session"]
         row["checks_per_honest_person_lo"], row["checks_per_honest_person_hi"] = ci or (None, None)
         return row
 
@@ -318,21 +374,20 @@ def main() -> None:
         print(f"no budget_curve.png ({e}); pip install -e '.[plot]'")
 
     warnings = tail_warnings(results["router"]) + cap_warnings(results["router"], cfg, mechanisms)
-    print()
+    headline = headline_text(results["router"])
+    print(f"\n{headline}")
     for w in warnings:
         print(("" if w.startswith("1% tail") else "WARNING: ") + w)
     router_th = results["router"]["thresholds"]
     deploy = {
-        name: {
-            k: (list(v) if isinstance(v, tuple) else v)
-            for k, v in deploy_config(cfg, a).__dict__.items()
-        }
+        name: plain(deploy_config(cfg, a).__dict__)
         for name, a in router_th.items()
         if a != float("inf")
     }
     (out / "metrics.json").write_text(
         json.dumps(
             {
+                "headline": headline,
                 "warnings": warnings,
                 "final": args.final,
                 "mechanisms": mechanisms,
@@ -358,7 +413,7 @@ def main() -> None:
                 "n_items": len(assessment.item_ids),
                 "mechanisms": mechanisms,
                 "passive": list(passive),
-                "n_people": len(people),
+                "n_sessions": len(sessions),
                 "folds": folds,
                 "fold_seed": args.seed,
                 "excluded_sessions": sorted(excluded),
@@ -371,12 +426,13 @@ def main() -> None:
                 "calibration_frac": args.calibration_frac,
                 "split_seed": args.split_seed,
                 "map_versions": [m.version for m in maps],
-                "router_config": {
-                    k: (v if not isinstance(v, tuple) else list(v)) for k, v in cfg.__dict__.items()
-                },
+                "router_config": plain(cfg.__dict__),
+                "cap_variants": variants_cap,
+                "low_effort_sessions": low_found,
+                "low_effort_per_fold": [len(set(f) & set(low_found)) for f in folds],
+                "unit": "session (one pilot session_id; one person may span sessions)",
                 "router_thresholds": {k: float(v) for k, v in router_th.items()},
                 "router_deploy_config": deploy,
-                "group_passive": args.group_passive,
                 "policies": list(COMPARE),
                 "budget_curve_betas": [r["beta"] for r in curve if r["policy"] == "router"],
                 "n_boot": args.boot,
@@ -395,7 +451,34 @@ def main() -> None:
     )
 
 
-COLUMNS = ("tpr", "honest_pause_rate", "checks_per_honest_person")
+COLUMNS = ("tpr", "honest_pause_rate", "checks_per_honest_session")
+ORDER = ("A_0.05", "A_0.01", "A_max")  # headline first
+
+
+def plain(obj):
+    """Tuples (e.g. inside mech_group_caps) to lists, so YAML and JSON can write them."""
+    return json.loads(json.dumps(obj, default=str))
+
+
+def _ci_text(ci) -> str:
+    return f"[{ci[0]:.2f}, {ci[1]:.2f}]" if ci else "[no CI]"
+
+
+def headline_text(summ: dict) -> str:
+    """TPR at 5% FPR is the pilot headline; TPR at 1% FPR (a tail the pilot cannot pin down) is
+    reported with its CI as secondary."""
+    h, s1 = summ["results"]["A_0.05"], summ["results"]["A_0.01"]
+    return (
+        f"HEADLINE (pilot): router TPR at 5% FPR = {h['tpr']:.2f} "
+        f"{_ci_text(summ['ci95']['A_0.05'].get('tpr'))} (A = {h['A']:.2f}). "
+        f"Secondary: TPR at 1% FPR = {s1['tpr']:.2f} "
+        f"{_ci_text(summ['ci95']['A_0.01'].get('tpr'))} (A = {s1['A']:.2f})."
+    )
+
+
+def _ordered(summ: dict) -> list[str]:
+    names = list(summ["results"])
+    return [n for n in ORDER if n in names] + [n for n in names if n not in ORDER]
 
 
 def _fmt(v, ci) -> str:
@@ -406,10 +489,11 @@ def _fmt(v, ci) -> str:
 
 def write_comparison(results: dict[str, dict], out: Path) -> None:
     """One row per policy and threshold (A_0.01, A_0.05, A_max): the threshold, TPR, the real
-    honest pause rate and checks per honest person, with 95% CIs (bootstrap over people)."""
+    honest pause rate and checks per honest session, with 95% CIs (bootstrap over sessions)."""
     rows = []
     for name, summ in results.items():
-        for t, v in summ["results"].items():
+        for t in _ordered(summ):
+            v = summ["results"][t]
             ci = summ["ci95"][t]
             row = {
                 "policy": name,
@@ -418,7 +502,7 @@ def write_comparison(results: dict[str, dict], out: Path) -> None:
                 "A_lo": (ci.get("A") or (None, None))[0],
                 "A_hi": (ci.get("A") or (None, None))[1],
                 "n_real_at_or_above": v["n_real_at_or_above"],
-                "n_people": summ["n_people"],
+                "n_sessions": summ["n_sessions"],
                 "n_ai_sessions": summ["n_ai_sessions"],
             }
             for c in COLUMNS:
@@ -432,22 +516,23 @@ def write_comparison(results: dict[str, dict], out: Path) -> None:
         "|---|---|---|" + "---|" * len(COLUMNS),
     ]
     for name, summ in results.items():
-        for t, v in summ["results"].items():
+        for t in _ordered(summ):
+            v = summ["results"][t]
             ci = summ["ci95"][t]
             lines.append(
                 f"| {name} | {t} | {_fmt(v['A'], ci.get('A'))} | "
                 + " | ".join(_fmt(v[c], ci.get(c)) for c in COLUMNS)
                 + " |"
             )
-    n = next(iter(results.values()))["n_people"]
+    n = next(iter(results.values()))["n_sessions"]
     (out / "comparison.md").write_text(
+        f"{headline_text(results['router'])}\n\n"
         "Thresholds from replayed honest sessions (cross-fitted: every honest score uses a map "
-        "that never saw that person). A_0.01 / A_0.05: smallest threshold pausing at most 1% / "
-        "5% of the resampled honest sessions; A_max: lowest threshold pausing none of the "
-        f"{n} real people. 95% CIs: bootstrap over people (resampled sessions regenerated per "
-        f"draw) and AI sessions. 1% tail extrapolated from {n} people.\n\n"
-        + "\n".join(lines)
-        + "\n",
+        "that never saw that session). A_0.05 (headline) / A_0.01: smallest threshold pausing at "
+        "most 5% / 1% of the resampled honest sessions; A_max: lowest threshold pausing none of "
+        f"the {n} real sessions. 95% CIs: bootstrap over honest sessions (resampled sessions "
+        f"regenerated per draw) and AI sessions. 1% tail extrapolated from {n} sessions. The unit "
+        "is the session: one person may span sessions.\n\n" + "\n".join(lines) + "\n",
         encoding="utf-8",
     )
 
@@ -455,7 +540,8 @@ def write_comparison(results: dict[str, dict], out: Path) -> None:
 def write_thresholds(results: dict[str, dict], out: Path) -> None:
     rows = []
     for name, summ in results.items():
-        for t, v in summ["results"].items():
+        for t in _ordered(summ):
+            v = summ["results"][t]
             lohi = summ["ci95"][t].get("A") or (None, None)
             rows.append(
                 {
@@ -468,8 +554,8 @@ def write_thresholds(results: dict[str, dict], out: Path) -> None:
                     "honest_pause_rate_real": v["honest_pause_rate"],
                     "pause_rate_resampled": v["resampled_pause_rate"],
                     "tpr": v["tpr"],
-                    "n_people": summ["n_people"],
-                    "people_per_fold": " ".join(map(str, summ["people_per_fold"])),
+                    "n_sessions": summ["n_sessions"],
+                    "sessions_per_fold": " ".join(map(str, summ["sessions_per_fold"])),
                     "n_resampled_sessions": summ["n_resampled_sessions"],
                 }
             )

@@ -73,19 +73,21 @@ python scripts/plot_budget_curve.py results/runs/budget-synthetic-quiz/budget_cu
 # what limits the router on one assessment (see docs/notes/router_synthetic_diagnosis.md):
 python scripts/diagnose_router.py --synthetic survey
 # The first REAL router + baselines run, once pilot rows exist (step #42). The threshold comes
-# from replayed honest sessions: every person is scored with a map fitted without their fold,
-# and resampled honest sessions are built from each fold's held-out people (4-fold
-# cross-fitting). Reports A at 1% and 5% and A_max (pauses none of the real people). The map is
-# strict (never --ai-only); only mechanisms with both AI and human rows are used. Needs the pilot
-# bank (server/pilot_items.json). Add --exclude-sessions FILE for the low-effort sensitivity run,
-# --group-passive to give behaviour + style one shared cap, --final for the held-out rows.
-# About 25 min with the defaults (--boot 200, --n-synthetic 500).
+# from replayed honest sessions: every session is scored with a map fitted without its fold, and
+# resampled honest sessions are built from each fold's held-out sessions (4-fold cross-fitting,
+# low-effort sessions spread across the folds). Headline: TPR at 5% FPR; TPR at 1% FPR and
+# A_max (pauses none of the real sessions) are secondary. The unit is the session: one person
+# may span sessions. The map is strict (never --ai-only); only mechanisms with both AI and human
+# rows are used. Needs the pilot bank (server/pilot_items.json). Options: --exclude-sessions FILE
+# (low-effort sensitivity run), --cap-variant per_mech passive_group open_text_group (compare
+# cap designs), --final (held-out rows). About 25 min with the defaults.
 python scripts/run_real_router.py \
     --ai-outcomes results/outcomes/v1-cp-L0-quiz-mmlu-200-s5.parquet \
                   results/outcomes/v1-cp-L0-quiz-arc-200-s5.parquet \
                   results/outcomes/v1-du-L0-quiz-mmlu-200-q20.parquet \
                   results/outcomes/v1-du-L0-quiz-arc-200-q20.parquet \
-    --pilot-outcomes results/outcomes/pilot-2026-11-13.parquet
+    --pilot-outcomes results/outcomes/pilot-2026-11-13.parquet \
+    --low-effort pilot_data/low_effort_ids.txt
 # -> results/real-router/<run_id>/: comparison.csv/.md, thresholds.csv (A_k per fold),
 #    budget_curve.csv/.png, metrics.json, config.yaml
 ```

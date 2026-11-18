@@ -33,10 +33,10 @@ from adr.replay.crossfit import (
     all_maps,
     deploy_config,
     fold_map,
-    person_folds,
     resampled_donor,
     router_factory,
     score_policy,
+    session_folds,
     summarize,
     tail_warnings,
     threshold_at,
@@ -51,7 +51,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import run_real_router
 
-N_PEOPLE, N_PILOT_ITEMS, N_AI_ITEMS, N_AI_SESSIONS = 20, 8, 40, 5
+N_SESSIONS, N_PILOT_ITEMS, N_AI_ITEMS, N_AI_SESSIONS = 20, 8, 40, 5
 
 
 def _item(item_id: str) -> Item:
@@ -71,10 +71,10 @@ PILOT_ITEMS = [_item(f"arc:pilot-{i}") for i in range(N_PILOT_ITEMS)]
 AI_ITEMS = [f"mmlu:bank-{i}" for i in range(N_AI_ITEMS)]  # the AI runs used OTHER items
 
 
-def human_row(person: str, item_id: str, outcome: str) -> OutcomeRow:
+def human_row(session: str, item_id: str, outcome: str) -> OutcomeRow:
     return OutcomeRow(
         run_id="pilot-test",
-        session_id=person,
+        session_id=session,
         respondent_kind="human",
         data_origin="pilot",
         assessment_type="quiz",
@@ -109,15 +109,15 @@ def ai_row(session: str, item_id: str, outcome: str) -> OutcomeRow:
     )
 
 
-def people() -> list[str]:
-    return [f"pilot-test:p{j:02d}" for j in range(N_PEOPLE)]
+def session_ids() -> list[str]:
+    return [f"pilot-test:p{j:02d}" for j in range(N_SESSIONS)]
 
 
 def human_frame() -> pd.DataFrame:
     rows = []
-    for j, p in enumerate(people()):
+    for j, p in enumerate(session_ids()):
         for i, item in enumerate(PILOT_ITEMS):
-            # most people never pick the decoy; some pick it once or twice
+            # most sessions never pick the decoy; some pick it once or twice
             decoy = (j % 4 == 0 and i == 0) or (j % 7 == 0 and i == 1)
             rows.append(human_row(p, item.item_id, "picked_decoy" if decoy else "picked_correct"))
     return rows_to_frame(rows)
@@ -149,7 +149,7 @@ def scored_router(human=None, n_synthetic=60, folds=None):
     human = human_frame() if human is None else human
     ai = ai_frame()
     assessment, items, variants = bank()
-    folds = folds or person_folds(people(), 4, 0)
+    folds = folds or session_folds(session_ids(), 4, 0)
     maps = all_maps(ai, human, folds, 20)
     make = router_factory("router", assessment, items, variants)
     sc = score_policy(make, RouterConfig(), assessment, items, human, ai, folds, maps, n_synthetic)
@@ -157,21 +157,21 @@ def scored_router(human=None, n_synthetic=60, folds=None):
 
 
 # ---------------------------------------------------------------- folds and leakage
-def test_folds_partition_people_with_no_overlap():
-    ps = people()
-    folds = person_folds(ps, 4, seed=0)
+def test_folds_partition_sessions_with_no_overlap():
+    ps = session_ids()
+    folds = session_folds(ps, 4, seed=0)
     flat = [p for f in folds for p in f]
     assert sorted(flat) == sorted(ps) and len(flat) == len(set(flat))
     assert max(map(len, folds)) - min(map(len, folds)) <= 1
-    assert person_folds(ps, 4, seed=0) == folds
-    assert sorted(len(f) for f in person_folds(ps[:7], 3, seed=1)) == [2, 2, 3]
+    assert session_folds(ps, 4, seed=0) == folds
+    assert sorted(len(f) for f in session_folds(ps[:7], 3, seed=1)) == [2, 2, 3]
     with pytest.raises(ValueError):
-        person_folds(ps[:3], 4, 0)
+        session_folds(ps[:3], 4, 0)
 
 
 def test_map_for_fold_k_has_no_human_rows_from_fold_k():
     human, ai = human_frame(), ai_frame()
-    held = person_folds(people(), 4, 0)[0]
+    held = session_folds(session_ids(), 4, 0)[0]
     fmap = fold_map(ai, human, held, "f0", n_bootstrap=20)
     n_others = int((~human.session_id.isin(held)).sum())
     assert sum(fmap.lookup("decoy", "mcq").counts_human.values()) == n_others
@@ -179,9 +179,9 @@ def test_map_for_fold_k_has_no_human_rows_from_fold_k():
 
 # ---------------------------------------------------------------- out-of-fold scores
 def test_out_of_fold_score_uses_a_map_without_that_person():
-    """Flip test: change everything one person answered. The map that scores them must not
+    """Flip test: change everything one session answered. The map that scores them must not
     move (it never saw them); the maps of the other folds must (they do include them)."""
-    folds = person_folds(people(), 4, 0)
+    folds = session_folds(session_ids(), 4, 0)
     p = folds[1][0]
     flipped = human_frame()
     flipped.loc[flipped.session_id == p, "outcome"] = "picked_decoy"
@@ -195,7 +195,7 @@ def test_out_of_fold_score_uses_a_map_without_that_person():
     for q in folds[1]:
         if q != p:  # same fold, same map, own answers unchanged
             assert flip.real[q].score == base.real[q].score
-    assert set(base.real) == set(people())  # every person scored exactly once, out of fold
+    assert set(base.real) == set(session_ids())  # every session scored exactly once, out of fold
 
 
 def test_pausing_at_a_threshold_is_exactly_score_at_or_above_it():
@@ -212,11 +212,11 @@ def test_pausing_at_a_threshold_is_exactly_score_at_or_above_it():
 
 
 # ---------------------------------------------------------------- resampled honest sessions
-def test_resampled_sessions_draw_only_from_held_out_people():
+def test_resampled_sessions_draw_only_from_held_out_sessions():
     human = human_frame()
     _, items, _ = bank()
     index = _index(human)
-    clean = [p for j, p in enumerate(people()) if j % 4 and j % 7]  # never pick the decoy
+    clean = [p for j, p in enumerate(session_ids()) if j % 4 and j % 7]  # never pick the decoy
     donor = resampled_donor(index, clean, items, random.Random(0))
     drawn = [donor.outcome(it.item_id, "decoy") for it in PILOT_ITEMS for _ in range(20)]
     assert set(drawn) == {"picked_correct"}  # others' picked_decoy rows are never used
@@ -231,9 +231,9 @@ def test_each_folds_synthetic_sessions_use_only_that_folds_people(monkeypatch):
     seen = []
     real = cf.resampled_donor
 
-    def spy(index, people_, items, rng):
-        seen.append(tuple(sorted(set(people_))))
-        return real(index, people_, items, rng)
+    def spy(index, sessions_, items, rng):
+        seen.append(tuple(sorted(set(sessions_))))
+        return real(index, sessions_, items, rng)
 
     monkeypatch.setattr(cf, "resampled_donor", spy)
     sc, *_, folds, _ = scored_router(n_synthetic=5)
@@ -265,13 +265,13 @@ def test_three_thresholds_their_rates_and_tail_warnings():
     )
     assert set(s["thresholds"]) == {"A_0.01", "A_0.05", "A_max"}
     r = s["results"]
-    assert r["A_max"]["honest_pause_rate"] == 0.0  # pauses none of the real people
+    assert r["A_max"]["honest_pause_rate"] == 0.0  # pauses none of the real sessions
     assert r["A_0.05"]["resampled_pause_rate"] <= 0.05
     assert r["A_0.01"]["resampled_pause_rate"] <= 0.01
     assert s["thresholds"]["A_0.01"] >= s["thresholds"]["A_0.05"]
     warns = tail_warnings(s)
-    assert warns[0] == f"1% tail extrapolated from {N_PEOPLE} people"
-    assert any("A_max" in w and "fewer than 3 real people" in w for w in warns)
+    assert warns[0] == f"1% tail extrapolated from {N_SESSIONS} sessions"
+    assert any("A_max" in w and "fewer than 3 real sessions" in w for w in warns)
     # decoy is the only mechanism: a threshold at the decoy cap pauses nobody (TPR 0)
     cap = 0.65 * cf.nominal_A(RouterConfig())
     at_cap = [n for n, v in r.items() if v["A"] >= cap - 1e-9]
@@ -281,7 +281,7 @@ def test_three_thresholds_their_rates_and_tail_warnings():
 
 
 # ---------------------------------------------------------------- bootstrap
-def test_bootstrap_resamples_people_and_regenerates_sessions(monkeypatch):
+def test_bootstrap_resamples_sessions_and_regenerates_sessions(monkeypatch):
     sc, make, assessment, items, human, *_ = scored_router()
     sizes, regenerated = [], []
     real_rng, real_syn = np.random.default_rng, cf._synthetic
@@ -311,18 +311,18 @@ def test_bootstrap_resamples_people_and_regenerates_sessions(monkeypatch):
         n_boot=6,
         n_synthetic_boot=4,
     )
-    assert set(sizes) == {N_PEOPLE, N_AI_SESSIONS}  # one index per PERSON / AI session
-    assert sizes.count(N_PEOPLE) == 6
+    assert set(sizes) == {N_SESSIONS, N_AI_SESSIONS}  # one index per PERSON / AI session
+    assert sizes.count(N_SESSIONS) == 6
     assert regenerated and all(t.startswith(":boot") for t in regenerated)  # rebuilt per draw
-    assert s["n_people"] == N_PEOPLE and s["boot_unit"].startswith("person")
+    assert s["n_sessions"] == N_SESSIONS and s["boot_unit"].startswith("session")
 
 
 # ---------------------------------------------------------------- exclusions
 def test_exclude_sessions_removes_exactly_those(tmp_path):
     human = human_frame()
     f = tmp_path / "low_effort.txt"
-    f.write_text("# low-effort people\npilot-test:p03\n\npilot-test:p07\nnot-a-session\n")
-    kept, missing = run_real_router.exclude_people(human, run_real_router.read_exclusions(str(f)))
+    f.write_text("# low-effort sessions\npilot-test:p03\n\npilot-test:p07\nnot-a-session\n")
+    kept, missing = run_real_router.exclude_sessions(human, run_real_router.read_exclusions(str(f)))
     assert set(human.session_id) - set(kept.session_id) == {"pilot-test:p03", "pilot-test:p07"}
     assert len(kept) == len(human) - 2 * N_PILOT_ITEMS
     assert missing == ["not-a-session"]
@@ -386,12 +386,12 @@ def test_ai_only_map_is_refused():
     human, ai = human_frame(), ai_frame()
     assessment, items, variants = bank()
     ai_only = build_failure_map(ai, version="v1-ai-only", n_bootstrap=10, ai_only=True)
-    folds = person_folds(people(), 4, 0)
+    folds = session_folds(session_ids(), 4, 0)
     make = router_factory("router", assessment, items, variants)
     with pytest.raises(ProvisionalMapError):
         score_policy(make, RouterConfig(), assessment, items, human, ai, folds, [ai_only] * 4, 5)
     with pytest.raises(ValueError, match="both AI and human"):
-        fold_map(ai, human, people(), "all-held-out", n_bootstrap=10)
+        fold_map(ai, human, session_ids(), "all-held-out", n_bootstrap=10)
 
 
 # ---------------------------------------------------------------- the one command
@@ -452,8 +452,8 @@ def test_run_real_router_end_to_end(tmp_path):
     assert proc.returncode == 0, proc.stderr[-3000:]
     assert "BOTH AI and human rows (the only ones used): decoy" in proc.stdout
     assert "decoy only" in proc.stdout
-    assert f"1% tail extrapolated from {N_PEOPLE} people" in proc.stdout
-    assert "fewer than 3 real people" in proc.stdout
+    assert f"1% tail extrapolated from {N_SESSIONS} sessions" in proc.stdout
+    assert "fewer than 3 real sessions" in proc.stdout
     out = tmp_path / "real-router" / "r"
     for name in (
         "comparison.csv",
@@ -479,3 +479,84 @@ def test_run_real_router_needs_pilot_rows(tmp_path):
         _cmd(tmp_path), cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=False
     )
     assert proc.returncode != 0 and "no pilot rows" in proc.stderr
+
+
+# ---------------------------------------------------------------- stratified folds
+def test_low_effort_sessions_are_spread_across_folds():
+    ps = session_ids()
+    low = [ps[0], ps[1], ps[2], ps[3]]  # 4 low-effort sessions, 4 folds
+    folds = session_folds(ps, 4, seed=0, stratum=low)
+    assert [len(set(f) & set(low)) for f in folds] == [1, 1, 1, 1]
+    assert sorted(p for f in folds for p in f) == sorted(ps)
+    assert max(map(len, folds)) - min(map(len, folds)) <= 1
+    for seed in range(5):  # 6 low-effort in 4 folds: at most one apart
+        f6 = session_folds(ps, 4, seed=seed, stratum=ps[:6])
+        counts = [len(set(f) & set(ps[:6])) for f in f6]
+        assert sum(counts) == 6 and max(counts) - min(counts) <= 1
+        assert max(map(len, f6)) - min(map(len, f6)) <= 1
+    # ids that are not sessions are ignored; no stratum = the plain deal
+    assert session_folds(ps, 4, 0, stratum=["nope"]) == session_folds(ps, 4, 0)
+
+
+# ---------------------------------------------------------------- headline and cap variants
+def test_headline_is_tpr_at_5pct_with_1pct_secondary():
+    sc, make, assessment, items, human, *_ = scored_router()
+    s = summarize(
+        sc,
+        make,
+        RouterConfig(),
+        assessment,
+        items,
+        human,
+        (0.01, 0.05),
+        n_boot=10,
+        n_synthetic_boot=5,
+    )
+    text = run_real_router.headline_text(s)
+    assert text.startswith("HEADLINE (pilot): router TPR at 5% FPR")
+    assert text.index("5% FPR") < text.index("Secondary: TPR at 1% FPR")
+    assert run_real_router._ordered(s)[:3] == ["A_0.05", "A_0.01", "A_max"]
+
+
+def test_cap_variants():
+    v = run_real_router.CAP_VARIANTS
+    assert v["per_mech"] is None
+    assert set(v["passive_group"]["passive"]) == {"behaviour", "style"}
+    assert set(v["open_text_group"]["open_text"]) == {"canary", "style"}
+    item = _item("arc:cap-2")
+    for groups in (v["passive_group"], v["open_text_group"]):  # valid router configs
+        SPRTRouter({item.item_id: item}, {}, _passive_map(), RouterConfig(mech_group_caps=groups))
+
+
+def test_run_real_router_low_effort_and_cap_variants(tmp_path):
+    _files(tmp_path)
+    low = tmp_path / "low_effort_ids.txt"
+    low.write_text("\n".join(session_ids()[:4]) + "\n")
+    proc = subprocess.run(
+        _cmd(
+            tmp_path,
+            "--low-effort",
+            str(low),
+            "--cap-variant",
+            "per_mech",
+            "passive_group",
+            "open_text_group",
+        ),
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    assert "low-effort sessions per fold: [1, 1, 1, 1]" in proc.stdout
+    assert "one person may span sessions" in proc.stdout
+    assert "HEADLINE (pilot): router TPR at 5% FPR" in proc.stdout
+    assert "cap variant passive_group has no effect here" in proc.stdout  # decoy only
+    out = tmp_path / "real-router" / "r"
+    th = pd.read_csv(out / "thresholds.csv")
+    assert {"router[passive_group]", "router[open_text_group]"} <= set(th.policy)
+    cfg = __import__("yaml").safe_load((out / "config.yaml").read_text())
+    assert cfg["cap_variants"] == ["per_mech", "passive_group", "open_text_group"]
+    assert cfg["low_effort_per_fold"] == [1, 1, 1, 1]
+    assert json.loads((out / "metrics.json").read_text())["headline"].startswith("HEADLINE")
