@@ -107,6 +107,11 @@ Injection"); the section and table numbers here refer to that preprint.
 - The paper hid the attack prompt with CSS (Table 2). In copy-paste mode the hidden text is
   copied either way.
 
+**Höhne et al. (2025)**, "LLM-driven bot infiltration: protecting web surveys through prompt
+injections" (IJSRM 29(6)), is cited for baseline 5 but its traps are **not re-tested here**: we
+only reproduce traps verbatim, and we don't have their exact wording. We'll add them if the
+wording is shared.
+
 **Westwood-type checks (our wording)**, after Westwood 2025, "The potential existential threat of large language models to online survey
 research", PNAS 122(47):e2518075122. 9 items. Every item is marked **"wording ours, type from
 Westwood 2025"**. The paper describes the kinds of check it used: instruction-following,
