@@ -1,8 +1,9 @@
 """Build any policy (the router or a baseline) by name, for replay and comparisons.
 
     router          the Adaptive Defense Router (adr/router/core.py)
-    router_noclear  the router with clearing disabled (lower threshold B = -inf): it picks checks
-                    adaptively but, like the baselines, never stops checking a low score
+    router_noclear  the router with clearing disabled (RouterConfig.clear=False): it picks checks
+                    adaptively but, like the baselines, never stops checking a low score. B still
+                    floors each mechanism's total, as in the router
     best_single     baseline 1: the best single mechanism for this assessment (train map);
                     like single:<mech>, it has no per-mechanism cap (see SingleMechanismRouter)
     all_checks      baseline 2: a check on every item
@@ -13,7 +14,6 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import replace
 
 from adr.baselines.plans import AllChecksRouter, FixedPlanRouter, best_single_mechanism
@@ -38,7 +38,7 @@ def make_policy(
     if name == "router":
         return SPRTRouter(*args)
     if name == "router_noclear":
-        return SPRTRouter(items, variants, fmap, replace(cfg, lower=-math.inf))
+        return SPRTRouter(items, variants, fmap, replace(cfg, clear=False))
     if name == "best_single":
         mech, totals = best_single_mechanism(fmap, assessment, items, variants, cfg.attack_mode)
         return SingleMechanismRouter(*args, mechanism=mech, expected_evidence=totals)

@@ -153,6 +153,8 @@ def build_prompt(
 # ---------------------------------------------------------------- document upload (step #20)
 # Separate version tag: changing the text below bumps this, not PROMPT_VERSION.
 DOC_PROMPT_VERSION = "du-v1"
+# Document-upload prompt version for each SYSTEM_VARIANTS entry (the user prompt is unchanged).
+DOC_VARIANT_PROMPT_VERSION: dict[str, str] = {"L2-generic": f"{DOC_PROMPT_VERSION}+l2-generic-v1"}
 
 DOC_USER_PROMPT = (
     "I've attached a {kind} as a PDF. It has {n} questions. Answer every question.\n"
@@ -165,10 +167,12 @@ DOC_USER_PROMPT = (
 
 
 def build_doc_prompt(
-    kind: str, n_questions: int, level: str, persona: str = DEFAULT_PERSONA
+    kind: str, n_questions: int, level: str, persona: str = DEFAULT_PERSONA,
+    variant: str | None = None,
 ) -> tuple[str | None, list[dict[str, str]]]:
     """Return (system, messages) for a whole-document upload at one attacker level. The PDF
-    itself goes to the client as an attachment. System prompts are the copy-paste ones."""
+    itself goes to the client as an attachment. System prompts are the copy-paste ones;
+    `variant` names an entry of SYSTEM_VARIANTS for that level, as in build_prompt."""
     if level == "L3":
         raise NotImplementedError(
             "L3 (retry after a flag) is implemented for copy-paste only. Document upload answers "
@@ -178,6 +182,10 @@ def build_doc_prompt(
     if level not in SYSTEM_BY_LEVEL:
         raise ValueError(f"unknown attacker level {level!r}")
     system = SYSTEM_BY_LEVEL[level]
+    if variant is not None:
+        if variant not in SYSTEM_VARIANTS or SYSTEM_VARIANTS[variant][0] != level:
+            raise ValueError(f"{variant!r} is not a system-prompt variant of {level}")
+        system = SYSTEM_VARIANTS[variant][2]
     if system and "{persona}" in system:
         system = system.format(persona=persona)
     user = DOC_USER_PROMPT.format(kind=kind, n=n_questions)

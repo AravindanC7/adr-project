@@ -16,8 +16,10 @@ Three splits (split_rows):
 
 from __future__ import annotations
 
+import json
 import random
 from dataclasses import dataclass
+from pathlib import Path
 
 import pandas as pd
 
@@ -33,6 +35,14 @@ TEMPORARY_NOTE = (
 def heldout_mask(df: pd.DataFrame) -> pd.Series:
     """True for rows that may only be used for final evaluation, never for fitting."""
     return df["heldout_model"].astype(bool) | (df["split"] != "train")
+
+
+DATA_DECISIONS = Path(__file__).resolve().parents[2] / "configs" / "data_decisions.json"
+
+
+def decided_heldout_model(path: Path = DATA_DECISIONS) -> str:
+    """The held-out model decided in configs/data_decisions.json (claude-haiku since Nov 17)."""
+    return json.loads(path.read_text(encoding="utf-8"))["heldout_model"]["name"]
 
 
 def final_eval_rows(heldout: pd.DataFrame, heldout_model: str) -> pd.DataFrame:
