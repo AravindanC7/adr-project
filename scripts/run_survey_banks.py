@@ -202,22 +202,27 @@ def cmd_run(a) -> None:
     mechs = mechanisms_for(a.bank)
     client = client_for(a.fake)
     _, cp_max, q, du_max = BANKS[a.bank]
-    rid = run_id(a.bank, a.mode) + ("-fake" if a.fake else "")
+    rid = (a.run_id or run_id(a.bank, a.mode)) + ("-fake" if a.fake else "")
     results = "results-fake" if a.fake else "results"
     note = "L0 gpt-mini on archana-survey-written-v1 (handoff 2026-11-17)"
     if a.mode == "cp":
         from adr.harness.copy_paste import CopyPasteConfig, run_copy_paste
 
         cfg = CopyPasteConfig(run_id=rid, models=[MODEL], attacker_level="L0",
-                              n_samples=CP_SAMPLES, temperature=CP_TEMP, max_tokens=cp_max,
-                              results_dir=results, note=note)
+                              n_samples=a.samples or CP_SAMPLES, first_sample=a.first_sample,
+                              temperature=CP_TEMP if a.temperature is None else a.temperature,
+                              max_tokens=cp_max, results_dir=results, note=note)
         rows = run_copy_paste(client, assessment, items, variants, mechs, cfg)
     else:
         from adr.harness.doc_upload import DocUploadConfig, run_doc_upload
 
+        if a.first_sample:
+            raise SystemExit("--first-sample is copy-paste only")
         cfg = DocUploadConfig(run_id=rid, models=[MODEL], attacker_level="L0",
-                              n_samples=DU_SAMPLES, temperature=DU_TEMP, max_tokens=du_max,
-                              questions_per_doc=q, results_dir=results, note=note)
+                              n_samples=a.samples or DU_SAMPLES,
+                              temperature=DU_TEMP if a.temperature is None else a.temperature,
+                              max_tokens=du_max, questions_per_doc=q, results_dir=results,
+                              note=note)
         rows = run_doc_upload(client, assessment, items, variants, mechs, cfg)
     run_dir = Path(results) / "runs" / rid
     conf = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
@@ -281,10 +286,18 @@ def cmd_rescore(a) -> None:
 
     style = style_mechanism(a.style_profile)
     profile_sha = sha256(a.style_profile)
-    for bank in BANKS:
+    if a.runs:  # only these BANK=RUN_ID runs (e.g. ones added later); the default six untouched
+        todo: dict[str, list[str]] = {}
+        for spec in a.runs:
+            bank, _, rid = spec.partition("=")
+            if bank not in BANKS or not rid:
+                raise SystemExit(f"--runs takes BANK=RUN_ID with BANK in {list(BANKS)}: {spec!r}")
+            todo.setdefault(bank, []).append(rid)
+    else:
+        todo = {bank: [run_id(bank, m) for m in ("cp", "du")] for bank in BANKS}
+    for bank, rids in todo.items():
         assessment, items, variants = load(bank)
-        for mode in ("cp", "du"):
-            rid = run_id(bank, mode)
+        for rid in rids:
             run_dir = Path("results/runs") / rid
             current = Path("results/outcomes") / f"{rid}.parquet"
             original = run_dir / "outcomes.harness.parquet"
@@ -325,8 +338,14 @@ def main() -> None:
     r.add_argument("--bank", choices=list(BANKS), required=True)
     r.add_argument("--mode", choices=["cp", "du"], required=True)
     r.add_argument("--fake", action="store_true")
+    r.add_argument("--run-id", help="override the default run id (e.g. to add samples)")
+    r.add_argument("--samples", type=int, help=f"default cp {CP_SAMPLES}, du {DU_SAMPLES}")
+    r.add_argument("--first-sample", type=int, default=0, help="cp only: first sample index")
+    r.add_argument("--temperature", type=float, help=f"default cp {CP_TEMP}, du {DU_TEMP}")
     rs = sub.add_parser("rescore")
     rs.add_argument("--style-profile", type=Path, default=STYLE_PROFILE)
+    rs.add_argument("--runs", nargs="+", metavar="BANK=RUN_ID",
+                    help="rescore only these runs (default: the six standard runs)")
     a = ap.parse_args()
     {"check": cmd_check, "estimate": cmd_estimate, "run": cmd_run,
      "rescore": cmd_rescore}[a.cmd](a)

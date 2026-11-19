@@ -58,6 +58,8 @@ def main() -> None:
     ap.add_argument("--level", default="L0", choices=["L0", "L1", "L2", "L3", "L4"],
                     help="L3 = L1 prompt + one retry after a flagged answer")
     ap.add_argument("--samples", type=int, default=1)
+    ap.add_argument("--first-sample", type=int, default=0,
+                    help="index of the first sample (add samples to an earlier run)")
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--run-id")
@@ -114,6 +116,7 @@ def main() -> None:
         models=models,
         attacker_level=args.level,
         n_samples=args.samples,
+        first_sample=args.first_sample,
         temperature=args.temperature,
         max_workers=args.workers,
     )
