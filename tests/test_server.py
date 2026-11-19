@@ -306,7 +306,7 @@ def test_an_unscorable_answer_counts_as_shown_with_no_evidence(monkeypatch, tmp_
 
 
 def test_the_reading_floor_counts_the_items_passage(tmp_path, monkeypatch):
-    # A real Item with a passage, through the server: 40 + 5 words -> a 5500 ms floor.
+    # A real Item with a passage, through the server: 40 + 5 words -> a 3000 ms floor.
     monkeypatch.setenv("ADR_DEBUG_STATE", "1")
     bank = tmp_path / "bank.json"
     item = {
@@ -330,7 +330,7 @@ def test_the_reading_floor_counts_the_items_passage(tmp_path, monkeypatch):
     shown = client.post("/session/start", json={"assessment_id": "p"}).json()["item"]
     assert shown["passage"] == item["passage"]  # sent with the visible item
     outcomes = []
-    for ms in (3000, 6000):  # enough for the stem alone; enough for passage + stem
+    for ms in (2000, 6000):  # enough for the stem alone; enough for passage + stem
         step = client.post("/session/start", json={"assessment_id": "p"}).json()
         step = respond(client, step, 0, ms=ms).json()
         history = client.get(f"/session/{step['session_id']}").json()["history"]

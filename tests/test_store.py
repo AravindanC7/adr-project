@@ -35,12 +35,13 @@ def test_each_answer_is_on_disk_as_it_happens(saved):
     assert [r["event"] for r in records] == ["start"]
     assert records[0]["consented"] is True and records[0]["assessment_id"] == "stub-quiz"
 
-    step = respond(client, step, VALID[step["item"]["item_type"]]).json()
+    # 500 ms is under any reading floor (at least ANSWER_MS = 750 ms): too_fast
+    step = respond(client, step, VALID[step["item"]["item_type"]], ms=500).json()
     records = read_session(folder / f"{sid}.jsonl")
     assert [r["event"] for r in records] == ["start", "answer"]
     answer = records[1]
     assert answer["mechanism"] == "decoy" and answer["item_type"] == "mcq"
-    assert answer["telemetry"]["time_on_item_ms"] == 1200
+    assert answer["telemetry"]["time_on_item_ms"] == 500
     assert [o for _, o in answer["outcomes"]][1] == "too_fast"  # the behaviour check, passive
     assert answer["outcomes"][1][0].endswith("|behaviour|0")
 
