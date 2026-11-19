@@ -176,6 +176,35 @@ Outputs are in `results/real-router/rq2-l0-{all,no-low-effort}/` and are not com
 
 Next: when Session B's L2 / L2g samples land, the same command runs again with them added. L2 and L2g go into separate sessions and groups (24cb0b5).
 
+## The single false pause
+
+At the router's 1% threshold, one real honest session is paused (1 of 44, and 1 of 40 without the low-effort sessions). It is **the same session in both runs**, so it is not one of the 4 low-effort sessions. Below are its outcomes and evidence (log-likelihood contributions, in nats) from the out-of-fold replay, up to the pause. Answer text and the session ID are left out.
+
+**Per-check totals at the pause** (per_mech; the first number is with all 44 sessions, A_0.01 = 0.501; the second is without the low-effort sessions, A_0.01 = 0.140):
+
+| check | outcomes before the pause | total evidence |
+|---|---|---|
+| canary | clean, clean (both open-text items) | **−2.99 / −2.99** (at the floor B after the first answer; the second adds 0) |
+| style (passive) | mid, mid (both open-text answers) | **+2.69 / +2.96** |
+| decoy | picked_correct ×5, then picked_decoy ×2 | **+1.28 / +1.08** (−0.15 / −0.19 per correct answer, +1.02 / +1.01 per decoy pick) |
+| **score at the pause** | | **0.99 / 1.05** |
+
+Order of events:
+1. **The first clean canary answer sends the score straight to the floor B (−2.99), and the session is cleared.**
+2. **The passive style check then re-opens it.** Style is observed on every open-text answer whatever check is served, and "mid" scores +1.35 per answer. This lifts the score above B, so the status goes back to active. **"Cleared" is not final**: the router recomputes the status after every update, and only "review" is sticky.
+3. **The router serves checks again,** a second canary and then decoys. The canary is at its floor, so the second clean answer adds nothing.
+4. **Five correct decoy answers barely move the score** (−0.15 each). **Two decoy picks** (+1.02 each) take it from −1.05 to +0.99, past the near-zero 1% threshold.
+
+**Why it happens:**
+- **The [B, +cap] bound limits the canary's human-side evidence to −2.99,** while style and decoy can each add up to +2.96. Two "mid" style scores almost cancel two clean canaries.
+- **The 1% threshold is near zero (0.5 or less),** so two decoy picks are enough to pause.
+
+**Under the other cap variants:**
+- **open_text_group** (canary and style share one cap): **paused**, in both runs. Score 0.66 against A_0.01 = 0.321 with all 44 sessions, and 0.61 against 0.165 without the low-effort sessions. The shared group total stays near the floor, but the decoy evidence is unchanged.
+- **no_cap** (ablation): **not paused**, in either run. Without the floor, the clean canaries give unbounded human-side evidence, so style and decoy can't pull the score back up.
+
+**Effect on the reported rates:** honest-cleared and AI-wrongly-cleared count sessions whose replay **ends** cleared, before reaching the threshold. A session that is cleared, re-opened and ends active is counted as not cleared. The docstring of `Trace.cleared_at` ("clearing is final") is wrong for sessions with passive checks. It needs a fix, together with a decision on whether passive evidence should be allowed to re-open a cleared session.
+
 ### Real run: all 44 pilot sessions (44 honest sessions)
 
 | policy | threshold | A | TPR [95% CI] | TPR copy-paste | TPR doc upload | nominal FPR | real honest pause rate | checks per honest session | honest cleared | AI wrongly cleared |
