@@ -105,6 +105,9 @@ pip install -e ".[server]"
 uvicorn server.app:app --reload                       # then open http://127.0.0.1:8000
 ADR_STUB_MECHANISMS=1 uvicorn server.app:app          # with the stub decoy + canary injected
 # Settings (all in server/app.py): ADR_PICK=all|router, ADR_HIDE=clip|clear|clip_aria
+# Router scoring on the live server (#43): ADR_MAP=<FailureMap JSON>; unset = empty map
+python scripts/make_demo_map.py                       # SYNTHETIC demo map -> results/failure_map/demo_synthetic.json
+ADR_MAP=results/failure_map/demo_synthetic.json ADR_PICK=router ADR_DEBUG_STATE=1 uvicorn server.app:app
 
 # Browser test that copied text equals copy_text (needs a ~150 MB Chromium, once):
 pip install -e ".[browser]" && python -m playwright install chromium

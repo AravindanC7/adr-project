@@ -184,3 +184,90 @@ def test_rates_report_ai_sessions_wrongly_cleared():
     r = rates([t("h", 0.0, True)], ai, [0.0], {"A": 2.0})["A"]
     assert r["ai_cleared_rate"] == pytest.approx(0.25)  # session a: cleared under 1 of 2 maps
     assert r["honest_cleared_rate"] == 1.0
+
+
+# ---------------------------------------------------------------- clear_policy: reopen | sticky
+def _clear_then_style(policy: str, n_high: int = 2):
+    """One clean canary-like negative check clears the session; then passive 'high' style
+    evidence arrives (as on every open-text answer)."""
+    router, assessment = _router(replace(RouterConfig(), clear_policy=policy))
+    state, _ = router.start(assessment, "s", 0)
+    state = router.update(state, make_variant_id("arc:f0", "decoy"), "picked_correct")
+    state = router.update(state, make_variant_id("arc:f1", "decoy"), "picked_correct")
+    assert state.status == "cleared"
+    for i in range(n_high):
+        state = router.update(state, make_variant_id(f"arc:f{2 + i}", "style"), "high")
+    return router, state
+
+
+def test_reopen_is_the_default_and_lets_later_evidence_reopen_a_cleared_session():
+    assert RouterConfig().clear_policy == "reopen"
+    router, state = _clear_then_style("reopen", n_high=1)
+    assert state.score > router.B and state.status == "active"  # reopened: checks again
+
+
+def test_sticky_keeps_a_cleared_session_cleared():
+    router, state = _clear_then_style("sticky", n_high=1)
+    assert state.score > router.B and state.status == "cleared"
+    assert router.next(state).mechanism is None  # plain items only
+
+
+def test_sticky_review_still_wins():
+    # no cap, so passive evidence alone can climb from B to A = 1.0
+    cfg = replace(RouterConfig(), clear_policy="sticky", upper=1.0, mech_cap_frac=None)
+    router, assessment = _router(cfg)
+    state, _ = router.start(assessment, "s", 0)
+    state = router.update(state, make_variant_id("arc:f0", "decoy"), "picked_correct")
+    state = router.update(state, make_variant_id("arc:f1", "decoy"), "picked_correct")
+    assert state.status == "cleared"
+    for i in range(2, 8):
+        state = router.update(state, make_variant_id(f"arc:f{i}", "style"), "high")
+        if state.status == "review":
+            break
+    assert state.score >= router.A and state.status == "review"
+
+
+def test_unknown_clear_policy_is_refused():
+    with pytest.raises(ValueError, match="clear_policy"):
+        _router(replace(RouterConfig(), clear_policy="maybe"))
+
+
+def test_trace_ever_cleared_vs_cleared_at_the_end():
+    import numpy as np
+
+    from adr.replay.crossfit import Trace
+
+    # cleared at step 1 (score -3.0), reopened by passive evidence, ends active at 0.4
+    reopened = Trace("s", 0, 0.4, np.array([-1.0, -3.0, -1.5, 0.4]), np.array([1, 2, 2, 2]), 2,
+                     cleared=False, cleared_step=1)
+    assert reopened.ever_cleared_at(2.0) and not reopened.cleared_at(2.0)
+    assert reopened.ever_cleared_at(0.3)       # cleared before it ever reached 0.3
+    # paused before it would clear: not "ever cleared" at that threshold
+    late = Trace("t", 0, 1.0, np.array([1.0, -3.0]), np.array([1, 2]), 2, cleared=True,
+                 cleared_step=1)
+    assert not late.ever_cleared_at(0.5) and late.ever_cleared_at(2.0)
+    never = Trace("u", 0, 0.0, np.array([0.0]), np.array([0]), 0)
+    assert not never.ever_cleared_at(1.0) and not never.cleared_at(1.0)
+
+
+def test_replay_records_the_first_cleared_step_even_when_reopened():
+    from adr.replay.donors import Donors, Group
+    from adr.replay.simulate import replay_session
+
+    class Script:  # passive style: "low" on the first two items (clears), then "high"
+        group, session_id, fallbacks, synthetic = Group.human("x"), "d", 0, 0
+
+        def outcome(self, item_id, mechanism):
+            assert mechanism == "style"
+            return "low" if item_id in ("arc:f0", "arc:f1") else "high"
+
+    assert Donors  # (the real Donors is exercised elsewhere)
+    ends = {}
+    for policy in ("reopen", "sticky"):
+        router, assessment = _router(replace(RouterConfig(), clear_policy=policy), n=6)
+        res = replay_session(router, assessment, Script(), passive=("style",), seed=0)
+        assert res.cleared_step is not None
+        assert res.final.history[res.cleared_step][0] == make_variant_id("arc:f1", "style")
+        ends[policy] = res.final.status
+    assert ends["sticky"] == "cleared"  # stayed cleared
+    assert ends["reopen"] in ("active", "escalated")  # reopened: no longer cleared

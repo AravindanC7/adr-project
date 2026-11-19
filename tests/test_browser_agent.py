@@ -93,7 +93,7 @@ def test_clip_aria_hides_traps_from_the_accessibility_snapshot(results):
 def test_outcome_rows_validate_and_are_browser_agent_rows(results):
     df = read_outcomes(results["root"] / "outcomes" / "naive.parquet")   # validates every row
     assert len(df) == len(results["naive"]["rows"])
-    assert (df.mechanism != "behaviour").sum() == 8        # 3 quiz + 5 survey questions
+    assert (df.mechanism != "behaviour").sum() == 9        # 4 quiz + 5 survey questions
     assert (df.attack_mode == "browser_agent").all() and (df.respondent_kind == "ai").all()
     assert df.raw_ref.str.startswith("llm-cache:").all()
     config = (results["root"] / "runs" / "naive" / "config.yaml").read_text(encoding="utf-8")
@@ -101,7 +101,7 @@ def test_outcome_rows_validate_and_are_browser_agent_rows(results):
 
 
 def test_rerun_is_fully_cached(results):
-    assert results["naive"]["calls"] == 8
+    assert results["naive"]["calls"] == 9
     assert results["rerun"]["calls"] == 0
     assert all(r["cached"] for r in results["rerun"]["responses"])
     assert _outcomes(results["rerun"]) == _outcomes(results["naive"])
