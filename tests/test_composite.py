@@ -14,10 +14,11 @@ BANKS = {
 }
 
 
-def _run(model, mode, bank, samples, run_suffix="", docs=2):
+def _run(model, mode, bank, samples, run_suffix="", docs=2, level="L0", prompt_version=None):
     tag = {"copy_paste": "cp", "doc_upload": "du"}[mode]
     source, itype, mech, outcome = BANKS[bank]
-    run_id = f"v1-{tag}-L0-{bank}{run_suffix}"
+    run_id = f"v1-{tag}-{level}-{bank}{run_suffix}"
+    prompt_version = prompt_version or f"{tag}-v1"
     rows = []
     for sample in samples:
         chunks = [f":d{k}" for k in range(docs)] if mode == "doc_upload" else [""]
@@ -30,7 +31,8 @@ def _run(model, mode, bank, samples, run_suffix="", docs=2):
                         "respondent_kind": "ai",
                         "model": model,
                         "attack_mode": mode,
-                        "attacker_level": "L0",
+                        "attacker_level": level,
+                        "prompt_version": prompt_version,
                         "heldout_model": False,
                         "split": "train",
                         "item_type": itype,
@@ -92,7 +94,7 @@ def test_missing_keys_are_recorded_not_dropped():
     assert join.rows["session_id"].nunique() == 4  # samples 1-3 kept, not dropped
     assert sorted(join.missing["sample"]) == ["1", "2", "3"]
     assert set(join.missing["bank"]) == {"arc"}
-    assert "doc_upload / arc: samples 1,2,3" in join.summary()
+    assert "doc_upload L0 / arc: samples 1,2,3" in join.summary()
 
 
 def test_new_samples_from_a_later_run_join_automatically():
@@ -204,3 +206,52 @@ def test_rows_dropped_by_the_filter_or_final_never_appear_in_a_composite_session
     assert not any("gemini-flash" in s for s in final_sessions)
     # and no kept session contains a dropped row
     assert set(dropped.index).isdisjoint(kept.index)
+
+
+# ------------------------------------------------- attacker variants (L2 vs L2-generic)
+def test_attacker_variant_from_prompt_version():
+    from adr.replay.composite import attacker_variant
+
+    assert attacker_variant("L0", "cp-v1") == "L0"
+    assert attacker_variant("L2", "cp-v1") == "L2"
+    assert attacker_variant("L2", "cp-v1+l2-generic-v1") == "L2g"
+    assert attacker_variant("L2", "du-v1+l2-generic-v1") == "L2g"
+    assert attacker_variant("L3", "cp-v1+cp-retry-v1") == "L3"  # part of L3, not a variant
+    assert attacker_variant("L2", "cp-v1+new-v9") == "L2+new-v9"  # unknown: never merged
+    assert attacker_variant("L1", None) == "L1"
+
+
+def test_l2_and_l2_generic_never_share_a_session_or_group():
+    from adr.replay.donors import group_of
+
+    rows = []
+    for bank in ("quiz-arc", "survey-gss"):
+        rows += _run("gpt-mini", "copy_paste", bank, range(2), level="L2")
+        rows += _run("gpt-mini", "copy_paste", bank, range(2), level="L2",
+                     run_suffix="-generic", prompt_version="cp-v1+l2-generic-v1")
+    comp = join_ai_sessions(pd.DataFrame(rows)).rows
+    # same model, mode and sample -> two sessions per sample: L2 and L2g
+    assert sorted(comp["session_id"].unique()) == [
+        "composite:gpt-mini:copy_paste:L2:0", "composite:gpt-mini:copy_paste:L2:1",
+        "composite:gpt-mini:copy_paste:L2g:0", "composite:gpt-mini:copy_paste:L2g:1",
+    ]
+    for sid, g in comp.groupby("session_id"):
+        assert g["prompt_version"].nunique() == 1, sid  # never mixed
+        assert g["run_id"].nunique() == 2  # quiz + survey, each from its own variant's run
+    assert set(comp["attacker_level"]) == {"L2"}  # stored level unchanged (map lookups use it)
+    labels = {group_of(r).label for r in comp.to_dict("records")}
+    assert labels == {"ai:gpt-mini:copy_paste:L2", "ai:gpt-mini:copy_paste:L2g"}
+
+
+def test_tpr_is_reported_per_attacker_variant():
+    from adr.replay.crossfit import rates
+
+    ai = [
+        [_t("ai:m:copy_paste:L0|a", 5.0)],
+        [_t("ai:m:copy_paste:L2|b", 1.0)],
+        [_t("ai:m:copy_paste:L2g|c", 5.0)],
+    ]
+    r = rates([_t("h", 0.0)], ai, [0.0], {"A": 2.0})["A"]
+    assert (r["tpr[m:copy_paste:L0]"], r["tpr[m:copy_paste:L2]"], r["tpr[m:copy_paste:L2g]"]) == (
+        1.0, 0.0, 1.0
+    )

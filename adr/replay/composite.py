@@ -4,10 +4,13 @@ A pilot session mixes quiz MCQs (decoy), survey MCQ/Likert (opinion trap, incl. 
 and open text (canary, style). Each harness run covers ONE bank. `join_ai_sessions` joins the
 runs into sessions shaped like a pilot session:
 
-    key = (model, attack_mode, attacker_level, sample index)
+    key = (model, attack_mode, attacker variant, sample index)
 
 All rows with the same key, from every bank, become one session
-"composite:<model>:<attack_mode>:<attacker_level>:<sample>".
+"composite:<model>:<attack_mode>:<attacker variant>:<sample>". The attacker variant is the
+level plus any prompt variant, read from prompt_version (`attacker_variant`): L2 and L2-generic
+rows are both stored as attacker_level L2 and differ only in prompt_version ("cp-v1" vs
+"cp-v1+l2-generic-v1"), so they become L2 and L2g and never share a session or a group.
 
 Assumption (documented in the PR): harness runs are independent calls, so sample i of the quiz
 run and sample i of a survey run are no more alike than any two samples. Pairing them by index
@@ -33,8 +36,33 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-KEY = ("model", "attack_mode", "attacker_level", "sample")
-GROUP = ("model", "attack_mode", "attacker_level")
+KEY = ("model", "attack_mode", "attacker_variant", "sample")
+GROUP = ("model", "attack_mode", "attacker_variant")
+# prompt_version suffix ("<base>+<suffix>") -> attacker variant name. None = the suffix is part of
+# the level itself (L3's retry prompt), not a variant. Any other suffix gets "<level>+<suffix>",
+# so an unknown variant is never merged with its level silently.
+PROMPT_VARIANTS: dict[str, str | None] = {"l2-generic-v1": "L2g", "cp-retry-v1": None}
+
+
+def attacker_variant(level: str, prompt_version: str | None) -> str:
+    """"L2" + "cp-v1+l2-generic-v1" -> "L2g"; "L2" + "cp-v1" -> "L2"; "L3" + "cp-v1+cp-retry-v1"
+    -> "L3"."""
+    if not isinstance(prompt_version, str) or "+" not in prompt_version:
+        return level
+    suffix = prompt_version.split("+", 1)[1]
+    if suffix in PROMPT_VARIANTS:
+        return PROMPT_VARIANTS[suffix] or level
+    return f"{level}+{suffix}"
+
+
+def add_attacker_variant(rows: pd.DataFrame) -> pd.DataFrame:
+    """The rows with an attacker_variant column (used by the join and by the replay groups)."""
+    rows = rows.copy()
+    pv = rows["prompt_version"] if "prompt_version" in rows else pd.Series(None, index=rows.index)
+    rows["attacker_variant"] = [
+        attacker_variant(lv, v) for lv, v in zip(rows["attacker_level"], pv, strict=True)
+    ]
+    return rows
 # Never used for fitting or evaluation before the final run (AGENTS.md section 8 + team decisions).
 FORBIDDEN_MODELS = frozenset({"claude-haiku", "gemini-flash"})
 FORBIDDEN_SOURCES = frozenset({"asurre_osmi_2017_18"})  # the held-out survey
@@ -84,11 +112,14 @@ class CompositeJoin:
         n = self.rows["session_id"].nunique()
         if self.missing.empty:
             return f"{n} composite AI sessions; every key has rows in every bank of its group"
-        per = self.missing.groupby(["attack_mode", "bank"])["sample"].apply(
+        per = self.missing.groupby(["attack_mode", "attacker_variant", "bank"])["sample"].apply(
             lambda s: ",".join(sorted(s, key=int))
         )
         lines = [f"{n} composite AI sessions; keys MISSING in a bank (kept; see composite.py):"]
-        lines += [f"  {mode} / {bank}: samples {samples}" for (mode, bank), samples in per.items()]
+        lines += [
+            f"  {mode} {variant} / {bank}: samples {samples}"
+            for (mode, variant, bank), samples in per.items()
+        ]
         return "\n".join(lines)
 
 
@@ -108,7 +139,7 @@ def join_ai_sessions(rows: pd.DataFrame, allow_heldout: bool = False) -> Composi
         raise ValueError("join_ai_sessions takes AI rows only")
     if not allow_heldout:
         check_allowed(rows)
-    rows = rows.copy()
+    rows = add_attacker_variant(rows)
     rows["sample"] = [
         sample_index(s, r, m)
         for s, r, m in zip(rows["session_id"], rows["run_id"], rows["model"], strict=True)
@@ -139,7 +170,7 @@ def join_ai_sessions(rows: pd.DataFrame, allow_heldout: bool = False) -> Composi
     rows["session_id"] = [
         f"composite:{m}:{a}:{lv}:{i}"
         for m, a, lv, i in zip(
-            rows["model"], rows["attack_mode"], rows["attacker_level"], rows["sample"],
+            rows["model"], rows["attack_mode"], rows["attacker_variant"], rows["sample"],
             strict=True,
         )
     ]

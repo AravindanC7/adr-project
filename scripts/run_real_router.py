@@ -63,7 +63,7 @@ from adr.contracts.outcome import utc_now
 from adr.harness.copy_paste import _git_commit, plain_variant
 from adr.harness.registry import get_mechanism
 from adr.replay.compare import BETAS
-from adr.replay.composite import check_allowed, join_ai_sessions
+from adr.replay.composite import add_attacker_variant, check_allowed, join_ai_sessions
 from adr.replay.crossfit import (
     MIN_GROUP_SESSIONS,
     all_maps,
@@ -274,6 +274,7 @@ def main() -> None:
     if not args.final:
         check_allowed(ai)  # no held-out model, excluded models or held-out (OSMI) survey rows
     missing_keys = None
+    ai = add_attacker_variant(ai)  # L2 vs L2g (L2-generic): separate sessions and groups
     if not args.per_run_sessions:
         n_before = ai["session_id"].nunique()
         join = join_ai_sessions(ai, allow_heldout=args.final)
