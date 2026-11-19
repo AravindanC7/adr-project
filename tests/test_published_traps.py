@@ -172,3 +172,31 @@ def test_wilson_and_bootstrap():
     assert bootstrap([[0, 0], [0, 0]]) == (0.0, 0.0)
     lo, hi = bootstrap([[1, 1, 1], [0, 0, 0]], n_boot=500)
     assert lo < 0.5 < hi
+
+
+def test_wang_closed_ended_items_cluster_by_scenario():
+    from scripts.baseline5 import cluster
+
+    traps = {t.trap_id: t for t in all_traps()}
+    closed = [t for t in traps.values() if "-closed-" in t.trap_id]
+    labels = {cluster(t) for t in closed}
+    assert len(closed) == 12 and len(labels) == 4  # 4 scenarios x 3 positions
+    others = [t for t in traps.values() if "-closed-" not in t.trap_id]
+    assert all(cluster(t) == t.trap_id for t in others)  # one item per cluster
+
+
+def test_cluster_bootstrap_resamples_scenarios_not_items():
+    # 2 scenarios x 3 positions: one always flagged, one never. Resampling scenarios can draw the
+    # never-flagged one twice, so the CI reaches 0; resampling the 6 items as independent can't.
+    per_item = [[1] * 5] * 3 + [[0] * 5] * 3
+    labels = ["a"] * 3 + ["b"] * 3
+    lo, hi = bootstrap(per_item, n_boot=500, clusters=labels)
+    assert lo == 0.0 and hi == 1.0
+    lo_i, hi_i = bootstrap(per_item, n_boot=500)
+    assert lo_i > 0.0 and hi_i < 1.0
+    # singleton clusters give exactly the item bootstrap
+    assert bootstrap(per_item, n_boot=200, clusters=[str(i) for i in range(6)]) == bootstrap(
+        per_item, n_boot=200
+    )
+    with pytest.raises(ValueError):
+        bootstrap(per_item, clusters=["a"])

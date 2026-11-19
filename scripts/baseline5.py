@@ -19,10 +19,12 @@ role, but it only warns about hidden instructions in general and names no trap;
 adr/harness/prompts.py SYSTEM_VARIANTS). L2-generic rows keep attacker_level L2 and use their own
 prompt_version (cp-v1+l2-generic-v1).
 
-CIs: per trap, Wilson 95% on its 5 answers. Pooled over a trap type, a two-level bootstrap
-(resample items, then answers within each item), the same scheme as the RQ4 decoy rates; when
-every pooled answer is unflagged (or every one flagged) the bootstrap can only return [0, 0]
-(or [1, 1]), so those cells use the Wilson 95% interval on the pooled k/n instead.
+CIs: per trap, Wilson 95% on its 5 answers. Pooled over a trap type, a two-level cluster
+bootstrap: resample clusters, then answers within each item of a drawn cluster. A cluster is one
+Wang closed-ended SCENARIO with its 3 positions (they share the scenario, so they are not
+independent items); every other trap is its own cluster, which is the same scheme as the RQ4
+decoy rates. When every pooled answer is unflagged (or every one flagged) the bootstrap can only
+return [0, 0] (or [1, 1]), so those cells use the Wilson 95% interval on the pooled k/n instead.
 """
 
 from __future__ import annotations
@@ -132,16 +134,38 @@ def wilson(k: int, n: int, z: float = 1.959964) -> tuple[float, float]:
     return (max(0.0, mid - half), min(1.0, mid + half))
 
 
-def bootstrap(per_item: list[list[int]], n_boot: int = N_BOOT, seed: int = SEED):
-    """95% CI of the pooled rate: resample items, then answers within each item."""
+def cluster(t: Trap) -> str:
+    """Bootstrap cluster: a Wang closed-ended item's scenario (its 3 positions share one
+    scenario, review on #36), else the trap itself."""
+    if t.paper.startswith("Wang") and "-closed-" in t.trap_id:
+        return t.trap_id.rsplit("-", 1)[0]  # b5-wang-closed-<scenario>-<position>
+    return t.trap_id
+
+
+def bootstrap(
+    per_item: list[list[int]],
+    n_boot: int = N_BOOT,
+    seed: int = SEED,
+    clusters: list[str] | None = None,
+):
+    """95% CI of the pooled rate: resample clusters, then answers within each item of every drawn
+    cluster. `clusters` labels each item; None = every item is its own cluster (resample items,
+    then answers: the same draws as before clustering)."""
+    labels = clusters if clusters is not None else [str(i) for i in range(len(per_item))]
+    if len(labels) != len(per_item):
+        raise ValueError("one cluster label per item")
+    groups: dict[str, list[list[int]]] = {}
+    for label, answers in zip(labels, per_item, strict=True):
+        groups.setdefault(label, []).append(answers)
+    units = list(groups.values())
     rng = random.Random(seed)
     rates = []
     for _ in range(n_boot):
         k = n = 0
-        for _ in per_item:
-            answers = per_item[rng.randrange(len(per_item))]
-            draw = [answers[rng.randrange(len(answers))] for _ in answers]
-            k, n = k + sum(draw), n + len(draw)
+        for _ in units:
+            for answers in units[rng.randrange(len(units))]:
+                draw = [answers[rng.randrange(len(answers))] for _ in answers]
+                k, n = k + sum(draw), n + len(draw)
         rates.append(k / n)
     rates.sort()
     return rates[int(0.025 * n_boot)], rates[int(0.975 * n_boot) - 1]
@@ -163,6 +187,8 @@ def cmd_report(args) -> None:
         answers = load_answers(level)
         groups: dict[str, list[list[int]]] = {}
         groups_alt: dict[str, list[list[int]]] = {}
+        labels: dict[str, list[str]] = {}
+        labels_alt: dict[str, list[str]] = {}
         for t in traps:
             rs = answers.get(t.trap_id, [])
             hits = [int(flags(t, r["answer"])) for r in rs]
@@ -183,14 +209,16 @@ def cmd_report(args) -> None:
                            rate_alt=round(sum(alt) / len(alt), 4), ci_alt_low=round(alo, 4),
                            ci_alt_high=round(ahi, 4))
                 groups_alt.setdefault(family(t), []).append(alt)
+                labels_alt.setdefault(family(t), []).append(cluster(t))
             per_trap.append(row)
             if hits:
                 groups.setdefault(family(t), []).append(hits)
+                labels.setdefault(family(t), []).append(cluster(t))
         for fam, per_item in groups.items():
-            row = {"level": level, "check": fam, "source": "this run", **_pooled(per_item),
-                   **_NO_ALT}
+            row = {"level": level, "check": fam, "source": "this run",
+                   **_pooled(per_item, labels[fam]), **_NO_ALT}
             if fam in groups_alt:
-                alt = _pooled(groups_alt[fam])
+                alt = _pooled(groups_alt[fam], labels_alt[fam])
                 row.update(rate_alt=alt["rate"], ci_alt_low=alt["ci_low"],
                            ci_alt_high=alt["ci_high"])
             summary.append(row)
@@ -201,6 +229,7 @@ def cmd_report(args) -> None:
                     summary.append({
                         "level": r["level"], "check": f"Our decoy ({r['bank']})",
                         "source": f"RQ4 {r['run_id']}", "n_items": int(r["n_items"]),
+                        "n_clusters": int(r["n_items"]),
                         "n": int(r["n_obs"]), "n_flagged": int(r["picked_decoy"]),
                         "rate": float(r["rate"]), "ci_low": float(r["ci_low"]),
                         "ci_high": float(r["ci_high"]), **_NO_ALT})
@@ -213,12 +242,13 @@ def cmd_report(args) -> None:
 _NO_ALT = {"rate_alt": "", "ci_alt_low": "", "ci_alt_high": ""}
 
 
-def _pooled(per_item: list[list[int]]) -> dict:
+def _pooled(per_item: list[list[int]], clusters: list[str] | None = None) -> dict:
     k, n = sum(map(sum, per_item)), sum(map(len, per_item))
     # all-zero / all-one cells: every bootstrap resample is identical, so use Wilson instead
-    lo, hi = wilson(k, n) if k in (0, n) else bootstrap(per_item)
-    return {"n_items": len(per_item), "n": n, "n_flagged": k, "rate": round(k / n, 4),
-            "ci_low": round(lo, 4), "ci_high": round(hi, 4)}
+    lo, hi = wilson(k, n) if k in (0, n) else bootstrap(per_item, clusters=clusters)
+    n_clusters = len(set(clusters)) if clusters is not None else len(per_item)
+    return {"n_items": len(per_item), "n_clusters": n_clusters, "n": n, "n_flagged": k,
+            "rate": round(k / n, 4), "ci_low": round(lo, 4), "ci_high": round(hi, 4)}
 
 
 def _write_csv(path: Path, rows: list[dict]) -> None:

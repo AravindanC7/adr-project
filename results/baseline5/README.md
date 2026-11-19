@@ -17,7 +17,7 @@ reported; L2 generic does not replace L2.
 
 | Check | Items | L0: share flagged [95% CI] | L2: share flagged [95% CI] | L2 generic: share flagged [95% CI] |
 |---|---|---|---|---|
-| Wang: prompt injection, closed-ended | 12 | 31.7% [10.0, 56.7] | 0.0% [0.0, 6.0] | 0.0% [0.0, 6.0] |
+| Wang: prompt injection, closed-ended | 12 | 31.7% [0.0, 66.7] | 0.0% [0.0, 6.0] | 0.0% [0.0, 6.0] |
 | Wang: prompt injection, open-ended | 4 | 85.0% [55.0, 100.0] | 0.0% [0.0, 16.1] | 55.0% [15.0, 95.0] |
 | Westwood-type (our wording): instructed-response item | 3 | 0.0% [0.0, 20.4] | 0.0% [0.0, 20.4] | 0.0% [0.0, 20.4] |
 | Westwood-type (our wording): bogus item* | 3 | 0.0% [0.0, 20.4] | 0.0% [0.0, 20.4] | 0.0% [0.0, 20.4] |
@@ -28,8 +28,13 @@ reported; L2 generic does not replace L2.
 \* Headline rule: agree-only (an impossible claim is flagged only if the answer agrees). If “Neither agree nor disagree” also counts as flagged: L0 0.0% [0.0, 20.4], L2 20.0% [0.0, 46.7], L2 generic 0.0% [0.0, 20.4].
 
 "Share flagged" is the share of gpt-mini answers the trap would flag as AI or bot. Every trap
-row has 5 answers per item. The CI is a two-level bootstrap: resample items, then answers
-within each item. When no pooled answer is flagged (or every one is), the bootstrap could only
+row has 5 answers per item. The CI is a two-level cluster bootstrap: resample clusters, then
+answers within each item of a drawn cluster. The 12 Wang closed-ended items are 4 scenarios × 3
+positions, so each scenario (with its 3 positions) is one cluster; every other trap is its own
+cluster. Clustering by scenario changed one cell: Wang closed-ended at L0 went from [10.0, 56.7]
+(resampling the 12 items as if independent) to [0.0, 66.7], because two of the four scenarios
+were never flagged. The table and CSVs were regenerated from the saved responses in `runs/`,
+with no API calls (`python scripts/baseline5.py report`). When no pooled answer is flagged (or every one is), the bootstrap could only
 return [0.0, 0.0] (or [100, 100]), so those cells use the Wilson 95% interval on the pooled
 k/n instead: 0 of 15 answers gives [0.0, 20.4], 0 of 60 gives [0.0, 6.0]. Per-trap rates, with
 Wilson 95% CIs on 5 answers each,

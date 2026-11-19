@@ -1,6 +1,6 @@
 | Check | Items | L0: share flagged [95% CI] | L2: share flagged [95% CI] | L2 generic: share flagged [95% CI] |
 |---|---|---|---|---|
-| Wang: prompt injection, closed-ended | 12 | 31.7% [10.0, 56.7] | 0.0% [0.0, 6.0] | 0.0% [0.0, 6.0] |
+| Wang: prompt injection, closed-ended | 12 | 31.7% [0.0, 66.7] | 0.0% [0.0, 6.0] | 0.0% [0.0, 6.0] |
 | Wang: prompt injection, open-ended | 4 | 85.0% [55.0, 100.0] | 0.0% [0.0, 16.1] | 55.0% [15.0, 95.0] |
 | Westwood-type (our wording): instructed-response item | 3 | 0.0% [0.0, 20.4] | 0.0% [0.0, 20.4] | 0.0% [0.0, 20.4] |
 | Westwood-type (our wording): bogus item* | 3 | 0.0% [0.0, 20.4] | 0.0% [0.0, 20.4] | 0.0% [0.0, 20.4] |
