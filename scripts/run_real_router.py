@@ -87,7 +87,7 @@ from adr.replay.quick_map import (
     final_eval_rows,
     split_rows,
 )
-from adr.router.core import RouterConfig
+from adr.router.core import CLEAR_POLICIES, RouterConfig
 
 # Cap designs to compare, as RouterConfig changes from the default.
 CAP_VARIANTS: dict[str, dict] = {
@@ -191,6 +191,13 @@ def main() -> None:
         type=int,
         default=DEFAULT_K,
         help="K; keep the recorded default (configs/data_decisions.json) for reported runs",
+    )
+    ap.add_argument(
+        "--clear-policy",
+        choices=list(CLEAR_POLICIES),
+        default="reopen",
+        help="after a session is cleared and later evidence lifts it above B: reopen (default, "
+        "it gets checks again) or sticky (it stays cleared). Applies to every router row",
     )
     ap.add_argument(
         "--fold-seed",
@@ -342,7 +349,8 @@ def main() -> None:
                     f"NOTE: cap variant {v} has no effect here: of {g} = {list(members)}, only "
                     f"{present or 'none'} have both AI and human rows."
                 )
-    cfg = replace(RouterConfig(), **CAP_VARIANTS[variants_cap[0]])
+    base = replace(RouterConfig(), clear_policy=args.clear_policy)
+    cfg = replace(base, **CAP_VARIANTS[variants_cap[0]])
 
     folds = fold_lists(assignment, args.folds, keep=sessions)
     if any(not f for f in folds):
@@ -402,7 +410,7 @@ def main() -> None:
     for v in variants_cap[1:]:  # extra cap designs: the router only, same split and folds;
         # thresholds from the same procedure on this design's own honest scores
         name = ABLATIONS.get(v, f"router[{v}]")
-        results[name] = run("router", replace(RouterConfig(), **CAP_VARIANTS[v]))
+        results[name] = run("router", replace(base, **CAP_VARIANTS[v]))
         r = results[name]["results"]
         print(
             f"  {name:15s} "
@@ -553,8 +561,10 @@ def main() -> None:
 
 COLUMNS = (
     "tpr",
-    "ai_cleared_rate",
+    "ai_ever_cleared_rate",  # AI sessions cleared at some point (maybe reopened later)
+    "ai_cleared_rate",  # AI sessions cleared at the end
     "honest_pause_rate",
+    "honest_ever_cleared_rate",
     "honest_cleared_rate",
     "checks_per_honest_session",
 )

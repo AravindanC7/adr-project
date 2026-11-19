@@ -787,3 +787,22 @@ def test_exclude_sessions_rejects_a_handoff_style_file(tmp_path):
     assert proc.returncode == 0, proc.stderr[-3000:]
     cfg = yaml.safe_load((tmp_path / "real-router" / "r" / "config.yaml").read_text())
     assert cfg["n_sessions"] == N_SESSIONS - 2
+
+
+def test_run_real_router_clear_policy_and_ever_cleared_columns(tmp_path):
+    _files(tmp_path)
+    proc = subprocess.run(
+        _cmd(tmp_path, "--clear-policy", "sticky", "--cap-variant", "per_mech", "no_cap"),
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    out = tmp_path / "real-router" / "r"
+    cfg = yaml.safe_load((out / "config.yaml").read_text())
+    assert cfg["router_config"]["clear_policy"] == "sticky"
+    comp = pd.read_csv(out / "comparison.csv")
+    for c in ("ai_ever_cleared_rate", "ai_cleared_rate", "honest_ever_cleared_rate",
+              "honest_cleared_rate"):
+        assert c in comp.columns
+    # ever cleared >= cleared at the end, for every policy and threshold
+    assert (comp.honest_ever_cleared_rate >= comp.honest_cleared_rate - 1e-12).all()
+    assert (comp.ai_ever_cleared_rate >= comp.ai_cleared_rate - 1e-12).all()
