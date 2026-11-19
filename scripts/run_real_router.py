@@ -578,7 +578,8 @@ def sources_text(results: dict[str, dict]) -> str:
     lines = [
         "",
         (
-            "AI groups (router): checks per session and where their outcomes came from, mean per "
+            "AI groups (router): active checks per session and where their outcomes came from "
+            "(passive checks such as style are not counted), mean per "
             "session over the fold maps. same_type = the session's own rows on another item of the "
             "same item_type (e.g. quiz MCQ decoy rows answer survey MCQ items: both are mcq); "
             "fallback = another session of the group; missing = no row at all, so the check gives no "
