@@ -63,7 +63,9 @@ from adr.contracts.outcome import utc_now
 from adr.harness.copy_paste import _git_commit, plain_variant
 from adr.harness.registry import get_mechanism
 from adr.replay.compare import BETAS
+from adr.replay.composite import check_allowed, join_ai_sessions
 from adr.replay.crossfit import (
+    MIN_GROUP_SESSIONS,
     all_maps,
     cap_findings,
     deploy_config,
@@ -225,6 +227,20 @@ def main() -> None:
         default=100,
         help="resampled honest sessions per fold inside each bootstrap draw",
     )
+    ap.add_argument(
+        "--per-run-sessions",
+        action="store_true",
+        help="keep each harness run's own AI sessions (one bank each) instead of composite "
+        "sessions joined across banks by (model, attack_mode, attacker_level, sample index); "
+        "see adr/replay/composite.py",
+    )
+    ap.add_argument(
+        "--min-upload-sessions",
+        type=int,
+        default=MIN_GROUP_SESSIONS["doc_upload"],
+        help="a document-upload AI group needs at least this many sessions for a TPR (default "
+        "%(default)s, i.e. more than 5); until then its sessions are listed one by one instead",
+    )
     ap.add_argument("--calibration-frac", type=float, default=CALIBRATION_FRAC)
     ap.add_argument("--split-seed", type=int, default=SPLIT_SEED)
     ap.add_argument("--results-dir", default="results")
@@ -234,6 +250,14 @@ def main() -> None:
 
     ai = read_rows(args.ai_outcomes)
     ai = ai[ai["respondent_kind"].eq("ai")]
+    if not args.final:
+        check_allowed(ai)  # no held-out model, excluded models or held-out (OSMI) survey rows
+    missing_keys = None
+    if not args.per_run_sessions:
+        n_before = ai["session_id"].nunique()
+        join = join_ai_sessions(ai, allow_heldout=args.final)
+        ai, missing_keys = join.rows, join.missing
+        print(f"Composite AI sessions (from {n_before} harness sessions): {join.summary()}")
     rows = read_rows(args.pilot_outcomes)
     human = rows[rows["respondent_kind"].eq("human") & rows["data_origin"].eq("pilot")]
     if human.empty:
@@ -352,6 +376,7 @@ def main() -> None:
             args.n_synthetic_boot,
             passive,
             args.seed,
+            {"doc_upload": args.min_upload_sessions},
         )
 
     results: dict[str, dict] = {}
@@ -400,6 +425,8 @@ def main() -> None:
 
     out = Path(args.results_dir) / "real-router" / run_id
     out.mkdir(parents=True, exist_ok=True)
+    if missing_keys is not None:
+        missing_keys.to_csv(out / "missing_keys.csv", index=False)
     findings = cap_findings(results["router"], cfg, mechanisms)
     headline = headline_text(results["router"], findings.get("A_0.01"))
     notes = [f"{name}: {text}" for name, text in findings.items() if name != "A_0.01"]
@@ -490,6 +517,12 @@ def main() -> None:
                 "n_synthetic_per_fold_in_boot": args.n_synthetic_boot,
                 "ai_eval": "heldout" if args.final else "calibration items",
                 "n_ai_eval_sessions": int(ai_eval["session_id"].nunique()),
+                "ai_sessions": "per-run"
+                if args.per_run_sessions
+                else "composite: (model, attack_mode, attacker_level, sample index) across banks",
+                "n_ai_eval_sessions_by_group": results["router"]["n_ai_sessions_by_group"],
+                "min_upload_sessions_for_tpr": args.min_upload_sessions,
+                "n_missing_keys": None if missing_keys is None else len(missing_keys),
                 "calibration_frac": args.calibration_frac,
                 "split_seed": args.split_seed,
                 "map_versions": [m.version for m in maps],
@@ -534,6 +567,34 @@ def _columns(results: dict[str, dict]) -> list[str]:
     keys = {k for summ in results.values() for r in summ["results"].values() for k in r}
     groups = sorted(k for k in keys if k.startswith("tpr["))
     return [COLUMNS[0], *groups, *COLUMNS[1:]]
+
+
+def described_text(results: dict[str, dict]) -> str:
+    """AI groups too small for a TPR, session by session (router policy)."""
+    rows = results["router"].get("described_ai") or []
+    if not rows:
+        return ""
+    th = [k.split("@", 1)[1] for k in rows[0] if k.startswith("paused@")]
+    head = "| group | session | score | checks | " + " | ".join(f"paused@{t}" for t in th) + " |"
+    lines = [
+        "",
+        (
+            f"AI groups below the minimum for a TPR {results['router']['min_group_sessions']}: "
+            "no TPR (left out of the pooled TPR too); each session listed instead (router; score "
+            "= highest running score, mean over the fold maps; paused = share of fold maps under "
+            "which the session reaches the threshold)."
+        ),
+        "",
+        head,
+        "|---|---|---|---|" + "---|" * len(th),
+    ]
+    for r in rows:
+        lines.append(
+            f"| {r['group']} | {r['session']} | {r['score']:.2f} | {r['checks']:.1f} | "
+            + " | ".join(f"{r[f'paused@{t}']:.2f}" for t in th)
+            + " |"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def sources_text(results: dict[str, dict]) -> str:
@@ -648,7 +709,8 @@ def write_comparison(
         + "\n"
         + "".join(f"\n- {note}" for note in notes)
         + ("\n" if notes else "")
-        + sources_text(results),
+        + sources_text(results)
+        + described_text(results),
         encoding="utf-8",
     )
 
