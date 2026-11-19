@@ -1,7 +1,8 @@
 // Question page. Shows whatever item the server sends, one at a time, and posts back the
 // answer with that question's one-time token. Notes for the team: docs/frontend.md.
 //
-// All item text goes in with textContent, never innerHTML: stems and options are plain text.
+// All item text goes in with textContent, never innerHTML: passages, stems and options are
+// plain text.
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -122,6 +123,16 @@ function renderOpenText(area, item, onChange) {
   return () => (box.value.trim() !== "" ? box.value : null);
 }
 
+// Reading text for the question, if any, above the stem (see docs/frontend.md).
+// Returns the passage element (focusable but not in the tab order), or null.
+function placePassage(text) {
+  if (text == null) return null;
+  const node = el("p", { className: "passage", textContent: text });
+  node.tabIndex = -1;
+  $("stem").before(node);
+  return node;
+}
+
 // Extra item text from the server, placed where it says (see docs/frontend.md).
 function placeAux(aux) {
   if (!aux) return;
@@ -171,12 +182,13 @@ function render(step) {
   card.classList.add("enter");
   const area = $("answer");
   area.replaceChildren();
-  for (const old of document.querySelectorAll("#item .aux")) old.remove();
+  for (const old of document.querySelectorAll("#item .aux, #item .passage")) old.remove();
   getAnswer = renderer(area, current, refresh);
+  const passage = placePassage(current.passage);   // first, so text placed before the stem goes after it
   placeAux(current.aux);
   refresh();
   show("question");
-  $("stem").focus();
+  (passage || $("stem")).focus();   // start at the top: the passage when there is one
   ItemTelemetry.start(area);
 }
 

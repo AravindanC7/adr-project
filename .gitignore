@@ -30,3 +30,6 @@ server/pilot_items.json
 # teammate dry run answers (#35): never in git
 dry_run_data/
 results/baseline5/outcomes/
+
+# generated demo maps (scripts/make_demo_map.py): SYNTHETIC, never in git
+results/failure_map/demo_*.json
