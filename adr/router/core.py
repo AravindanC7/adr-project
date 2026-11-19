@@ -55,6 +55,8 @@ class RouterConfig:
     # Optional groups of mechanisms that share ONE cap of the same size (mech_cap_frac * A),
     # e.g. {"passive": ("behaviour", "style")}: correlated signals from the same person then can't
     # add up past one cap together. None = off (each mechanism has its own cap, as before).
+    # NOTE: with groups, SessionState.contrib is keyed by the GROUP name, not the mechanism: read a
+    # mechanism's running total as state.contrib[router.cap_key(mechanism)] (review H6).
     mech_group_caps: dict[str, tuple[str, ...]] | None = None
     objective: str = "kl"          # "kl" (Chernoff's rule) or "info_gain"; see selection.py
     tie_eps: float = 0.01          # candidates within this of the best are a tie

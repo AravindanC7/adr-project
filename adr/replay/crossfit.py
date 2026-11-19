@@ -255,6 +255,9 @@ def score_policy(
     real: dict[str, Trace] = {}
     ai: dict[str, list[Trace]] = defaultdict(list)
     synthetic: list[Trace] = []
+    # The AI donors don't depend on the fold: index them once (review H4). Every replay draws
+    # through respondent_from(), which seeds its own rng, so results are unchanged.
+    ai_donors = Donors(ai_eval_rows, items, type_match_kinds=("ai",))
     for k, (sessions, fmap) in enumerate(zip(folds, maps, strict=True)):
         check_router_map(fmap)  # #25 guard, also for maps passed in
         policy = make(fmap, scfg)
@@ -279,7 +282,6 @@ def score_policy(
             cfg.prior_log_odds,
         )
         # AI sessions with the same map
-        ai_donors = Donors(ai_eval_rows, items, type_match_kinds=("ai",))
         for g in ai_donors.groups("ai"):
             for s in ai_donors.sessions(g):
                 r = replay_session(
