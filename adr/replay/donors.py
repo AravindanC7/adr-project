@@ -49,10 +49,22 @@ class Group:
     attack_mode: str | None = None
     attacker_level: str | None = None
     data_origin: str | None = None
+    # A prompt variant within a level (e.g. "L2g" = L2-generic, adr/replay/composite.py). It
+    # separates the group; map lookups still use attacker_level.
+    attacker_variant: str | None = None
 
     @classmethod
-    def ai(cls, model: str, attack_mode: str, attacker_level: str) -> Group:
-        return cls("ai", model=model, attack_mode=attack_mode, attacker_level=attacker_level)
+    def ai(
+        cls, model: str, attack_mode: str, attacker_level: str, attacker_variant: str | None = None
+    ) -> Group:
+        variant = None if attacker_variant in (None, attacker_level) else attacker_variant
+        return cls(
+            "ai",
+            model=model,
+            attack_mode=attack_mode,
+            attacker_level=attacker_level,
+            attacker_variant=variant,
+        )
 
     @classmethod
     def human(cls, data_origin: str) -> Group:
@@ -61,13 +73,20 @@ class Group:
     @property
     def label(self) -> str:
         if self.kind == "ai":
-            return f"ai:{self.model}:{self.attack_mode}:{self.attacker_level}"
+            level = self.attacker_variant or self.attacker_level
+            return f"ai:{self.model}:{self.attack_mode}:{level}"
         return f"human:{self.data_origin}"
 
 
 def group_of(row: dict) -> Group:
     if row["respondent_kind"] == "ai":
-        return Group.ai(row["model"], row["attack_mode"], row["attacker_level"])
+        variant = row.get("attacker_variant")
+        return Group.ai(
+            row["model"],
+            row["attack_mode"],
+            row["attacker_level"],
+            variant if isinstance(variant, str) and variant else None,
+        )
     return Group.human(row["data_origin"])
 
 

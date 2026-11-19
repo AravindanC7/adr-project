@@ -344,6 +344,34 @@ def ai_group(per_fold: list[Trace]) -> str:
 
 SOURCE_NAMES = ("same_type", "fallback", "synthetic", "missing")
 
+# Per attack mode: an AI group of that mode needs at least this many sessions for a TPR (document
+# upload: MORE than 5); smaller groups are described session by session. Other modes: no minimum.
+MIN_GROUP_SESSIONS = {"doc_upload": 6}
+
+
+def group_mode(group: str) -> str:
+    """"gpt-mini:doc_upload:L0" -> "doc_upload"."""
+    parts = group.split(":")
+    return parts[-2] if len(parts) >= 3 else ""
+
+
+def describe_ai(ai: list[list[Trace]], thresholds: dict[str, float]) -> list[dict[str, Any]]:
+    """Session by session, for an AI group too small for a TPR: its score (mean over the fold
+    maps), checks, and per threshold the share of fold maps under which it is paused / cleared."""
+    out = []
+    for f in ai:
+        row: dict[str, Any] = {
+            "group": ai_group(f),
+            "session": f[0].who.split("|", 1)[1],
+            "score": float(np.mean([t.score for t in f])),
+            "checks": float(np.mean([t.total_checks for t in f])),
+        }
+        for name, a in thresholds.items():
+            row[f"paused@{name}"] = float(np.mean([t.score >= a for t in f]))
+            row[f"cleared@{name}"] = float(np.mean([t.cleared_at(a) for t in f]))
+        out.append(row)
+    return out
+
 
 def ai_sources(ai: list[list[Trace]]) -> dict[str, dict[str, float]]:
     """Per AI group (review H3): sessions, and per session the mean number of checks served and
@@ -421,12 +449,27 @@ def summarize(
     n_synthetic_boot: int = 100,
     passive: tuple[str, ...] = (),
     seed: int = 0,
+    min_group_sessions: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Thresholds, TPR and honest rates, with 95% CIs from a bootstrap over SESSIONS: each draw
-    resamples sessions (within their folds) and AI sessions, regenerates the resampled honest
-    sessions from the drawn sessions only, and recomputes thresholds and rates."""
+    resamples sessions (within their folds) and AI sessions (within their group), regenerates the
+    resampled honest sessions from the drawn sessions only, and recomputes thresholds and rates.
+
+    AI groups with fewer sessions than `min_group_sessions[<their attack mode>]` get no TPR (they
+    are left out of the pooled TPR too) and are listed session by session under "described_ai"."""
+    mins = min_group_sessions or {}
     real = list(scored.real.values())
-    ai = list(scored.ai.values())
+    all_ai = list(scored.ai.values())
+    size: dict[str, int] = defaultdict(int)
+    for f in all_ai:
+        size[ai_group(f)] += 1
+
+    def too_small(f: list[Trace]) -> bool:
+        g = ai_group(f)
+        return size[g] < mins.get(group_mode(g), 0)
+
+    ai = [f for f in all_ai if not too_small(f)]
+    small = [f for f in all_ai if too_small(f)]
     syn = [t.score for t in scored.synthetic]
     th = thresholds_from([t.score for t in real], syn, alphas)
     point = rates(real, ai, syn, th)
@@ -490,7 +533,10 @@ def summarize(
         "ci95": ci,
         "n_sessions": len(real),
         "n_ai_sessions": len(ai),
-        "ai_sources_by_group": ai_sources(ai),
+        "ai_sources_by_group": ai_sources(all_ai),
+        "n_ai_sessions_by_group": dict(sorted(size.items())),
+        "described_ai": describe_ai(small, th),
+        "min_group_sessions": dict(mins),
         "n_resampled_sessions": len(syn),
         "sessions_per_fold": sizes,
         "n_boot": n_boot,

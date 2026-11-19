@@ -789,6 +789,50 @@ def test_exclude_sessions_rejects_a_handoff_style_file(tmp_path):
     assert cfg["n_sessions"] == N_SESSIONS - 2
 
 
+# ---------------------------------------------------------------- leave one check out
+def test_run_real_router_drop_mechanisms_leave_one_out(tmp_path):
+    _files(tmp_path)
+
+    def style(r: OutcomeRow, outcome: str) -> OutcomeRow:
+        return r.model_copy(
+            update={
+                "mechanism": "style",
+                "variant_id": make_variant_id(r.item_id, "style", 0),
+                "outcome": outcome,
+            }
+        )
+
+    ai = [OutcomeRow(**r) for r in ai_frame().to_dict("records")]
+    human = [OutcomeRow(**r) for r in human_frame().to_dict("records")]
+    ai += [style(r, "high" if i % 3 else "mid") for i, r in enumerate(ai)]
+    human += [style(r, "low" if i % 5 else "mid") for i, r in enumerate(human)]
+    write_outcomes(ai, tmp_path / "ai.parquet")
+    write_outcomes(human, tmp_path / "pilot.parquet")
+    proc = subprocess.run(
+        _cmd(tmp_path, "--drop-mechanisms", "style,decoy,canary"),
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    assert "--drop-mechanisms canary: not among the mechanisms used here" in proc.stdout
+    out = tmp_path / "real-router" / "r"
+    loo = pd.read_csv(out / "leave_one_out.csv")
+    assert list(dict.fromkeys(loo.dropped)) == ["style", "decoy"]  # in the order given
+    assert set(loo[loo.dropped == "style"].policy) == {"router", "best_single", "all_checks"}
+    # without decoy only the passive style check is left: baselines need an active check
+    assert set(loo[loo.dropped == "decoy"].policy) == {"router"}
+    assert "only passive checks remain" in proc.stdout
+    assert len(loo) == (3 + 1) * 3  # (policies without style + without decoy) x thresholds
+    assert {"tpr", "checks_per_honest_session", "honest_pause_rate", "nominal_fpr"} <= set(loo)
+    md = (out / "comparison.md").read_text(encoding="utf-8")
+    assert "Leave one check out" in md and "nominal_fpr" in md
+    cfg = yaml.safe_load((out / "config.yaml").read_text())
+    assert cfg["drop_mechanisms"] == ["style", "decoy"]
+    comp = pd.read_csv(out / "comparison.csv")
+    router = comp[comp.policy == "router"]
+    nominal = dict(zip(router.threshold, router.nominal_fpr, strict=True))
+    assert nominal == {"A_0.05": 0.05, "A_0.01": 0.01, "A_max": 0.0}
+
+
 def test_run_real_router_clear_policy_and_ever_cleared_columns(tmp_path):
     _files(tmp_path)
     proc = subprocess.run(
