@@ -17,15 +17,21 @@ def wald_thresholds(alpha: float, beta: float) -> tuple[float, float]:
     return math.log((1 - beta) / alpha), math.log(beta / (1 - alpha))
 
 
-def capped_delta(prior_total: float, llr: float, cap: float | None) -> float:
+def capped_delta(
+    prior_total: float, llr: float, cap: float | None, floor: float | None = None
+) -> float:
     """How much of `llr` to add, given this mechanism has already added `prior_total`.
 
-    With a cap, one mechanism's running total stays inside [-cap, +cap]. Repeated, correlated
-    evidence from the same check (e.g. writing style on every answer) then can't dominate.
+    With a cap, one mechanism's running total stays inside [floor, +cap]. The router passes its
+    lower threshold B as the floor (team decision, Nov 18): +cap < A, so one check alone can never
+    pause a session, but it CAN clear one by reaching B. Repeated, correlated evidence from the
+    same check (e.g. writing style on every answer) then can't dominate either way.
+    floor None = symmetric [-cap, +cap] (the old bound). cap None = no bound at all.
     """
     if cap is None:
         return llr
-    new_total = max(-cap, min(cap, prior_total + llr))
+    lo = -cap if floor is None else floor
+    new_total = max(lo, min(cap, prior_total + llr))
     return new_total - prior_total
 
 
