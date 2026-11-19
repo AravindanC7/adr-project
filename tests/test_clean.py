@@ -510,6 +510,7 @@ def test_rescore_is_off_by_default_and_copies_live_outcomes(setup):
 
 
 def test_rescore_with_the_old_floor_reproduces_live_outcomes(setup, monkeypatch):
+    pytest.importorskip("fastapi")  # re-scoring rebuilds served variants with server.app
     data, bank = setup
     live_session(data)
     old_floor(monkeypatch)
@@ -525,6 +526,7 @@ def test_rescore_with_the_old_floor_reproduces_live_outcomes(setup, monkeypatch)
 
 
 def test_rescore_with_the_current_floor_flips_a_borderline_answer(setup):
+    pytest.importorskip("fastapi")  # re-scoring rebuilds served variants with server.app
     data, bank = setup
     live_session(data)
     live, _ = clean(data, bank, origin="pilot", run_id="r")
@@ -541,6 +543,7 @@ def test_rescore_with_the_current_floor_flips_a_borderline_answer(setup):
 
 
 def test_answers_without_telemetry_keep_the_live_outcome(setup):
+    pytest.importorskip("fastapi")  # re-scoring rebuilds served variants with server.app
     data, bank = setup
     live_session(data, telemetry={"arc:q1": None, "ipip:e1": {"time_on_item_ms": -5}})
     rows, rep = clean(data, bank, origin="pilot", run_id="r", rescore=True)
@@ -550,6 +553,7 @@ def test_answers_without_telemetry_keep_the_live_outcome(setup):
 
 
 def test_command_records_how_behaviour_was_scored(setup, tmp_path, capsys, monkeypatch):
+    pytest.importorskip("fastapi")  # re-scoring rebuilds served variants with server.app
     import adr.mechanisms.behaviour as b
 
     data, bank = setup
@@ -585,6 +589,7 @@ def test_command_records_how_behaviour_was_scored(setup, tmp_path, capsys, monke
 
 
 def test_strict_stops_when_an_answer_cannot_be_rescored(setup, tmp_path, capsys):
+    pytest.importorskip("fastapi")  # re-scoring rebuilds served variants with server.app
     data, bank = setup
     live_session(data, telemetry={"arc:q1": None})
     out = tmp_path / "results"
