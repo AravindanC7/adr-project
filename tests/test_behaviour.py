@@ -8,7 +8,7 @@ from adr.harness.registry import get_mechanism
 from adr.mechanisms import behaviour as b
 from adr.mechanisms.behaviour import MECHANISM, reading_floor_ms
 
-QUESTION = RenderedItem(  # 11 words: reading floor 1000 + 11 * 100 = 2100 ms
+QUESTION = RenderedItem(  # 11 words: reading floor 750 + 11 * 50 = 1300 ms
     item_id="x:1",
     mechanism=None,
     variant_id="x:1|plain|0",
@@ -51,8 +51,8 @@ def test_a_calm_answer_is_normal():
 
 
 def test_reading_floor_counts_passage_and_question_not_options():
-    assert reading_floor_ms(QUESTION) == 2100
-    assert reading_floor_ms(QUESTION, passage="a b c") == 2400
+    assert reading_floor_ms(QUESTION) == 1300
+    assert reading_floor_ms(QUESTION, passage="a b c") == 1450
 
 
 def test_a_real_items_passage_reaches_the_reading_floor():
@@ -62,16 +62,16 @@ def test_a_real_items_passage_reaches_the_reading_floor():
         source="handwritten",
         assessment_type="quiz",
         item_type="mcq",
-        passage=" ".join(["word"] * 40),  # 40 words: 4000 ms more to read
+        passage=" ".join(["word"] * 40),  # 40 words: 2000 ms more to read
         stem="What is the passage about?",  # 5 words
         options=["a", "b"],
         correct_option=0,
     )
     rendered = plain_variant(item)
     assert "passage" not in rendered.visible
-    assert reading_floor_ms(rendered, item.passage) == 1000 + 45 * 100
+    assert reading_floor_ms(rendered, item.passage) == 750 + 45 * 50
     response = Response(session_id="s", item_id="x:2", variant_id=rendered.variant_id, answer=0)
-    quick = Telemetry(**{**CALM, "time_on_item_ms": 3000})  # enough for the stem alone
+    quick = Telemetry(**{**CALM, "time_on_item_ms": 2000})  # enough for the stem alone
     assert MECHANISM.score(rendered, response, quick) == "normal"
     assert MECHANISM.score(rendered, response, quick, passage=item.passage) == "too_fast"
 
@@ -87,8 +87,8 @@ def test_a_real_items_passage_reaches_the_reading_floor():
         ({"focus_loss_count": 1, "away_ms": 1999}, "normal"),
         ({"focus_loss_count": 1, "away_ms": 2000}, "focus_loss"),
         ({"focus_loss_count": 2, "away_ms": 900}, "normal"),  # brief blurs, straight back
-        ({"time_on_item_ms": 2099}, "too_fast"),
-        ({"time_on_item_ms": 2100}, "normal"),
+        ({"time_on_item_ms": 1299}, "too_fast"),
+        ({"time_on_item_ms": 1300}, "normal"),
     ],
 )
 def test_each_label(telemetry, expected):
@@ -128,6 +128,16 @@ def test_no_telemetry_is_no_observation():
     response = Response(session_id="s", item_id="x:1", variant_id="x:1|plain|0", answer=2)
     with pytest.raises(NoObservation):
         MECHANISM.score(QUESTION, response, None)
+
+
+def test_reading_floor_is_the_calibrated_750_ms_plus_50_ms_a_word():
+    # Calibrated on held-out pilot session folds (k=4, PR #40). Change only by recalibrating.
+    assert b.ANSWER_MS == 750
+    assert b.READ_MS_PER_WORD == 50
+    # The other thresholds were not recalibrated and stay as they were.
+    assert b.MIN_AWAY_MS == 2000
+    assert b.MIN_PASTE_CHARS == 20
+    assert (b.MIN_KEYS_FOR_SPEED, b.MIN_INTERKEY_MS) == (10, 30)
 
 
 def test_thresholds_are_named_constants_for_calibration():

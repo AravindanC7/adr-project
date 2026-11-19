@@ -2,6 +2,7 @@
 
     python -m server.clean --run-id pilot-2026-11-13
     python -m server.clean --data dry_run_data --origin dry_run --run-id dry-run-2026-11-09
+    python -m server.clean --run-id pilot-2026-11-13 --rescore-behaviour
 
 Reads the session files the server saved (server/store.py) and writes one OutcomeRow per
 (respondent, item, check) to results/outcomes/<run_id>.parquet, plus
@@ -14,7 +15,13 @@ Which sessions are used
 
 Rows per answered item (all respondent_kind="human", data_origin=pilot|dry_run)
   * the check the server served with it: decoy / canary, or "none" for a plain question;
-  * the behaviour check (paste / focus_loss / too_fast / normal), scored live by the server;
+  * the behaviour check (paste / focus_loss / too_fast / normal), scored live by the server.
+    --rescore-behaviour (off by default, so earlier runs reproduce) re-scores it from the saved
+    telemetry with the current adr/mechanisms/behaviour.py instead, exactly as the server does
+    (the served variant's stem plus the item's passage set the reading floor). config.yaml then
+    records the floor constants and every live -> re-scored transition. An answer that can't be
+    re-scored (no or invalid telemetry, a variant the bank no longer builds) keeps its live
+    outcome and is counted as not_rescorable; --strict stops the run, writing nothing, if any is.
   * the opinion trap for survey items with a human distribution in the bank
     (implausible / plausible), scored here because the server doesn't serve it yet;
   * for reverse-keyed IPIP pairs, the SECOND item of a pair is "contradiction" when both
@@ -57,10 +64,12 @@ from adr.contracts import (
     OutcomeRow,
     RenderedItem,
     Response,
+    Telemetry,
     make_variant_id,
     parse_variant_id,
 )
 from adr.contracts.outcome import write_outcomes
+from adr.mechanisms import behaviour as behaviour_module
 from adr.mechanisms.opinion_trap import OpinionTrapMechanism, pair_outcome
 from adr.mechanisms.style import StyleMechanism, StyleProfile, load_style_profile
 from scripts.analyse_language_fairness import _profile_object_sha256 as profile_sha256
@@ -87,6 +96,9 @@ class Report:
     flagged: list[dict[str, str]] = field(default_factory=list)
     consent_versions: Counter = field(default_factory=Counter)
     style_no_observation: int = 0  # open-text answers style couldn't score (empty / skipped)
+    # --rescore-behaviour: (live, re-scored) -> count, and why answers kept their live outcome
+    behaviour_transitions: Counter = field(default_factory=Counter)
+    behaviour_not_rescorable: Counter = field(default_factory=Counter)
 
 
 def load_bank(path: Path) -> tuple[dict[str, Item], dict[str, HumanDistribution], dict[str, str]]:
@@ -126,6 +138,80 @@ def plain_rendered(item: Item) -> RenderedItem:
     )
 
 
+def served_variants(items: dict[str, Item]) -> dict[str, RenderedItem]:
+    """variant_id -> the variant the server served, built the way the server builds them."""
+    from server.app import build_variants, load_injected_mechanisms  # only when re-scoring
+
+    built = build_variants(items, load_injected_mechanisms(False))
+    return {v.variant_id: v for vs in built.values() for v in vs}
+
+
+def rescore_behaviour(
+    rec: dict[str, Any],
+    sid: str,
+    item: Item,
+    by_variant: dict[str, RenderedItem],
+    found: list[tuple[str, str]],
+    report: Report,
+) -> list[tuple[str, str]]:
+    """`found` with the behaviour outcome re-scored from the record's telemetry.
+
+    Scores like server/app.py: the current behaviour mechanism, the served variant, the
+    item's passage. Anything missing keeps the live outcome and is counted, by reason only.
+    """
+    behaviour_id = make_variant_id(item.item_id, "behaviour")
+    if not any(v == behaviour_id for v, _ in found):
+        return found  # the server recorded no behaviour outcome: nothing to re-score
+    rendered = by_variant.get(rec.get("variant_id"))
+    raw = rec.get("telemetry")
+    new: str | None = None
+    if rendered is None:
+        report.behaviour_not_rescorable["unknown variant"] += 1
+    elif not isinstance(raw, dict):
+        report.behaviour_not_rescorable["no telemetry"] += 1
+    else:
+        try:
+            telemetry = Telemetry(**raw)
+        except ValueError:
+            report.behaviour_not_rescorable["invalid telemetry"] += 1
+        else:
+            response = Response(
+                session_id=sid,
+                item_id=item.item_id,
+                variant_id=rendered.variant_id,
+                answer=rec["answer"],
+            )
+            try:
+                new = behaviour_module.MECHANISM.score(
+                    rendered, response, telemetry, passage=item.passage
+                )
+            except NoObservation:
+                report.behaviour_not_rescorable["no observation"] += 1
+    out = []
+    for v, o in found:
+        if v == behaviour_id and new is not None:
+            report.behaviour_transitions[(o, new)] += 1
+            o = new
+        out.append((v, o))
+    return out
+
+
+def behaviour_record(rescored: bool, report: Report) -> dict[str, Any]:
+    """How config.yaml says the behaviour rows were scored."""
+    if not rescored:
+        return {"rescored": False, "scored_by": "server, live at answer time"}
+    moves = report.behaviour_transitions
+    return {
+        "rescored": True,
+        "answer_ms": behaviour_module.ANSWER_MS,
+        "read_ms_per_word": behaviour_module.READ_MS_PER_WORD,
+        "transitions": {f"{a}->{b}": n for (a, b), n in sorted(moves.items())},
+        "changed": sum(n for (a, b), n in moves.items() if a != b),
+        "not_rescorable": sum(report.behaviour_not_rescorable.values()),
+        "not_rescorable_reasons": dict(sorted(report.behaviour_not_rescorable.items())),
+    }
+
+
 def clean(
     data_dir: Path,
     bank_path: Path,
@@ -135,9 +221,12 @@ def clean(
     pairs: bool = True,
     exclude: frozenset[str] = frozenset(),
     style_profile: StyleProfile | None = None,
+    rescore: bool = False,
 ) -> tuple[list[OutcomeRow], Report]:
-    """style_profile=None scores no style rows (the command line loads one by default)."""
+    """style_profile=None scores no style rows (the command line loads one by default).
+    rescore=True re-scores the behaviour check from telemetry (see the module docstring)."""
     items, dists, _ = load_bank(bank_path)
+    by_variant = served_variants(items) if rescore else {}
     trap = OpinionTrapMechanism(dists)
     style = StyleMechanism(style_profile) if style_profile is not None else None
     report = Report()
@@ -174,6 +263,8 @@ def clean(
             answers[item.item_id] = rec["answer"]
             where = f"{path.name}#L{line_no}"
             found = [(v, o) for v, o in rec["outcomes"]]
+            if rescore:
+                found = rescore_behaviour(rec, sid, item, by_variant, found, report)
 
             if trap.applies_to(item):
                 rendered = trap.generate(item, 0)
@@ -285,6 +376,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--no-style", action="store_true", help="don't score the writing-style check")
     p.add_argument(
+        "--rescore-behaviour",
+        action="store_true",
+        help="re-score the behaviour check from saved telemetry with the current thresholds "
+        "(default: keep the outcome the server scored live)",
+    )
+    p.add_argument(
+        "--strict",
+        action="store_true",
+        help="with --rescore-behaviour: stop, writing nothing, if any answer can't be re-scored",
+    )
+    p.add_argument(
         "--decisions",
         type=Path,
         default=DECISIONS,
@@ -306,7 +408,24 @@ def main(argv: list[str] | None = None) -> int:
         pairs=not args.no_pairs,
         exclude=frozenset(args.exclude),
         style_profile=profile,
+        rescore=args.rescore_behaviour,
     )
+    behaviour = behaviour_record(args.rescore_behaviour, rep)
+    if args.rescore_behaviour:
+        moves = ", ".join(
+            f"{a}->{b} {n}" for (a, b), n in sorted(rep.behaviour_transitions.items()) if a != b
+        )
+        print(
+            f"behaviour re-scored at {behaviour['answer_ms']} ms + "
+            f"{behaviour['read_ms_per_word']} ms/word: {moves or 'no changes'}; "
+            f"{behaviour['changed']} changed, not_rescorable {behaviour['not_rescorable']}"
+        )
+        if args.strict and behaviour["not_rescorable"]:
+            print(
+                f"--strict: {behaviour['not_rescorable']} answer(s) can't be re-scored "
+                f"{behaviour['not_rescorable_reasons']}; nothing written"
+            )
+            return 1
     out = write_outcomes(rows, args.out / "outcomes" / f"{args.run_id}.parquet")
     run_dir = args.out / "runs" / args.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -317,6 +436,7 @@ def main(argv: list[str] | None = None) -> int:
         "bank": str(args.bank.name),
         "bank_sha256_12": file_hash(args.bank),
         "pair_contradictions": not args.no_pairs,
+        "behaviour": behaviour,
         "style": None
         if args.no_style
         else {
