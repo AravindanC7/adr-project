@@ -50,7 +50,7 @@ def test_consent_and_page_give_nothing_away(tmp_path):
 def test_outside_the_pilot_there_is_no_consent_step(client=None):
     c = TestClient(create_app(mechanisms={}))
     assert c.get("/study").json() == {"consent": None}
-    assert len(walk(c, "stub-quiz")) == 4  # starts without consent, as before
+    assert len(walk(c, "stub-quiz")) == 5  # starts without consent, as before
 
 
 def test_pilot_needs_consent_to_start(pilot):

@@ -57,6 +57,9 @@ def test_consent_gate_then_debrief_then_remove(site):
     pg.wait_for_selector("#answer input[type=number]")
     pg.fill("#answer input[type=number]", "7")
     pg.click("#next")
+    pg.wait_for_selector("#item .passage")  # q4, the reading passage
+    pg.locator("#answer label").first.click()
+    pg.click("#next")
 
     pg.wait_for_selector("#debrief:not([hidden])")
     assert pg.inner_text("#debrief").split("\n\n")[0] == DEBRIEF[0]
