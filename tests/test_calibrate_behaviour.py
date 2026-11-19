@@ -23,7 +23,7 @@ from scripts.calibrate_behaviour import (
 SECRET = "SECRET-ANSWER-TEXT that must never leave memory"
 BANK = {
     "items": [
-        {  # stem 5 words + passage 5 words: default floor 1000 + 100 * 10 = 2000 ms
+        {  # stem 5 words + passage 5 words: default floor 750 + 50 * 10 = 1250 ms
             "item_id": "arc:q1",
             "source": "arc",
             "assessment_type": "quiz",
@@ -34,7 +34,7 @@ BANK = {
             "correct_option": 1,
             "eligible_mechanisms": ["decoy"],
         },
-        {  # 2 words: default floor 1200 ms
+        {  # 2 words: default floor 850 ms
             "item_id": "handwritten:o1",
             "source": "handwritten",
             "assessment_type": "survey",
@@ -53,7 +53,7 @@ BANK = {
     ],
 }
 NORMAL = {"time_on_item_ms": 9000}
-FAST = {"time_on_item_ms": 1500}  # under 2000 (default) on arc:q1, over 1200 on o1
+FAST = {"time_on_item_ms": 1100}  # under 1250 (default) on arc:q1, over 850 on o1
 AWAY = {"time_on_item_ms": 9000, "focus_loss_count": 1, "away_ms": 5000}
 PASTE = {"time_on_item_ms": 9000, "paste_events": 1, "pasted_chars": 25}
 TYPED = {"time_on_item_ms": 9000, "keystroke_count": 60, "mean_interkey_ms": 120.0}
@@ -133,7 +133,7 @@ def test_thresholds_move_the_rates(pilot):
         return int((score(df, th) == OUTCOMES.index(o)).sum())
 
     assert n(Thresholds(), "too_fast") == 45
-    assert n(Thresholds(per_word_ms=50), "too_fast") == 0  # floor 1500: 1500 is not < 1500
+    assert n(Thresholds(per_word_ms=35), "too_fast") == 0  # floor 1100: 1100 is not < 1100
     assert n(Thresholds(away_ms=6000), "focus_loss") == 0
     assert n(Thresholds(paste_min_chars=30), "paste") == 0
     assert n(Thresholds(key_gap_ms=130), "too_fast") == 45 + 10  # the typed answers now too fast
@@ -155,8 +155,8 @@ def test_selection_uses_other_folds_only(pilot):
     df = load_features(*pilot)
     folds = {f"{i:02d}aaaaaa": i % 2 for i in range(10)}
     grid = {
-        "base_floor_ms": [500, 1000],
-        "per_word_ms": [50, 100],
+        "base_floor_ms": [500, 750],
+        "per_word_ms": [35, 50],
         "key_gap_ms": [30],
         "away_ms": [2000],
         "paste_min_chars": [20],
@@ -165,7 +165,7 @@ def test_selection_uses_other_folds_only(pilot):
     sel = select(ft, [0.45], 2).set_index(["outcome", "fold"])
     # fold 1 held out: train on fold 0 (40% too fast at the defaults, <= 45%) -> defaults
     row = sel.loc[("too_fast", 1)]
-    assert (row["base_floor_ms"], row["per_word_ms"]) == (1000, 100)
+    assert (row["base_floor_ms"], row["per_word_ms"]) == (750, 50)
     assert row["train_rate"] == pytest.approx(0.40)
     assert row["heldout_rate"] == pytest.approx(0.50)
     # fold 0 held out: fold 1 has 50% at the defaults, too many -> a stricter-for-nobody
