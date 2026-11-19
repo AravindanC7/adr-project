@@ -157,12 +157,17 @@ def join_ai_sessions(rows: pd.DataFrame, allow_heldout: bool = False) -> Composi
 
     banks: dict[tuple[str, str, str], list[str]] = {}
     missing = []
+    # Expected banks: every bank seen for the same MODEL in this join, not just in this group, so a
+    # bank that is missing for a whole group (e.g. one mode/variant's quiz runs not finished yet)
+    # is recorded too.
+    model_banks = rows.groupby("model")["bank"].unique()
     for group, g in rows.groupby(list(GROUP), sort=True):
         group_banks = sorted(g["bank"].unique())
         banks[tuple(group)] = group_banks
+        expected = sorted(model_banks[group[0]])
         have = set(zip(g["bank"], g["sample"], strict=True))
         for sample in sorted(g["sample"].unique(), key=int):
-            for bank in group_banks:
+            for bank in expected:
                 if (bank, sample) not in have:
                     missing.append({**dict(zip(GROUP, group, strict=True)), "sample": sample,
                                     "bank": bank})

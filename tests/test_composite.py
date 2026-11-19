@@ -255,3 +255,16 @@ def test_tpr_is_reported_per_attacker_variant():
     assert (r["tpr[m:copy_paste:L0]"], r["tpr[m:copy_paste:L2]"], r["tpr[m:copy_paste:L2g]"]) == (
         1.0, 0.0, 1.0
     )
+
+
+def test_a_bank_missing_for_a_whole_group_is_recorded():
+    rows = []
+    for bank in BANKS:  # copy-paste has every bank
+        rows += _run("gpt-mini", "copy_paste", bank, range(2))
+    for bank in ("survey-gss", "survey-ipip", "assignment-asurre"):  # upload: no quiz bank yet
+        rows += _run("gpt-mini", "doc_upload", bank, range(2))
+    join = join_ai_sessions(pd.DataFrame(rows))
+    miss = join.missing
+    assert set(miss["attack_mode"]) == {"doc_upload"} and set(miss["bank"]) == {"arc"}
+    assert sorted(miss["sample"]) == ["0", "1"]
+    assert "doc_upload L0 / arc: samples 0,1" in join.summary()
