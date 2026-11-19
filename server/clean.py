@@ -28,6 +28,8 @@ Rows per answered item (all respondent_kind="human", data_origin=pilot|dry_run)
     every open-text answer whatever check was served, so it doesn't use the bank's
     eligible_mechanisms. An empty or skipped answer is no observation: no row, only a count.
     --no-style turns it off; --style-profile picks another profile file.
+    config.yaml records the profile's canonical profile_sha256 (the "profile" object only, so the
+    same on every machine) and warns if it isn't the one locked in configs/data_decisions.json.
 
 Nothing here contains answer text: rows hold outcomes. raw_ref points back to the session file
 and line. Open-text answers are still personal data, so the script lists any that look like
@@ -61,10 +63,12 @@ from adr.contracts import (
 from adr.contracts.outcome import write_outcomes
 from adr.mechanisms.opinion_trap import OpinionTrapMechanism, pair_outcome
 from adr.mechanisms.style import StyleMechanism, StyleProfile, load_style_profile
+from scripts.analyse_language_fairness import _profile_object_sha256 as profile_sha256
 from server.store import read_session
 
 ROOT = Path(__file__).resolve().parent.parent
 STYLE_PROFILE = ROOT / "data" / "processed" / "runs_v1" / "style_profile.json"
+DECISIONS = ROOT / "configs" / "data_decisions.json"
 PERSONAL = {
     "email": re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),
     "phone": re.compile(r"(?:\+?\d[\s().-]?){9,}"),
@@ -224,6 +228,40 @@ def file_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
 
 
+def style_record(profile_path: Path, decisions_path: Path) -> dict[str, Any]:
+    """How config.yaml identifies the style profile.
+
+    profile_sha256 is the canonical hash locked in configs/data_decisions.json: sha256 of the
+    file's "profile" object as compact JSON with sorted keys, so it ignores the OS paths and
+    decisions_sha256 the file also records (the file's own hash differs per machine). A profile
+    other than the locked one is allowed (experiments) but warned about.
+    """
+    canonical = profile_sha256(profile_path)
+    locked = None
+    if decisions_path.is_file():
+        choice = json.loads(decisions_path.read_text(encoding="utf-8")).get("style_profile")
+        if isinstance(choice, dict) and choice.get("profile_sha256"):
+            locked = str(choice["profile_sha256"])
+    matches = None if locked is None else canonical == locked
+    if locked is None:
+        print(
+            f"note: no style_profile.profile_sha256 in {decisions_path}, nothing to check against"
+        )
+    elif not matches:
+        print(
+            f"WARNING: style profile {profile_path} has profile sha256 {canonical[:12]}, not the "
+            f"one locked in {decisions_path.name} ({locked[:12]}); recorded as "
+            "profile_matches_decision: false"
+        )
+    return {
+        "profile": profile_path.name,
+        "profile_sha256": canonical,
+        "profile_sha256_12": canonical[:12],
+        "profile_matches_decision": matches,
+        "profile_file_sha256_12": file_hash(profile_path),  # provenance only; differs per machine
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Pilot sessions -> outcome table (#39)")
     p.add_argument("--data", type=Path, default=ROOT / "pilot_data")
@@ -246,6 +284,12 @@ def main(argv: list[str] | None = None) -> int:
         help="fitted style profile (built by scripts/prepare_style_profile.py)",
     )
     p.add_argument("--no-style", action="store_true", help="don't score the writing-style check")
+    p.add_argument(
+        "--decisions",
+        type=Path,
+        default=DECISIONS,
+        help="data_decisions.json holding the locked style_profile.profile_sha256",
+    )
     args = p.parse_args(argv)
     if not args.no_style and not args.style_profile.is_file():
         p.error(
@@ -276,8 +320,7 @@ def main(argv: list[str] | None = None) -> int:
         "style": None
         if args.no_style
         else {
-            "profile": args.style_profile.name,
-            "profile_sha256_12": file_hash(args.style_profile),
+            **style_record(args.style_profile, args.decisions),
             "no_observation": rep.style_no_observation,
         },
         "session_files": rep.files,
