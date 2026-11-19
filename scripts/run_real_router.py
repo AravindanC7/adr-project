@@ -80,7 +80,13 @@ from adr.replay.folds import (
     fold_lists,
     read_low_effort,
 )
-from adr.replay.quick_map import CALIBRATION_FRAC, SPLIT_SEED, split_rows
+from adr.replay.quick_map import (
+    CALIBRATION_FRAC,
+    SPLIT_SEED,
+    decided_heldout_model,
+    final_eval_rows,
+    split_rows,
+)
 from adr.router.core import RouterConfig
 
 # Cap designs to compare, as RouterConfig changes from the default.
@@ -106,6 +112,8 @@ def read_rows(paths: list[str]) -> pd.DataFrame:
 
 
 def read_exclusions(path: str | None) -> set[str]:
+    """Full pilot session_ids, one per line; blank lines and # comments are ignored. Any other
+    line (a prefix, prose) is an error in main(), never a silent non-match (review A1)."""
     if not path:
         return set()
     lines = Path(path).read_text(encoding="utf-8").splitlines()
@@ -189,7 +197,13 @@ def main() -> None:
         default=DEFAULT_SEED,
         help="fold seed string; keep the recorded default for reported runs",
     )
-    ap.add_argument("--alpha", type=float, default=0.01, help="max honest pause rate per fold")
+    ap.add_argument(
+        "--alpha",
+        type=float,
+        default=0.01,
+        help="extra honest pause rate to report a threshold at (A_<alpha>), pooled over the "
+        "resampled honest sessions of all folds; A_0.01, A_0.05 and A_max are always reported",
+    )
     ap.add_argument(
         "--cap-variant",
         nargs="+",
@@ -233,7 +247,7 @@ def main() -> None:
     run_id = args.run_id or f"real-router-{datetime.now():%Y%m%d-%H%M%S}"
 
     ai = read_rows(args.ai_outcomes)
-    ai = ai[ai["respondent_kind"].eq("ai")]
+    ai = ai[ai["respondent_kind"].eq("ai")].reset_index(drop=True)  # unique index (H1)
     rows = read_rows(args.pilot_outcomes)
     human = rows[rows["respondent_kind"].eq("human") & rows["data_origin"].eq("pilot")]
     if human.empty:
@@ -250,10 +264,18 @@ def main() -> None:
     low_found = [] if args.no_low_effort else read_low_effort(args.low_effort)
     excluded = read_exclusions(args.exclude_sessions)
     human, not_found = exclude_sessions(human, excluded)
-    if not_found:
-        print(
-            f"WARNING: {len(not_found)} --exclude-sessions ids are not pilot sessions: "
-            f"{not_found[:5]}"
+    if not_found:  # review A1: never match zero sessions silently
+        short = [x for x in not_found if len(x) < 32]
+        raise SystemExit(
+            f"--exclude-sessions: {len(not_found)} line(s) are not full pilot session_ids"
+            + (
+                f" ({len(short)} are shorter than a full 32-character id, e.g. a prefix or a "
+                "line of prose)"
+                if short
+                else ""
+            )
+            + ". Use a machine-only file: one full session_id per line, # for comments "
+            "(like pilot_data/low_effort_ids.txt)."
         )
     sessions = sorted(human["session_id"].unique())
 
@@ -279,7 +301,18 @@ def main() -> None:
             f"\n{bar}\n!! FINAL EVALUATION: the AI sessions are the HELD-OUT rows. Report "
             f"these numbers; never tune on them (AGENTS.md section 8).\n{bar}\n"
         )
-        ai_eval = splits.heldout[splits.heldout["respondent_kind"].eq("ai")]
+        # Review H1: only the DECIDED held-out model (configs/data_decisions.json) and training
+        # models on the held-out survey; never an earlier held-out model's rows (gemini-flash).
+        heldout_model = decided_heldout_model()
+        kept = final_eval_rows(splits.heldout, heldout_model)
+        dropped = splits.heldout.loc[splits.heldout.index.difference(kept.index)]
+        if not dropped.empty:
+            print(
+                f"WARNING: --final: dropped {len(dropped)} held-out AI rows from other held-out "
+                f"models {sorted(dropped['model'].dropna().unique())}: only {heldout_model} is "
+                "the held-out model (configs/data_decisions.json)"
+            )
+        ai_eval = kept[kept["respondent_kind"].eq("ai")]
         if ai_eval.empty:
             raise SystemExit("--final: there are no held-out AI rows")
     else:

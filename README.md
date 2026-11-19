@@ -94,7 +94,8 @@ python scripts/run_real_router.py \
                   results/outcomes/v1-du-L0-quiz-arc-200-q20.parquet \
     --pilot-outcomes results/outcomes/pilot-2026-11-13.parquet \
     --low-effort pilot_data/low_effort_ids.txt --cap-variant per_mech no_cap
-# -> results/real-router/<run_id>/: comparison.csv/.md, thresholds.csv (A_k per fold),
+# -> results/real-router/<run_id>/: comparison.csv/.md, thresholds.csv (pooled A_0.05 /
+#    A_0.01 / A_max per policy, from session-level cross-fitting),
 #    budget_curve.csv/.png, metrics.json, config.yaml
 ```
 
