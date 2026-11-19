@@ -115,6 +115,37 @@ def test_builds_exact_and_pooled_cells_without_heldout_rows() -> None:
     assert "Held-out models" in failure_map.note
 
 
+def test_l3_rows_get_their_own_cells_but_stay_out_of_pooled_cells() -> None:
+    """L3 rows on unflagged items are cached L1 answers: pooling them double-counts L1."""
+    l3 = [
+        _row(run_id="l3-run", session_id=f"r{i}", kind="ai", outcome="picked_other",
+             mode="copy_paste", level="L3")
+        for i in range(3)
+    ]
+    frame = pd.concat([_frame(), rows_to_frame(l3)], ignore_index=True)
+    failure_map = build_failure_map(frame, version="v1", n_bootstrap=50, seed=7)
+
+    pooled = failure_map.lookup("decoy", "mcq")
+    by_mode = failure_map.lookup("decoy", "mcq", "copy_paste", None)
+    assert pooled.counts_ai == {"picked_decoy": 1, "picked_correct": 1, "picked_other": 0}
+    assert by_mode.counts_ai == {"picked_decoy": 1, "picked_correct": 0, "picked_other": 0}
+    assert failure_map.lookup("decoy", "mcq", "copy_paste", "L3").counts_ai["picked_other"] == 3
+    assert failure_map.lookup("decoy", "mcq", None, "L3").counts_ai["picked_other"] == 3
+    assert "L3" in failure_map.note
+
+
+def test_quick_map_leaves_l3_out() -> None:
+    from adr.replay.quick_map import quick_failure_map
+
+    l3 = [
+        _row(run_id="l3-run", session_id="r1", kind="ai", outcome="picked_other",
+             mode="copy_paste", level="L3")
+    ]
+    frame = pd.concat([_frame(), rows_to_frame(l3)], ignore_index=True)
+    fmap = quick_failure_map(frame)
+    assert all(c.counts_ai.get("picked_other", 0) == 0 for c in fmap.cells)
+
+
 def test_builder_is_deterministic() -> None:
     first = build_failure_map(_frame(), version="v1", n_bootstrap=30, seed=11)
     second = build_failure_map(_frame(), version="v1", n_bootstrap=30, seed=11)

@@ -1,6 +1,21 @@
 {
   "version": 1,
   "locked_before_fitting": true,
+  "heldout_model": {
+    "name": "claude-haiku",
+    "model_id": "claude-haiku-5-5",
+    "decided": "2026-11-17",
+    "replaces": "gemini-flash",
+    "reason": "Gemini now needs a $50 minimum prepay, so gemini-flash is not used.",
+    "rule": "Held out from the failure map, thresholds and all tuning. It runs only once, in the final --final evaluation (AGENTS.md section 8). No claude-haiku rows were collected on the real banks before this decision.",
+    "history": [
+      {
+        "decided": "2026-10-26",
+        "name": "gemini-flash",
+        "note": "original held-out model (step #16); replaced on 2026-11-17"
+      }
+    ]
+  },
   "asurre": {
     "heldout_source": "asurre_osmi_2017_18",
     "selection_rule": "Hold out the source with the smallest total respondent count; break ties by the most recent survey year.",

@@ -153,6 +153,8 @@ def run_doc_upload(
     lists that item's pre-built variants (items with none get a plain variant), and `mechanisms`
     must include every active mechanism in `variants`, plus any passive ones to score every
     answer."""
+    # Fail before any call: L3 is copy-paste only (build_doc_prompt says why).
+    build_doc_prompt(assessment.assessment_type, 1, cfg.attacker_level, cfg.persona)
     for m in cfg.models:
         client.spec(m)  # fail fast on an unknown model
     if cfg.n_samples > 1 and not cfg.temperature:

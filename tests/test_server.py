@@ -76,7 +76,7 @@ def test_browser_never_sees_ids_checks_or_router_state(request, app, assessment_
         assert set(b) == {"session_id", "finished", "item"}
         if b["item"]:
             assert set(b["item"]) == {
-                "token", "item_type", "stem", "options", "aux", "position", "total",
+                "token", "item_type", "passage", "stem", "options", "aux", "position", "total",
             }
             if b["item"]["aux"]:
                 assert set(b["item"]["aux"]) == {"text", "at", "style"}
@@ -249,13 +249,45 @@ class _NothingToScore(StubDecoy):
         raise NoObservation("empty answer")
 
 
-def test_an_unscorable_answer_counts_as_shown_with_no_evidence(monkeypatch):
+def test_an_unscorable_answer_counts_as_shown_with_no_evidence(monkeypatch, tmp_path):
+    # The active check raises NoObservation: router.update(state, variant_id, None) (contract
+    # item 16), the session moves on, no outcome is saved for that check, behaviour still is.
+    from adr.router.core import SPRTRouter
+    from server.store import read_session
+
+    calls = []
+    real_update = SPRTRouter.update
+
+    def spy(self, state, variant_id, outcome):
+        calls.append((variant_id, outcome))
+        return real_update(self, state, variant_id, outcome)
+
+    monkeypatch.setattr(SPRTRouter, "update", spy)
     monkeypatch.setenv("ADR_DEBUG_STATE", "1")
-    c = TestClient(create_app(mechanisms={"decoy": _NothingToScore()}))
-    bodies = walk(c, "stub-quiz")
-    assert bodies[-1]["finished"]  # no loop on the unscorable question
-    state = c.get(f"/session/{bodies[0]['session_id']}").json()
-    assert [v.split("|")[1] for v in state["served"]] == ["plain"] * 3
+    c = TestClient(create_app(mechanisms={"decoy": _NothingToScore()}, data_dir=tmp_path))
+    first = c.post("/session/start", json={"assessment_id": "stub-quiz"}).json()
+    r = respond(c, first, 1)
+    assert r.status_code == 200
+    second = r.json()
+    assert not second["finished"] and second["item"]["position"] == 2  # moved on
+
+    sid = first["session_id"]
+    decoy_calls = [(v, o) for v, o in calls if v.split("|")[1] == "decoy"]
+    assert len(decoy_calls) == 1 and decoy_calls[0][1] is None
+    decoy_id = decoy_calls[0][0]
+    state = c.get(f"/session/{sid}").json()
+    assert state["served"] == [decoy_id]  # the variant shown, not a stand-in plain one
+    assert [decoy_id, "none", 0.0] in state["history"] and state["score"] == 0.0
+
+    answer = [rec for rec in read_session(tmp_path / f"{sid}.jsonl") if rec["event"] == "answer"]
+    saved = [v.split("|")[1] for v, _ in answer[0]["outcomes"]]
+    assert saved == ["behaviour"]  # nothing for the decoy; the passive check is kept
+
+    bodies = [second]
+    while not bodies[-1]["finished"]:
+        bodies.append(respond(c, bodies[-1], VALID[bodies[-1]["item"]["item_type"]]).json())
+    state = c.get(f"/session/{sid}").json()
+    assert [v.split("|")[1] for v in state["served"]] == ["decoy", "decoy", "plain"]
 
 
 def test_the_reading_floor_counts_the_items_passage(tmp_path, monkeypatch):
@@ -280,6 +312,8 @@ def test_the_reading_floor_counts_the_items_passage(tmp_path, monkeypatch):
     }
     bank.write_text(json.dumps({"items": [item], "assessments": [quiz]}), encoding="utf-8")
     client = TestClient(create_app(bank_path=bank, mechanisms={}))
+    shown = client.post("/session/start", json={"assessment_id": "p"}).json()["item"]
+    assert shown["passage"] == item["passage"]  # sent with the visible item
     outcomes = []
     for ms in (3000, 6000):  # enough for the stem alone; enough for passage + stem
         step = client.post("/session/start", json={"assessment_id": "p"}).json()

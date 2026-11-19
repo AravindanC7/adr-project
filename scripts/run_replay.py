@@ -30,6 +30,9 @@ Three splits (adr/replay/quick_map.py):
                items, so sessions are shorter than the real thing.
   held-out     the held-out model and the held-out survey. Read ONLY with --final, which prints
                a banner: report those numbers, never tune on them (AGENTS.md section 8).
+               It keeps the held-out model named in configs/data_decisions.json and the
+               training models' rows on the held-out survey; AI rows from any other model
+               flagged as held out (an earlier held-out model) are dropped, with a warning.
 If the evaluated rows have no AI respondents, only the honest-side metrics (false flags,
 burden) are computed. Writes results/runs/<run_id>/metrics.json and config.yaml.
 
@@ -69,6 +72,7 @@ from adr.replay.donors import Donors, Group
 from adr.replay.quick_map import (
     CALIBRATION_FRAC,
     SPLIT_SEED,
+    final_eval_rows,
     fit_rows,
     quick_failure_map,
     split_rows,
@@ -109,6 +113,14 @@ def load_bank(args) -> tuple[Assessment, dict[str, Item], dict[str, list[Rendere
     return assessments[0], items, dict(variants)
 
 
+DATA_DECISIONS = Path(__file__).resolve().parents[1] / "configs" / "data_decisions.json"
+
+
+def decided_heldout_model(path: Path = DATA_DECISIONS) -> str:
+    """The held-out model's name, as recorded in configs/data_decisions.json."""
+    return json.loads(path.read_text(encoding="utf-8"))["heldout_model"]["name"]
+
+
 def load_logged(args, warnings: list[str]):
     """Logged outcome rows: map from train rows; evaluation on the calibration split, or on the
     held-out rows with --final (see module doc). Returns the assessment as evaluated: only its
@@ -144,9 +156,18 @@ def load_logged(args, warnings: list[str]):
     if final:
         loud("FINAL EVALUATION ON HELD-OUT DATA (--final). Report these numbers; never tune "
              "prompts, thresholds, caps or features on them (AGENTS.md section 8).")
-        if splits.heldout.empty:
-            raise SystemExit("--final: there are no held-out rows (held-out model or survey)")
-        evaluated_on, eval_rows, eval_assessment = "heldout", splits.heldout, assessment
+        heldout_model = decided_heldout_model()
+        eval_rows = final_eval_rows(splits.heldout, heldout_model)
+        dropped = splits.heldout[~splits.heldout.index.isin(eval_rows.index)]
+        if not dropped.empty:
+            others = sorted(dropped["model"].dropna().unique())
+            warnings.append(f"--final: dropped {len(dropped)} held-out AI rows from held-out-"
+                            f"flagged models other than the decided held-out model "
+                            f"{heldout_model!r}: {others}")
+        if eval_rows.empty:
+            raise SystemExit(f"--final: there are no held-out rows (held-out model "
+                             f"{heldout_model!r} or held-out survey)")
+        evaluated_on, eval_assessment = "heldout", assessment
     else:
         ids = [i for i in assessment.item_ids if i in splits.calibration_item_ids]
         if not ids:
@@ -186,7 +207,8 @@ def load_logged(args, warnings: list[str]):
         "calibration_item_ids": sorted(splits.calibration_item_ids),
         "n_rows_train": len(splits.train),
         "n_rows_calibration": len(splits.calibration),
-        "n_rows_heldout_read": len(splits.heldout) if final else 0,
+        "heldout_model": decided_heldout_model() if final else None,
+        "n_rows_heldout_read": len(eval_rows) if final else 0,
         "n_rows_eval_ai": len(eval_ai),
         "n_rows_human": len(humans),
     }
