@@ -41,7 +41,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -255,6 +255,13 @@ def main() -> None:
         help="a document-upload AI group needs at least this many sessions for a TPR (default "
         "%(default)s, i.e. more than 5); until then its sessions are listed one by one instead",
     )
+    ap.add_argument(
+        "--drop-mechanisms",
+        help="leave-one-check-out, comma-separated, in order (e.g. canary,decoy,opinion_trap,"
+        "style): for each one, rerun router, best_single and all_checks without it (its rows, "
+        "variants and map cells removed; same folds and split) and write leave_one_out.csv and a "
+        "table in comparison.md. Replay only, no model calls",
+    )
     ap.add_argument("--calibration-frac", type=float, default=CALIBRATION_FRAC)
     ap.add_argument("--split-seed", type=int, default=SPLIT_SEED)
     ap.add_argument("--results-dir", default="results")
@@ -382,35 +389,40 @@ def main() -> None:
     maps = all_maps(splits.train, human, folds)
     alphas = sorted({args.alpha, 0.01, EXTRA_ALPHA})
 
-    def run(name: str, c: RouterConfig) -> dict:
-        make = router_factory(name, assessment, items, variants)
+    full = Context(assessment, items, variants, human, ai_eval, maps, passive)
+
+    def run(name: str, c: RouterConfig, ctx: Context = full) -> dict:
+        make = router_factory(name, ctx.assessment, ctx.items, ctx.variants)
         scored = score_policy(
             make,
             c,
-            assessment,
-            items,
-            human,
-            ai_eval,
+            ctx.assessment,
+            ctx.items,
+            ctx.human,
+            ctx.ai_eval,
             folds,
-            maps,
+            ctx.maps,
             args.n_synthetic,
-            passive,
+            ctx.passive,
             args.seed,
         )
-        return summarize(
+        summ = summarize(
             scored,
             make,
             c,
-            assessment,
-            items,
-            human,
+            ctx.assessment,
+            ctx.items,
+            ctx.human,
             alphas,
             args.boot,
             args.n_synthetic_boot,
-            passive,
+            ctx.passive,
             args.seed,
             {"doc_upload": args.min_upload_sessions},
         )
+        for t, v in summ["results"].items():  # the FPR each threshold was set for
+            v["nominal_fpr"] = NOMINAL_FPR.get(t, float(t[2:]) if t.startswith("A_0") else None)
+        return summ
 
     results: dict[str, dict] = {}
     for name in COMPARE:
@@ -433,6 +445,62 @@ def main() -> None:
             f"  {name:15s} "
             + "  ".join(f"{t}={x['A']:.2f}: TPR {x['tpr']:.2f}" for t, x in r.items())
         )
+
+    loo: list[dict] = []
+    dropped_done: list[str] = []
+    for m in [x.strip() for x in (args.drop_mechanisms or "").split(",") if x.strip()]:
+        if m not in mechanisms:
+            print(f"NOTE: --drop-mechanisms {m}: not among the mechanisms used here; skipped")
+            continue
+        keep = [x for x in mechanisms if x != m]
+        if not keep:
+            print(f"NOTE: --drop-mechanisms {m}: it is the only check here; skipped")
+            continue
+        a_m, items_m, variants_m = load_bank(args.bank, args.assessment_id, keep)
+        human_m = human[human["mechanism"].ne(m)]
+        ctx = Context(
+            a_m,
+            items_m,
+            variants_m,
+            human_m,
+            ai_eval[ai_eval["mechanism"].ne(m)],
+            all_maps(splits.train[splits.train["mechanism"].ne(m)], human_m, folds),
+            tuple(x for x in keep if x in PASSIVE_MECHANISMS),
+        )
+        dropped_done.append(m)
+        policies = LOO_POLICIES
+        if not any(x in ACTIVE_MECHANISMS for x in keep):
+            policies = ("router",)
+            print(
+                f"NOTE: without {m} only passive checks remain ({', '.join(keep)}): "
+                "best_single and all_checks need an active check, so only the router is rerun"
+            )
+        for pol in policies:
+            summ = run(pol, cfg, ctx)
+            for t in _ordered(summ):
+                v, ci = summ["results"][t], summ["ci95"][t]
+                loo.append(
+                    {
+                        "dropped": m,
+                        "policy": pol,
+                        "threshold": t,
+                        "A": v["A"],
+                        "tpr": v["tpr"],
+                        "tpr_lo": (ci.get("tpr") or (None, None))[0],
+                        "tpr_hi": (ci.get("tpr") or (None, None))[1],
+                        "checks_per_honest_session": v["checks_per_honest_session"],
+                        "honest_pause_rate": v["honest_pause_rate"],
+                        "nominal_fpr": v["nominal_fpr"],
+                    }
+                )
+            r = summ["results"]
+            print(
+                f"  without {m:12s} {pol:12s} "
+                + "  ".join(
+                    f"{t}: TPR {r[t]['tpr']:.2f}, checks {r[t]['checks_per_honest_session']:.1f}"
+                    for t in _ordered(summ)
+                )
+            )
 
     def key(a: float) -> str:
         return f"A_{a:g}"
@@ -470,7 +538,9 @@ def main() -> None:
         for v, label in ABLATIONS.items()
         if label in results
     ]
-    write_comparison(results, out, headline, notes)
+    write_comparison(results, out, headline, notes, loo)
+    if loo:
+        pd.DataFrame(loo).to_csv(out / "leave_one_out.csv", index=False)
     write_thresholds(results, out)
     pd.DataFrame(curve).to_csv(out / "budget_curve.csv", index=False)
     try:  # scripts/ is not a package: load the plotting script by path
@@ -556,6 +626,7 @@ def main() -> None:
                 "n_ai_eval_sessions_by_group": results["router"]["n_ai_sessions_by_group"],
                 "min_upload_sessions_for_tpr": args.min_upload_sessions,
                 "n_missing_keys": None if missing_keys is None else len(missing_keys),
+                "drop_mechanisms": dropped_done,
                 "calibration_frac": args.calibration_frac,
                 "split_seed": args.split_seed,
                 "map_versions": [m.version for m in maps],
@@ -587,11 +658,56 @@ def main() -> None:
 COLUMNS = (
     "tpr",
     "ai_cleared_rate",
+    "nominal_fpr",
     "honest_pause_rate",
     "honest_cleared_rate",
     "checks_per_honest_session",
 )
 ORDER = ("A_0.05", "A_0.01", "A_max")  # headline first
+# The honest pause rate each threshold was set for (A_max: none of the real sessions); shown next
+# to the REAL honest pause rate, which can differ (thresholds come from resampled sessions).
+NOMINAL_FPR = {"A_0.05": 0.05, "A_0.01": 0.01, "A_max": 0.0}
+LOO_POLICIES = ("router", "best_single", "all_checks")
+
+
+@dataclass(frozen=True)
+class Context:
+    """Everything a policy run depends on that leave-one-check-out changes."""
+
+    assessment: Assessment
+    items: dict
+    variants: dict
+    human: pd.DataFrame
+    ai_eval: pd.DataFrame
+    maps: list
+    passive: tuple[str, ...]
+
+
+def loo_text(loo: list[dict]) -> str:
+    if not loo:
+        return ""
+    lines = [
+        "",
+        (
+            "Leave one check out (replay only, no model calls): each check dropped in turn (its "
+            "rows, variants and map cells), same folds and split; thresholds recomputed the same "
+            "way."
+        ),
+        "",
+        (
+            "| dropped | policy | threshold | A | tpr | checks_per_honest_session | nominal_fpr | "
+            "honest_pause_rate |"
+        ),
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for r in loo:
+        ci = (r["tpr_lo"], r["tpr_hi"]) if r["tpr_lo"] is not None else None
+        lines.append(
+            f"| {r['dropped']} | {r['policy']} | {r['threshold']} | {r['A']:.3f} | "
+            f"{_fmt(r['tpr'], ci)} | {r['checks_per_honest_session']:.2f} | "
+            f"{r['nominal_fpr']:.2f} | {r['honest_pause_rate']:.3f} |"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def _columns(results: dict[str, dict]) -> list[str]:
@@ -691,7 +807,7 @@ def _fmt(v, ci) -> str:
 
 
 def write_comparison(
-    results: dict[str, dict], out: Path, headline: str, notes: list[str] = ()
+    results: dict[str, dict], out: Path, headline: str, notes: list[str] = (), loo=()
 ) -> None:
     """One row per policy and threshold (A_0.01, A_0.05, A_max): the threshold, TPR, the real
     honest pause rate and checks per honest session, with 95% CIs (bootstrap over sessions)."""
@@ -743,7 +859,8 @@ def write_comparison(
         + "".join(f"\n- {note}" for note in notes)
         + ("\n" if notes else "")
         + sources_text(results)
-        + described_text(results),
+        + described_text(results)
+        + loo_text(list(loo)),
         encoding="utf-8",
     )
 

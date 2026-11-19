@@ -169,3 +169,38 @@ def test_small_upload_group_is_described_not_given_a_tpr():
             "cleared@A_0.05": 0.0,
         }
     ]
+
+
+# ------------------------------------------------- --final: dropped rows never reach a session
+def test_rows_dropped_by_the_filter_or_final_never_appear_in_a_composite_session():
+    from adr.replay.quick_map import final_eval_rows, split_rows
+
+    rows = []
+    for bank in BANKS:
+        rows += _run("gpt-mini", "copy_paste", bank, range(2))
+    haiku = _run("claude-haiku", "copy_paste", "quiz-arc", range(2))
+    stale = _run("gemini-flash", "copy_paste", "quiz-arc", range(2))
+    for r in haiku + stale:
+        r["heldout_model"] = True
+    human = dict(rows[0], respondent_kind="human", model=None, session_id="pilot:p1",
+                 run_id="pilot")
+    table = pd.DataFrame(rows + haiku + stale + [human])
+
+    # run_real_router: the AI-row filter (#30, H1) first, then the join on the filtered rows
+    ai = table[table["respondent_kind"].eq("ai")].reset_index(drop=True)
+    with pytest.raises(ValueError, match="refusing"):
+        join_ai_sessions(ai)  # without --final, held-out rows are refused outright
+    comp = join_ai_sessions(ai, allow_heldout=True).rows
+    assert "pilot:p1" not in set(comp["session_id"])  # the human row never reaches a session
+    assert (comp.groupby("session_id")["model"].nunique() == 1).all()  # never mixes models
+
+    # --final: only the decided held-out model is evaluated; gemini-flash rows are dropped whole
+    splits = split_rows(comp)
+    kept = final_eval_rows(splits.heldout, "claude-haiku")
+    dropped = splits.heldout.loc[splits.heldout.index.difference(kept.index)]
+    assert set(dropped["model"]) == {"gemini-flash"} and len(dropped) == len(stale)
+    final_sessions = set(kept.loc[kept["respondent_kind"].eq("ai"), "session_id"])
+    assert final_sessions == {f"composite:claude-haiku:copy_paste:L0:{i}" for i in range(2)}
+    assert not any("gemini-flash" in s for s in final_sessions)
+    # and no kept session contains a dropped row
+    assert set(dropped.index).isdisjoint(kept.index)
