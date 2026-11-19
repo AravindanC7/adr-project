@@ -38,6 +38,12 @@ class ReplayResult:
     fallbacks: int                 # outcomes taken from another session of the same group
     synthetic: int                 # outcomes drawn from the failure map: no logged row
     skipped: int                   # NoObservation: no evidence given to the router
+    same_type: int = 0             # outcomes from this session's own rows on another item of the
+                                   # same item_type (AI sessions on the pilot bank)
+    # ACTIVE checks only (same_type, fallback, synthetic, missing): where the outcomes of the
+    # checks the policy served came from. Passive checks (style, behaviour) are attempted on
+    # every item, including item types they never apply to, so they are left out here.
+    active_sources: tuple[int, int, int, int] = (0, 0, 0, 0)
 
     @property
     def kind(self) -> str:
@@ -57,6 +63,10 @@ def replay_session(
     session_id = f"replay:{donor.group.label}:{seed}"
     state, choice = router.start(assessment, session_id, seed)
     shown = checks = skipped = 0
+    act = [0, 0, 0, 0]  # active checks: same_type, fallback, synthetic, missing
+
+    def counters() -> tuple[int, int, int]:
+        return (getattr(donor, "same_type", 0), donor.fallbacks, donor.synthetic)
     decided_at = None
     while choice is not None:
         shown += 1
@@ -66,13 +76,17 @@ def replay_session(
             state = router.update(state, choice.variant_id, "none")
         else:
             checks += 1
+            before = counters()
             try:
                 state = router.update(
                     state, choice.variant_id, donor.outcome(choice.item_id, choice.mechanism)
                 )
             except NoObservation:
                 skipped += 1
+                act[3] += 1
                 state = router.update(state, choice.variant_id, None)
+            for i, (a, b) in enumerate(zip(before, counters(), strict=True)):
+                act[i] += b - a
         for p in passive:
             try:
                 outcome = donor.outcome(choice.item_id, p)
@@ -93,4 +107,6 @@ def replay_session(
         fallbacks=donor.fallbacks,
         synthetic=donor.synthetic,
         skipped=skipped,
+        same_type=getattr(donor, "same_type", 0),
+        active_sources=tuple(act),
     )

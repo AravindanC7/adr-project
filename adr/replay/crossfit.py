@@ -141,6 +141,17 @@ class Trace:
     running: np.ndarray
     checks: np.ndarray
     total_checks: int
+    cleared: bool = False  # the replay ended "cleared" (score reached B; checks stopped there)
+    # Where the outcomes of the ACTIVE checks served came from (AI sessions on the pilot bank,
+    # review H3): same_type = own rows on another item of the same item_type; fallback = another
+    # session of the same group; missing = no row at all (NoObservation: no evidence). Passive
+    # checks are not counted: they are attempted on every item, also where they never apply.
+    sources: tuple[int, int, int, int] = (0, 0, 0, 0)  # (same_type, fallback, synthetic, missing)
+
+    def cleared_at(self, threshold: float) -> bool:
+        """Cleared when deployed at `threshold`: it reached B before ever reaching `threshold`.
+        Clearing is final (no more checks, score frozen), so that is: cleared and score < threshold."""
+        return self.cleared and self.score < threshold
 
     def checks_at(self, threshold: float) -> int:
         """Active checks served before pausing at `threshold` (all of them if never paused)."""
@@ -156,7 +167,16 @@ def trace(result: ReplayResult, who: str, fold: int, prior: float) -> Trace:
     )
     checks = active if len(active) else np.array([0])
     score = float(max(prior, running.max()))
-    return Trace(who, fold, score, running, checks, result.checks_run)
+    return Trace(
+        who,
+        fold,
+        score,
+        running,
+        checks,
+        result.checks_run,
+        result.final.status == "cleared",
+        result.active_sources,
+    )
 
 
 # ------------------------------------------------------------------ donors
@@ -236,6 +256,9 @@ def score_policy(
     real: dict[str, Trace] = {}
     ai: dict[str, list[Trace]] = defaultdict(list)
     synthetic: list[Trace] = []
+    # The AI donors don't depend on the fold: index them once (review H4). Every replay draws
+    # through respondent_from(), which seeds its own rng, so results are unchanged.
+    ai_donors = Donors(ai_eval_rows, items, type_match_kinds=("ai",))
     for k, (sessions, fmap) in enumerate(zip(folds, maps, strict=True)):
         check_router_map(fmap)  # #25 guard, also for maps passed in
         policy = make(fmap, scfg)
@@ -260,7 +283,6 @@ def score_policy(
             cfg.prior_log_odds,
         )
         # AI sessions with the same map
-        ai_donors = Donors(ai_eval_rows, items, type_match_kinds=("ai",))
         for g in ai_donors.groups("ai"):
             for s in ai_donors.sessions(g):
                 r = replay_session(
@@ -301,11 +323,38 @@ def threshold_none(scores: Sequence[float]) -> float:
     return float(np.nextafter(s.max(), math.inf)) if len(s) else math.inf
 
 
+def ai_group(per_fold: list[Trace]) -> str:
+    """An AI session's group, model:attack_mode:attacker_level (Trace.who = "ai:<group>|<session>")."""
+    return per_fold[0].who.split("|", 1)[0].removeprefix("ai:")
+
+
+SOURCE_NAMES = ("same_type", "fallback", "synthetic", "missing")
+
+
+def ai_sources(ai: list[list[Trace]]) -> dict[str, dict[str, float]]:
+    """Per AI group (review H3): sessions, and per session the mean number of checks served and
+    of check outcomes answered same-type / from a fallback / from the map / missing, averaged
+    over the fold maps. A group with many `missing` checks stays near the prior: it would count
+    as misses, so it must not be silently pooled into the TPR."""
+    by: dict[str, list[list[Trace]]] = defaultdict(list)
+    for f in ai:
+        by[ai_group(f)].append(f)
+    out = {}
+    for g, sessions in sorted(by.items()):
+        traces = [t for f in sessions for t in f]
+        out[g] = {"sessions": len(sessions)}
+        out[g]["checks"] = float(np.mean([t.total_checks for t in traces]))
+        for i, name in enumerate(SOURCE_NAMES):
+            out[g][name] = float(np.mean([t.sources[i] for t in traces]))
+    return out
+
+
 def rates(
     real: list[Trace], ai: list[list[Trace]], synthetic: list[float], thresholds: dict[str, float]
 ) -> dict[str, dict[str, float]]:
-    """Per threshold: TPR, real and resampled honest pause rates, checks per honest session, and
-    how many real sessions reach it."""
+    """Per threshold: TPR, real and resampled honest pause rates, checks per honest session, the
+    share of honest sessions cleared (reached B first), the share of AI sessions wrongly cleared,
+    and how many real sessions reach it."""
     out = {}
     for name, a in thresholds.items():
         ai_hits = [np.mean([t.score >= a for t in per_fold]) for per_fold in ai]
@@ -317,8 +366,18 @@ def rates(
             if len(synthetic)
             else math.nan,
             "checks_per_honest_session": float(np.mean([t.checks_at(a) for t in real])),
+            "honest_cleared_rate": float(np.mean([t.cleared_at(a) for t in real])),
+            # AI sessions wrongly cleared: reached B before `a` (mean over the fold maps)
+            "ai_cleared_rate": float(np.mean([np.mean([t.cleared_at(a) for t in f]) for f in ai]))
+            if ai
+            else math.nan,
             "n_real_at_or_above": int(sum(t.score >= a for t in real)),
         }
+        groups = sorted({ai_group(f) for f in ai})
+        if len(groups) > 1:  # TPR per model / attack mode / level too (review H3)
+            for g in groups:
+                hits = [np.mean([t.score >= a for t in f]) for f in ai if ai_group(f) == g]
+                out[name][f"tpr[{g}]"] = float(np.mean(hits))
     return out
 
 
@@ -357,10 +416,15 @@ def summarize(
     policies = [make(fmap, scfg) for fmap in scored.maps]
     rng = np.random.default_rng(seed)
     honest_ids = sorted(scored.real)
+    by_group: dict[str, list[int]] = defaultdict(list)
+    for i, f in enumerate(ai):
+        by_group[ai_group(f)].append(i)
     draws: dict[str, dict[str, list[float]]] = {n: defaultdict(list) for n in th}
     for b in range(n_boot):
         picked = [honest_ids[i] for i in rng.integers(0, len(honest_ids), len(honest_ids))]
-        ai_pick = [ai[i] for i in rng.integers(0, len(ai), len(ai))] if ai else []
+        ai_pick = []  # resampled within each AI group, so every group keeps its size
+        for idx in by_group.values():
+            ai_pick += [ai[idx[i]] for i in rng.integers(0, len(idx), len(idx))]
         by_fold: dict[int, list[str]] = defaultdict(list)
         for p in picked:
             by_fold[scored.real[p].fold].append(p)
@@ -406,6 +470,7 @@ def summarize(
         "ci95": ci,
         "n_sessions": len(real),
         "n_ai_sessions": len(ai),
+        "ai_sources_by_group": ai_sources(ai),
         "n_resampled_sessions": len(syn),
         "sessions_per_fold": sizes,
         "n_boot": n_boot,

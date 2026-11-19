@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 
 from adr.contracts import (
     Assessment,
@@ -474,11 +475,17 @@ def test_run_real_router_end_to_end(tmp_path):
         "comparison.md",
         "thresholds.csv",
         "budget_curve.csv",
-        "budget_curve.png",
         "metrics.json",
         "config.yaml",
     ):
         assert (out / name).exists(), name
+    # the plot needs the optional [plot] extra; without matplotlib the script skips it (H2, A2)
+    try:
+        import matplotlib  # noqa: F401
+    except ImportError:
+        assert not (out / "budget_curve.png").exists()
+    else:
+        assert (out / "budget_curve.png").exists()
     th = pd.read_csv(out / "thresholds.csv")
     assert set(th.threshold) == {"A_0.01", "A_0.05", "A_max"}
     assert len(th) == 6 * 3  # 6 policies x 3 thresholds
@@ -695,3 +702,88 @@ def test_run_real_router_stops_on_an_unknown_low_effort_id(tmp_path):
     low.write_text(session_ids()[0] + "\nd3ba4f10\n")  # a prefix is not a session id
     proc = _run_folds(tmp_path, "--low-effort", str(low))
     assert proc.returncode != 0 and "not among" in proc.stderr
+
+
+# ---------------------------------------------------------------- review H3: per-group reporting
+def _gt(who, score, sources=(0, 0, 0, 0)):
+    return cf.Trace(who, 0, score, np.array([score]), np.array([1]), 3, sources=sources)
+
+
+def test_rates_report_tpr_per_ai_group():
+    ai = [
+        [_gt("ai:m:copy_paste:L0|a", 5.0)],
+        [_gt("ai:m:copy_paste:L0|b", 1.0)],
+        [_gt("ai:m:doc_upload:L3|c", 5.0)],
+    ]
+    r = cf.rates([_gt("h", 0.0)], ai, [0.0], {"A": 2.0})["A"]
+    assert r["tpr"] == pytest.approx(2 / 3)
+    assert r["tpr[m:copy_paste:L0]"] == 0.5 and r["tpr[m:doc_upload:L3]"] == 1.0
+    one = cf.rates([_gt("h", 0.0)], ai[:2], [0.0], {"A": 2.0})["A"]
+    assert not any(k.startswith("tpr[") for k in one)  # one group: pooled TPR only
+
+
+def test_ai_sources_count_same_type_fallback_and_missing_per_group():
+    ai = [
+        [_gt("ai:m:copy_paste:L0|a", 1.0, (2, 0, 0, 1)), _gt("ai:m:copy_paste:L0|a", 1.0, (4, 0, 0, 1))],
+        [_gt("ai:m:doc_upload:L0|c", 1.0, (0, 3, 0, 0))],
+    ]
+    src = cf.ai_sources(ai)
+    assert src["m:copy_paste:L0"] == {
+        "sessions": 1, "checks": 3.0, "same_type": 3.0, "fallback": 0.0, "synthetic": 0.0,
+        "missing": 1.0,
+    }
+    assert src["m:doc_upload:L0"]["fallback"] == 3.0
+
+
+# ---------------------------------------------------------------- review H1: --final rows
+def test_run_real_router_final_uses_only_the_decided_heldout_model(tmp_path):
+    from adr.replay.quick_map import decided_heldout_model
+
+    model = decided_heldout_model()
+    assert model == "claude-haiku"
+    rows = [OutcomeRow(**r) for r in ai_frame().to_dict("records")]
+    for name in (model, "gemini-flash"):  # the decided model + an earlier held-out model
+        for s in range(3):
+            for i, item in enumerate(AI_ITEMS):
+                r = ai_row(f"ai-test:{name}:{s}", item, "picked_decoy" if i % 2 else "picked_correct")
+                rows.append(r.model_copy(update={"model": name, "heldout_model": True}))
+    _files(tmp_path)
+    write_outcomes(rows, tmp_path / "ai.parquet")
+    proc = subprocess.run(
+        _cmd(tmp_path, "--final"), cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    n_stale = 3 * len(AI_ITEMS)
+    assert f"--final: dropped {n_stale} held-out AI rows" in proc.stdout
+    assert "['gemini-flash']" in proc.stdout
+    cfg = yaml.safe_load((tmp_path / "real-router" / "r" / "config.yaml").read_text())
+    assert cfg["final"] is True
+    assert cfg["n_ai_eval_sessions"] == 3  # the claude-haiku sessions only
+
+
+# ---------------------------------------------------------------- review A1: exclusion file
+def test_exclude_sessions_rejects_a_handoff_style_file(tmp_path):
+    _files(tmp_path)
+    full = session_ids()[:2]
+    # shaped like the Drive handoff note: prose plus short id prefixes, not full ids
+    (tmp_path / "handoff.txt").write_text(
+        "Low-effort sessions flagged in the pilot review:\n"
+        + "".join(f"- {s[:8]} (fast, straight-lined)\n" for s in full),
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        _cmd(tmp_path, "--exclude-sessions", str(tmp_path / "handoff.txt")),
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert proc.returncode != 0
+    assert "not full pilot session_ids" in proc.stderr
+    # a machine-only file with full ids works and drops exactly those sessions
+    (tmp_path / "ids.txt").write_text("# full ids\n" + "\n".join(full) + "\n", encoding="utf-8")
+    proc = subprocess.run(
+        _cmd(tmp_path, "--exclude-sessions", str(tmp_path / "ids.txt")),
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    cfg = yaml.safe_load((tmp_path / "real-router" / "r" / "config.yaml").read_text())
+    assert cfg["n_sessions"] == N_SESSIONS - 2
