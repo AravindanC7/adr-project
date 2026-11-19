@@ -18,9 +18,11 @@ copy-paste, document export and browser agents still get (`adr/mechanisms/CANARY
 
 * it stays in the DOM, the copied text and the accessibility tree: never `display:none`,
   `visibility:hidden` or the `hidden` attribute, which would drop it from all three;
-* the server picks the hiding style (`ADR_HIDE`), so the screen-reader test (#44) can compare:
+* the server picks the hiding style (`ADR_HIDE`, default `clip_aria`; the final evaluation and
+  the pilot set `clip` explicitly), so the screen-reader test (#44) can compare:
   * `clip`: squeezed into a 1px clipped box; screen readers still read it;
-  * `clear`: full-size but colourless text, also colourless when highlighted;
+  * `clear`: full-size but colourless text, also colourless when highlighted; only for the #44
+    comparison (Windows High Contrast shows it);
   * `clip_aria`: `clip` plus `aria-hidden`, so screen readers skip it (set in `app.js`);
 * it is a `div`, not a `p`: Chrome copies a `p` with a blank line after it, which would break
   `copy_text`.

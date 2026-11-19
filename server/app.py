@@ -40,8 +40,12 @@ Settings (environment variables):
                           final-evaluation map, or a synthetic map with ADR_PILOT=1 stops the
                           server. Demo map: scripts/make_demo_map.py (SYNTHETIC numbers).
   ADR_HIDE=clip | clear | clip_aria
-                          How hidden text is hidden (see frontend/style.css). The screen-reader
-                          test (#44) compares them. Default clip.
+                          How hidden text is hidden (see frontend/style.css). Default clip_aria,
+                          for safety: screen readers skip the hidden text, so a blind respondent
+                          never hears a trap. The final evaluation and the pilot set clip
+                          explicitly (scripts/run_pilot.ps1), so their results stay comparable.
+                          clear is kept only for the screen-reader comparison (#44); Windows High
+                          Contrast also shows its text, another reason it isn't a default.
   ADR_STUB_MECHANISMS=1   Use the test stubs (tests/stubs.py) instead of adr/mechanisms/, for
                           trying the page before Archana's mechanisms are on main.
   ADR_PILOT=1             Human pilot (#30, #35): consent screen before question 1, a Stop
@@ -366,7 +370,7 @@ def create_app(
     if mechanisms is None:
         mechanisms = load_injected_mechanisms(os.environ.get("ADR_STUB_MECHANISMS") == "1")
     pick = pick or os.environ.get("ADR_PICK", "all")  # type: ignore[assignment]
-    hide = hide or os.environ.get("ADR_HIDE", "clip")  # type: ignore[assignment]
+    hide = hide or os.environ.get("ADR_HIDE", "clip_aria")  # type: ignore[assignment]
     if pick not in ("all", "router") or hide not in ("clip", "clear", "clip_aria"):
         raise ValueError(f"bad ADR_PICK={pick!r} or ADR_HIDE={hide!r}")
     if pilot is None:
