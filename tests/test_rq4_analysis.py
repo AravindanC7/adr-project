@@ -184,5 +184,13 @@ def test_rq4_outputs(synthetic):
         == 9
     )
     assert "\\multicolumn{2}{c}{MMLU}" in tex and "\\textit{Doc upload}" in tex
+
+
+def test_rq4_plot(synthetic):
+    # the figure needs the optional [plot] extra: skip, don't fail, without matplotlib
+    pytest.importorskip("matplotlib")
+    out = synthetic / "rq4"
+    out.mkdir()
+    t = rq4.compute(synthetic / "outcomes", synthetic / "runs", 100, 0)
     rq4.plot(t, out)
     assert (out / "rq4_drop.png").stat().st_size > 0 and (out / "rq4_drop.pdf").exists()
