@@ -1,0 +1,51 @@
+who,mode,mechanism,item_type,outcome,k,n,rate,ci_low,ci_high
+survey-ipip,copy_paste,opinion_trap,likert,implausible,0,228,0.0,0.0,0.0166
+survey-ipip,copy_paste,opinion_trap,likert,contradiction,18,228,0.0789,0.0505,0.1213
+survey-ipip,copy_paste,opinion_trap,likert,plausible,210,228,0.9211,0.8787,0.9495
+survey-ipip,doc_upload,opinion_trap,likert,implausible,0,50,0.0,0.0,0.0713
+survey-ipip,doc_upload,opinion_trap,likert,contradiction,0,50,0.0,0.0,0.0713
+survey-ipip,doc_upload,opinion_trap,likert,plausible,50,50,1.0,0.9287,1.0
+survey-gss,copy_paste,opinion_trap,mcq,implausible,5,40,0.125,0.0546,0.2611
+survey-gss,copy_paste,opinion_trap,mcq,contradiction,0,40,0.0,0.0,0.0876
+survey-gss,copy_paste,opinion_trap,mcq,plausible,35,40,0.875,0.7389,0.9454
+survey-gss,doc_upload,opinion_trap,mcq,implausible,0,8,0.0,0.0,0.3244
+survey-gss,doc_upload,opinion_trap,mcq,contradiction,0,8,0.0,0.0,0.3244
+survey-gss,doc_upload,opinion_trap,mcq,plausible,8,8,1.0,0.6756,1.0
+assignment-asurre-train,copy_paste,canary,open_text,followed_instruction,65,65,1.0,0.9442,1.0
+assignment-asurre-train,copy_paste,canary,open_text,leaked,0,65,0.0,0.0,0.0558
+assignment-asurre-train,copy_paste,canary,open_text,clean,0,65,0.0,0.0,0.0558
+assignment-asurre-train,copy_paste,style,open_text,high,7,130,0.0538,0.0263,0.107
+assignment-asurre-train,copy_paste,style,open_text,mid,86,130,0.6615,0.5766,0.7372
+assignment-asurre-train,copy_paste,style,open_text,low,37,130,0.2846,0.2141,0.3675
+assignment-asurre-train,doc_upload,canary,open_text,followed_instruction,13,13,1.0,0.7719,1.0
+assignment-asurre-train,doc_upload,canary,open_text,leaked,0,13,0.0,0.0,0.2281
+assignment-asurre-train,doc_upload,canary,open_text,clean,0,13,0.0,0.0,0.2281
+assignment-asurre-train,doc_upload,style,open_text,high,0,26,0.0,0.0,0.1287
+assignment-asurre-train,doc_upload,style,open_text,mid,3,26,0.1154,0.04,0.2898
+assignment-asurre-train,doc_upload,style,open_text,low,23,26,0.8846,0.7102,0.96
+survey-ipip public humans,human,opinion_trap,likert,implausible (expected),,,0.0158,,
+survey-gss public humans,human,opinion_trap,mcq,implausible (expected),,,0.0056,,
+pilot (all sessions),human,canary,open_text,followed_instruction,0,88,0.0,0.0,0.0418
+pilot (all sessions),human,canary,open_text,leaked,0,88,0.0,0.0,0.0418
+pilot (all sessions),human,canary,open_text,clean,88,88,1.0,0.9582,1.0
+pilot (all sessions),human,opinion_trap,likert,implausible,0,122,0.0,0.0,0.0305
+pilot (all sessions),human,opinion_trap,likert,contradiction,18,122,0.1475,0.0954,0.2212
+pilot (all sessions),human,opinion_trap,likert,plausible,104,122,0.8525,0.7788,0.9046
+pilot (all sessions),human,opinion_trap,mcq,implausible,4,264,0.0152,0.0059,0.0383
+pilot (all sessions),human,opinion_trap,mcq,contradiction,0,264,0.0,0.0,0.0143
+pilot (all sessions),human,opinion_trap,mcq,plausible,260,264,0.9848,0.9617,0.9941
+pilot (all sessions),human,style,open_text,high,4,88,0.0455,0.0178,0.1111
+pilot (all sessions),human,style,open_text,mid,11,88,0.125,0.0713,0.2101
+pilot (all sessions),human,style,open_text,low,73,88,0.8295,0.7376,0.8939
+pilot (without the 4 low-effort sessions),human,canary,open_text,followed_instruction,0,80,0.0,0.0,0.0458
+pilot (without the 4 low-effort sessions),human,canary,open_text,leaked,0,80,0.0,0.0,0.0458
+pilot (without the 4 low-effort sessions),human,canary,open_text,clean,80,80,1.0,0.9542,1.0
+pilot (without the 4 low-effort sessions),human,opinion_trap,likert,implausible,0,107,0.0,0.0,0.0347
+pilot (without the 4 low-effort sessions),human,opinion_trap,likert,contradiction,13,107,0.1215,0.0724,0.1968
+pilot (without the 4 low-effort sessions),human,opinion_trap,likert,plausible,94,107,0.8785,0.8032,0.9276
+pilot (without the 4 low-effort sessions),human,opinion_trap,mcq,implausible,4,240,0.0167,0.0065,0.0421
+pilot (without the 4 low-effort sessions),human,opinion_trap,mcq,contradiction,0,240,0.0,0.0,0.0158
+pilot (without the 4 low-effort sessions),human,opinion_trap,mcq,plausible,236,240,0.9833,0.9579,0.9935
+pilot (without the 4 low-effort sessions),human,style,open_text,high,4,80,0.05,0.0196,0.1216
+pilot (without the 4 low-effort sessions),human,style,open_text,mid,9,80,0.1125,0.0603,0.2002
+pilot (without the 4 low-effort sessions),human,style,open_text,low,67,80,0.8375,0.7416,0.9025
