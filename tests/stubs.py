@@ -72,16 +72,16 @@ class StubDecoy:
             mechanism="decoy",
             variant_id=make_variant_id(item.item_id, "decoy", seed),
             visible={"stem": item.stem, "options": item.options},
-            hidden={"decoy_option_index": decoy, "hidden_text": hidden_text,
-                    "hidden_position": "after_stem"},
+            hidden={"decoy_option_index": decoy, "correct_option_index": item.correct_option,
+                    "hidden_text": hidden_text, "hidden_position": "after_stem"},
             copy_text=f"{item.stem}\n{hidden_text}\n{opts}",
         )
 
     def score(self, rendered: RenderedItem, response: Response, telemetry: Telemetry | None) -> str:
-        item = ITEMS_BY_ID[rendered.item_id]
+        # The key travels with the variant (as in adr/mechanisms/decoy.py), so any bank works.
         if response.answer == rendered.hidden["decoy_option_index"]:
             return "picked_decoy"
-        if response.answer == item.correct_option:
+        if response.answer == rendered.hidden["correct_option_index"]:
             return "picked_correct"
         return "picked_other"
 

@@ -20,14 +20,16 @@ Rows per answered item (all respondent_kind="human", data_origin=pilot|dry_run)
   * for reverse-keyed IPIP pairs, the SECOND item of a pair is "contradiction" when both
     answers lean the same way (both agree, or both disagree); if either answer is neutral,
     missing, non-integer or out of range the second item gets no opinion-trap row at all
-    (no observation). PROVISIONAL rule: the mechanism
-    itself doesn't score pairs yet (adr/mechanisms/opinion_trap.py), so Archana should confirm
-    it before #40 uses it. --no-pairs turns it off.
+    (no observation); "implausible" wins over "contradiction". The rule is the shared
+    pair_outcome in adr/mechanisms/opinion_trap.py, the same one the AI runs use, so human and AI
+    pairs score the same way. Rule confirmed by Archana (Nov 18). --no-pairs turns it off.
   * the writing-style check (high / mid / low) for every open-text answer, scored here against
     the ASURRE training profile (scripts/prepare_style_profile.py). Style is passive: it observes
     every open-text answer whatever check was served, so it doesn't use the bank's
     eligible_mechanisms. An empty or skipped answer is no observation: no row, only a count.
     --no-style turns it off; --style-profile picks another profile file.
+    config.yaml records the profile's canonical profile_sha256 (the "profile" object only, so the
+    same on every machine) and warns if it isn't the one locked in configs/data_decisions.json.
 
 Nothing here contains answer text: rows hold outcomes. raw_ref points back to the session file
 and line. Open-text answers are still personal data, so the script lists any that look like
@@ -59,12 +61,14 @@ from adr.contracts import (
     parse_variant_id,
 )
 from adr.contracts.outcome import write_outcomes
-from adr.mechanisms.opinion_trap import OpinionTrapMechanism
+from adr.mechanisms.opinion_trap import OpinionTrapMechanism, pair_outcome
 from adr.mechanisms.style import StyleMechanism, StyleProfile, load_style_profile
+from scripts.analyse_language_fairness import _profile_object_sha256 as profile_sha256
 from server.store import read_session
 
 ROOT = Path(__file__).resolve().parent.parent
 STYLE_PROFILE = ROOT / "data" / "processed" / "runs_v1" / "style_profile.json"
+DECISIONS = ROOT / "configs" / "data_decisions.json"
 PERSONAL = {
     "email": re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),
     "phone": re.compile(r"(?:\+?\d[\s().-]?){9,}"),
@@ -91,20 +95,6 @@ def load_bank(path: Path) -> tuple[dict[str, Item], dict[str, HumanDistribution]
     dists = {d["key"]: HumanDistribution(**d) for d in raw.get("human_distributions", [])}
     assessment_type = {a["assessment_id"]: a["assessment_type"] for a in raw["assessments"]}
     return items, dists, assessment_type
-
-
-def leaning(answer: int, n_options: int) -> int:
-    """-1 disagree side, 0 middle, +1 agree side, for an option index on an agree scale."""
-    middle = (n_options - 1) / 2
-    return 0 if answer == middle else (1 if answer > middle else -1)
-
-
-def pair_leaning(answer: Any, n_options: int) -> int:
-    """leaning() for one answer of a reverse-keyed pair; 0 when neutral, missing, non-integer or
-    out of range, so the pair gives no observation."""
-    if type(answer) is not int or not 0 <= answer < n_options:
-        return 0
-    return leaning(answer, n_options)
 
 
 def outcome_row(
@@ -197,14 +187,9 @@ def clean(
                 partner = item.reverse_keyed_with
                 if pairs and partner and partner in answers:
                     n = len(item.options or [])
-                    sides = [pair_leaning(x, n) for x in (rec["answer"], answers[partner])]
-                    if 0 in sides:
-                        pass  # neutral or invalid answer in the pair: no observation, no row
-                    elif sides[0] == sides[1] and outcome != "implausible":
-                        found.append((rendered.variant_id, "contradiction"))
-                    else:
-                        found.append((rendered.variant_id, outcome))
-                else:
+                    # None = neutral or invalid answer in the pair: no observation, no row
+                    outcome = pair_outcome(rec["answer"], answers[partner], n, outcome)
+                if outcome is not None:
                     found.append((rendered.variant_id, outcome))
 
             if style is not None and item.item_type == "open_text":
@@ -243,6 +228,40 @@ def file_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
 
 
+def style_record(profile_path: Path, decisions_path: Path) -> dict[str, Any]:
+    """How config.yaml identifies the style profile.
+
+    profile_sha256 is the canonical hash locked in configs/data_decisions.json: sha256 of the
+    file's "profile" object as compact JSON with sorted keys, so it ignores the OS paths and
+    decisions_sha256 the file also records (the file's own hash differs per machine). A profile
+    other than the locked one is allowed (experiments) but warned about.
+    """
+    canonical = profile_sha256(profile_path)
+    locked = None
+    if decisions_path.is_file():
+        choice = json.loads(decisions_path.read_text(encoding="utf-8")).get("style_profile")
+        if isinstance(choice, dict) and choice.get("profile_sha256"):
+            locked = str(choice["profile_sha256"])
+    matches = None if locked is None else canonical == locked
+    if locked is None:
+        print(
+            f"note: no style_profile.profile_sha256 in {decisions_path}, nothing to check against"
+        )
+    elif not matches:
+        print(
+            f"WARNING: style profile {profile_path} has profile sha256 {canonical[:12]}, not the "
+            f"one locked in {decisions_path.name} ({locked[:12]}); recorded as "
+            "profile_matches_decision: false"
+        )
+    return {
+        "profile": profile_path.name,
+        "profile_sha256": canonical,
+        "profile_sha256_12": canonical[:12],
+        "profile_matches_decision": matches,
+        "profile_file_sha256_12": file_hash(profile_path),  # provenance only; differs per machine
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Pilot sessions -> outcome table (#39)")
     p.add_argument("--data", type=Path, default=ROOT / "pilot_data")
@@ -265,6 +284,12 @@ def main(argv: list[str] | None = None) -> int:
         help="fitted style profile (built by scripts/prepare_style_profile.py)",
     )
     p.add_argument("--no-style", action="store_true", help="don't score the writing-style check")
+    p.add_argument(
+        "--decisions",
+        type=Path,
+        default=DECISIONS,
+        help="data_decisions.json holding the locked style_profile.profile_sha256",
+    )
     args = p.parse_args(argv)
     if not args.no_style and not args.style_profile.is_file():
         p.error(
@@ -295,8 +320,7 @@ def main(argv: list[str] | None = None) -> int:
         "style": None
         if args.no_style
         else {
-            "profile": args.style_profile.name,
-            "profile_sha256_12": file_hash(args.style_profile),
+            **style_record(args.style_profile, args.decisions),
             "no_observation": rep.style_no_observation,
         },
         "session_files": rep.files,

@@ -1,14 +1,16 @@
 """Pilot cleaning (#39): saved sessions -> outcome-table rows."""
 
+import hashlib
 import json
 from dataclasses import asdict
 
 import pytest
+import yaml
 
 from adr.contracts import OUTCOME_LABELS
 from adr.contracts.outcome import COLUMNS, read_outcomes
 from adr.mechanisms.style import StyleProfile
-from server.clean import clean, main
+from server.clean import clean, main, style_record
 
 AGREE = ["Disagree", "Slightly disagree", "Neutral", "Slightly agree", "Agree"]
 BANK = {
@@ -237,6 +239,25 @@ def test_reverse_keyed_pairs(setup, e1, e2, expected):
     assert by_check(no_pairs)[("ipip:e2", "opinion_trap")] == "plausible"
 
 
+def test_pairs_are_scored_by_the_shared_pair_outcome(setup, monkeypatch):
+    # The pilot uses the same pair rule as the AI runs (adr/mechanisms/opinion_trap.py).
+    import server.clean as clean_module
+    from adr.mechanisms.opinion_trap import pair_outcome
+
+    calls = []
+
+    def spy(*args):
+        calls.append(args)
+        return pair_outcome(*args)
+
+    monkeypatch.setattr(clean_module, "pair_outcome", spy)
+    data, bank = setup
+    session(data, "a" * 32, full(e1=4, e2=4))
+    got = by_check(clean(data, bank, origin="pilot", run_id="r")[0])
+    assert calls == [(4, 4, 5, "plausible")]  # only the second item of the pair is judged
+    assert got[("ipip:e2", "opinion_trap")] == "contradiction"
+
+
 @pytest.mark.parametrize(
     "text, kind",
     [
@@ -356,3 +377,95 @@ def test_an_item_missing_from_the_bank_stops_the_run(setup):
     session(data, "a" * 32, {"arc:nope": (1, plain("arc:nope"))})
     with pytest.raises(ValueError, match="isn't in"):
         clean(data, bank, origin="pilot", run_id="r")
+
+
+def profile_file(path, doc_profile, where):
+    """A style_profile.json like prepare_style_profile.py writes: the profile plus metadata that
+    records OS paths and the decisions file's sha."""
+    doc = {
+        "profile": doc_profile,
+        "inputs": [{"raw": f"{where}/data/raw/asurre.csv", "raw_sha256": "ab" * 32}],
+        "decisions_sha256": hashlib.sha256(where.encode()).hexdigest(),
+    }
+    path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    return path
+
+
+def canonical(doc_profile):
+    blob = json.dumps(doc_profile, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(blob).hexdigest()
+
+
+def decisions(path, sha):
+    path.write_text(json.dumps({"style_profile": {"profile_sha256": sha}}), encoding="utf-8")
+    return path
+
+
+def test_profile_hash_ignores_paths_and_metadata(tmp_path):
+    prof = asdict(profile(1.0, 2.0))
+    mac = profile_file(tmp_path / "mac.json", prof, "/Users/a/adr-project")
+    win = profile_file(tmp_path / "win.json", prof, r"C:\Users\h\adr-project")
+    dec = decisions(tmp_path / "dec.json", canonical(prof))
+    a, b = style_record(mac, dec), style_record(win, dec)
+    assert a["profile_file_sha256_12"] != b["profile_file_sha256_12"]  # the files differ
+    assert a["profile_sha256"] == b["profile_sha256"] == canonical(prof)
+    assert a["profile_sha256_12"] == canonical(prof)[:12]
+    assert a["profile_matches_decision"] is True and b["profile_matches_decision"] is True
+
+    changed = dict(prof, mid_threshold=1.5)
+    other = profile_file(tmp_path / "other.json", changed, "/Users/a/adr-project")
+    assert style_record(other, dec)["profile_sha256"] != a["profile_sha256"]
+
+
+def test_config_records_canonical_hash_and_warns_on_a_different_profile(setup, tmp_path, capsys):
+    data, bank = setup
+    session(data, "a" * 32, full())
+    prof = asdict(profile(0, 0))
+    path = profile_file(tmp_path / "style_profile.json", prof, "/Users/a/adr-project")
+    out = tmp_path / "results"
+    args = [
+        "--data",
+        str(data),
+        "--bank",
+        str(bank),
+        "--out",
+        str(out),
+        "--style-profile",
+        str(path),
+    ]
+
+    assert (
+        main(
+            [
+                *args,
+                "--run-id",
+                "ok",
+                "--decisions",
+                str(decisions(tmp_path / "d1.json", canonical(prof))),
+            ]
+        )
+        == 0
+    )
+    assert "WARNING" not in capsys.readouterr().out
+    style = yaml.safe_load((out / "runs" / "ok" / "config.yaml").read_text(encoding="utf-8"))[
+        "style"
+    ]
+    assert style["profile_sha256"] == canonical(prof)
+    assert style["profile_sha256_12"] == canonical(prof)[:12]
+    assert style["profile_matches_decision"] is True
+    assert len(style["profile_file_sha256_12"]) == 12
+
+    locked = "6b43d6ed5372" + "0" * 52
+    assert (
+        main(
+            [*args, "--run-id", "exp", "--decisions", str(decisions(tmp_path / "d2.json", locked))]
+        )
+        == 0
+    )
+    printed = capsys.readouterr().out
+    assert "WARNING" in printed and "6b43d6ed5372" in printed and canonical(prof)[:12] in printed
+    style = yaml.safe_load((out / "runs" / "exp" / "config.yaml").read_text(encoding="utf-8"))[
+        "style"
+    ]
+    assert style["profile_matches_decision"] is False
+    assert style["profile_sha256"] == canonical(prof)  # still the profile actually used

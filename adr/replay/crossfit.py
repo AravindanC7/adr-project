@@ -141,7 +141,11 @@ class Trace:
     running: np.ndarray
     checks: np.ndarray
     total_checks: int
-    cleared: bool = False  # the replay ended "cleared" (score reached B; checks stopped there)
+    cleared: bool = False  # the replay ENDED "cleared"
+    # Index into `running` of the update after which the session was first cleared (None =
+    # never). With clear_policy "reopen", later evidence (e.g. a passive check) can lift a cleared
+    # session above B again: it is then active and gets checks again, and may end active.
+    cleared_step: int | None = None
     # Where the outcomes of the ACTIVE checks served came from (AI sessions on the pilot bank,
     # review H3): same_type = own rows on another item of the same item_type; fallback = another
     # session of the same group; missing = no row at all (NoObservation: no evidence). Passive
@@ -149,9 +153,18 @@ class Trace:
     sources: tuple[int, int, int, int] = (0, 0, 0, 0)  # (same_type, fallback, synthetic, missing)
 
     def cleared_at(self, threshold: float) -> bool:
-        """Cleared when deployed at `threshold`: it reached B before ever reaching `threshold`.
-        Clearing is final (no more checks, score frozen), so that is: cleared and score < threshold."""
+        """Cleared AT THE END when deployed at `threshold`: the replay ends cleared and never
+        reached `threshold` (deployed at `threshold` it would follow the same path). Clearing is
+        NOT necessarily final: with clear_policy "reopen" a session can be cleared, reopened by
+        later evidence and end active, and then it does not count here; see ever_cleared_at."""
         return self.cleared and self.score < threshold
+
+    def ever_cleared_at(self, threshold: float) -> bool:
+        """EVER cleared when deployed at `threshold`: cleared at some update before the score
+        first reached `threshold`, whether or not it was reopened later."""
+        if self.cleared_step is None:
+            return False
+        return bool(self.running[: self.cleared_step + 1].max() < threshold)
 
     def checks_at(self, threshold: float) -> int:
         """Active checks served before pausing at `threshold` (all of them if never paused)."""
@@ -174,8 +187,9 @@ def trace(result: ReplayResult, who: str, fold: int, prior: float) -> Trace:
         running,
         checks,
         result.checks_run,
-        result.final.status == "cleared",
-        result.active_sources,
+        cleared=result.final.status == "cleared",
+        cleared_step=result.cleared_step,
+        sources=result.active_sources,
     )
 
 
@@ -395,8 +409,14 @@ def rates(
             else math.nan,
             "checks_per_honest_session": float(np.mean([t.checks_at(a) for t in real])),
             "honest_cleared_rate": float(np.mean([t.cleared_at(a) for t in real])),
+            "honest_ever_cleared_rate": float(np.mean([t.ever_cleared_at(a) for t in real])),
             # AI sessions wrongly cleared: reached B before `a` (mean over the fold maps)
             "ai_cleared_rate": float(np.mean([np.mean([t.cleared_at(a) for t in f]) for f in ai]))
+            if ai
+            else math.nan,
+            "ai_ever_cleared_rate": float(
+                np.mean([np.mean([t.ever_cleared_at(a) for t in f]) for f in ai])
+            )
             if ai
             else math.nan,
             "n_real_at_or_above": int(sum(t.score >= a for t in real)),

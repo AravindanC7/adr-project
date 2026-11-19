@@ -34,6 +34,7 @@ from adr.router.selection import utility
 from adr.router.sprt import capped_delta, sigmoid, wald_thresholds
 
 _CLEAR_TOL = 1e-9  # nats
+CLEAR_POLICIES = ("reopen", "sticky")
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,14 @@ class RouterConfig:
     # False = never clear (router_noclear): keeps checking a low score. B still floors each
     # mechanism's total, so both policies bound evidence the same way.
     clear: bool = True
+    # What happens after a session is cleared (score <= B) and later evidence lifts it above B
+    # again, e.g. a passive check (style, behaviour) observed on every item:
+    #   "reopen" (default, the original behaviour): the status is recomputed after every update,
+    #            so the session becomes active again and gets checks again;
+    #   "sticky": cleared stays cleared (only plain items from then on). Review still wins: a
+    #            cleared session whose score reaches A is paused.
+    # Decided in calibration (#42); see docs/notes on the RQ2 single false pause.
+    clear_policy: str = "reopen"
 
 
 def _cap_keys(groups: dict[str, tuple[str, ...]] | None) -> dict[str, str]:
@@ -115,6 +124,8 @@ class SPRTRouter:
         self.B = config.lower if config.lower is not None else b
         if config.mech_cap_frac is not None and config.mech_cap_frac <= 0:
             raise ValueError("mech_cap_frac must be > 0 (or None for no cap)")
+        if config.clear_policy not in CLEAR_POLICIES:
+            raise ValueError(f"clear_policy must be one of {CLEAR_POLICIES}")
         # Per-mechanism cap in nats, from A after any `upper` override.
         self.mech_cap = None if config.mech_cap_frac is None else config.mech_cap_frac * self.A
         # Each mechanism's (or group's) total is bounded to [B, +cap]: one check alone can reach
@@ -207,6 +218,8 @@ class SPRTRouter:
     def _status(self, state: SessionState) -> str:
         if state.status == "review" or state.score >= self.A:
             return "review"
+        if self.cfg.clear_policy == "sticky" and state.status == "cleared":
+            return "cleared"
         # Tolerance: a mechanism at its floor makes score == B up to float rounding of the deltas.
         if self.cfg.clear and state.score <= self.B + _CLEAR_TOL:
             return "cleared"

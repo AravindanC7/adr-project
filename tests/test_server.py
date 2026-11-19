@@ -55,7 +55,7 @@ def test_stub_bank_covers_every_item_type():
 
 def test_lists_assessments(client):
     got = {a["assessment_id"]: a["n_items"] for a in client.get("/assessments").json()}
-    assert got == {"stub-quiz": 3, "stub-survey": 5}
+    assert got == {"stub-quiz": 4, "stub-survey": 5}
 
 
 def test_full_survey_walk_in_display_order(client):
@@ -93,10 +93,11 @@ def test_without_mechanisms_every_question_is_plain(client):
 def test_every_eligible_question_carries_its_check(traps):
     quiz = [b["item"] for b in walk(traps, "stub-quiz") if b["item"]]
     survey = [b["item"] for b in walk(traps, "stub-survey") if b["item"]]
-    # q1, q2 are decoy-eligible; s1 is canary-eligible; everything else is plain.
-    assert [bool(it["aux"]) for it in quiz] == [True, True, False]
+    # q1, q2, q4 (the passage) are decoy-eligible; s1 is canary-eligible; the rest is plain.
+    assert [bool(it["aux"]) for it in quiz] == [True, True, False, True]
+    assert [bool(it["passage"]) for it in quiz] == [False, False, False, True]
     assert [bool(it["aux"]) for it in survey] == [True, False, False, False, False]
-    assert quiz[0]["aux"]["at"] == "after_stem" and quiz[0]["aux"]["style"] == "clip"
+    assert quiz[0]["aux"]["at"] == "after_stem" and quiz[0]["aux"]["style"] == "clip_aria"
     assert "marigold" in survey[0]["aux"]["text"]
     # Only the hidden text itself, never the decoy index or the answer key behind it.
     assert "decoy_option_index" not in json.dumps(quiz) and "canary_token" not in json.dumps(survey)
@@ -129,6 +130,20 @@ def test_answers_are_scored_by_the_check_they_carried(traps):
     step = respond(traps, step, "I like the people. marigold0").json()
     history = traps.get(f"/session/{step['session_id']}").json()["history"]
     assert history[0][1] == "followed_instruction"
+
+
+def _first_aux_style(app):
+    step = TestClient(app).post("/session/start", json={"assessment_id": "stub-quiz"}).json()
+    return step["item"]["aux"]["style"]
+
+
+def test_default_hiding_style_is_clip_aria(monkeypatch):
+    # Safe for screen-reader users; the final evaluation and the pilot pass clip explicitly.
+    monkeypatch.delenv("ADR_HIDE", raising=False)
+    assert _first_aux_style(create_app(mechanisms={"decoy": StubDecoy()})) == "clip_aria"
+    assert _first_aux_style(create_app(mechanisms={"decoy": StubDecoy()}, hide="clip")) == "clip"
+    monkeypatch.setenv("ADR_HIDE", "clip")  # what scripts/run_pilot.ps1 sets
+    assert _first_aux_style(create_app(mechanisms={"decoy": StubDecoy()})) == "clip"
 
 
 @pytest.mark.parametrize("hide", ["clip", "clear", "clip_aria"])
@@ -164,7 +179,7 @@ def test_state_endpoint_only_in_debug_mode(client, monkeypatch):
     debug = TestClient(create_app(mechanisms={}))
     bodies = walk(debug, "stub-quiz")
     state = debug.get(f"/session/{bodies[0]['session_id']}").json()
-    assert [v.split("|")[1] for v in state["served"]] == ["plain"] * 3
+    assert [v.split("|")[1] for v in state["served"]] == ["plain"] * 4
 
 
 def test_full_telemetry_is_kept_and_unknown_fields_are_refused(traps):
@@ -287,7 +302,7 @@ def test_an_unscorable_answer_counts_as_shown_with_no_evidence(monkeypatch, tmp_
     while not bodies[-1]["finished"]:
         bodies.append(respond(c, bodies[-1], VALID[bodies[-1]["item"]["item_type"]]).json())
     state = c.get(f"/session/{sid}").json()
-    assert [v.split("|")[1] for v in state["served"]] == ["decoy", "decoy", "plain"]
+    assert [v.split("|")[1] for v in state["served"]] == ["decoy", "decoy", "plain", "decoy"]
 
 
 def test_the_reading_floor_counts_the_items_passage(tmp_path, monkeypatch):
@@ -321,3 +336,18 @@ def test_the_reading_floor_counts_the_items_passage(tmp_path, monkeypatch):
         history = client.get(f"/session/{step['session_id']}").json()["history"]
         outcomes += [o for v, o, _ in history if v.split("|")[1] == "behaviour"]
     assert outcomes == ["too_fast", "normal"]
+
+
+def test_debug_mode_logs_each_session_id(caplog, monkeypatch):
+    # The presenter opens /session/{id} from the console line, no DevTools (#47).
+    import logging
+
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
+    plain = TestClient(create_app(mechanisms={}))
+    plain.post("/session/start", json={"assessment_id": "stub-quiz"})
+    assert "/session/" not in caplog.text
+
+    monkeypatch.setenv("ADR_DEBUG_STATE", "1")
+    debug = TestClient(create_app(mechanisms={}))
+    sid = debug.post("/session/start", json={"assessment_id": "stub-quiz"}).json()["session_id"]
+    assert f"/session/{sid}" in caplog.text
