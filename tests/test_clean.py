@@ -237,6 +237,25 @@ def test_reverse_keyed_pairs(setup, e1, e2, expected):
     assert by_check(no_pairs)[("ipip:e2", "opinion_trap")] == "plausible"
 
 
+def test_pairs_are_scored_by_the_shared_pair_outcome(setup, monkeypatch):
+    # The pilot uses the same pair rule as the AI runs (adr/mechanisms/opinion_trap.py).
+    import server.clean as clean_module
+    from adr.mechanisms.opinion_trap import pair_outcome
+
+    calls = []
+
+    def spy(*args):
+        calls.append(args)
+        return pair_outcome(*args)
+
+    monkeypatch.setattr(clean_module, "pair_outcome", spy)
+    data, bank = setup
+    session(data, "a" * 32, full(e1=4, e2=4))
+    got = by_check(clean(data, bank, origin="pilot", run_id="r")[0])
+    assert calls == [(4, 4, 5, "plausible")]  # only the second item of the pair is judged
+    assert got[("ipip:e2", "opinion_trap")] == "contradiction"
+
+
 @pytest.mark.parametrize(
     "text, kind",
     [

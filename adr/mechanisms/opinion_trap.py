@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from adr.contracts import (
     HumanDistribution,
@@ -123,3 +124,58 @@ class OpinionTrapMechanism:
 
 
 MECHANISM = OpinionTrapMechanism()
+
+
+# ------------------------------------------------------------------ reverse-keyed pairs
+# The one shared IPIP pair rule, used for AI runs (scripts/run_survey_banks.py) and meant for the
+# pilot cleaner too (server/clean.py), so the same pair of answers scores the same on both sides.
+# PROVISIONAL until Archana confirms it (docs/pilot/README.md).
+
+
+def pair_side(answer: Any, n_options: int) -> int:
+    """-1 disagree side, +1 agree side, 0 = no side (the middle option, missing, non-integer or
+    out of range). Raw option indices: a reverse-keyed pair is NOT re-keyed first."""
+    if type(answer) is not int or not 0 <= answer < n_options:
+        return 0
+    middle = (n_options - 1) / 2
+    return 0 if answer == middle else (1 if answer > middle else -1)
+
+
+def pair_outcome(answer: Any, partner_answer: Any, n_options: int, single: str) -> str | None:
+    """Opinion-trap outcome of the SECOND-answered item of a reverse-keyed pair.
+
+    Opposite raw sides = consistent: the item keeps its single-item outcome `single`.
+    Same side = "contradiction" (unless `single` is already "implausible", which wins).
+    Either answer neutral, missing or invalid = None: no observation, so no outcome row.
+    """
+    sides = (pair_side(answer, n_options), pair_side(partner_answer, n_options))
+    if 0 in sides:
+        return None
+    if sides[0] == sides[1] and single != "implausible":
+        return "contradiction"
+    return single
+
+
+def score_reverse_pairs(
+    items: Mapping[str, Item],
+    answers: Sequence[tuple[str, Any]],
+    single: Mapping[str, str],
+) -> dict[str, str | None]:
+    """Apply the pair rule over one session.
+
+    `answers` is the session's (item_id, answer) list in the order answered; `single` maps each
+    item_id to its single-item opinion-trap outcome (what `OpinionTrapMechanism.score` gave).
+    Returns the final outcome for every item in `single`: an item whose reverse-keyed partner was
+    answered EARLIER in the session is judged with `pair_outcome` (None = drop its row); every
+    other item keeps its single-item outcome. An item answered twice counts its last answer.
+    """
+    seen: dict[str, Any] = {}
+    out = dict(single)
+    for item_id, answer in answers:
+        item = items[item_id]
+        partner = item.reverse_keyed_with
+        if item_id in out and partner and partner in seen:
+            out[item_id] = pair_outcome(answer, seen[partner], len(item.options or []),
+                                        single[item_id])
+        seen[item_id] = answer
+    return out

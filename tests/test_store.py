@@ -47,7 +47,7 @@ def test_each_answer_is_on_disk_as_it_happens(saved):
     finish(client, step)
     records = read_session(folder / f"{sid}.jsonl")
     assert records[-1]["event"] == "finish"
-    assert sum(r["event"] == "answer" for r in records) == 3
+    assert sum(r["event"] == "answer" for r in records) == 4
 
 
 def test_nothing_identifying_is_saved(saved):

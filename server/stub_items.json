@@ -1,5 +1,5 @@
 {
-  "_note": "STUB ITEMS for the front-end skeleton (step #11). Not real data. The first four match tests/stubs.py; the rest cover ranking, numeric and long open text. Replace with Archana's loader output once it lands.",
+  "_note": "STUB ITEMS for the front-end skeleton (step #11). Not real data. The first four match tests/stubs.py; the rest cover ranking, numeric, long open text and a reading passage (q4, written for this bank). Replace with Archana's loader output once it lands.",
   "items": [
     {
       "item_id": "handwritten:q1",
@@ -66,6 +66,17 @@
       "assessment_type": "survey",
       "item_type": "open_text",
       "stem": "Describe a time you changed your mind about something important at work. What made you change it?"
+    },
+    {
+      "item_id": "handwritten:q4",
+      "source": "handwritten",
+      "assessment_type": "quiz",
+      "item_type": "mcq",
+      "passage": "The town of Fernwick sat where two rivers met. Each spring the northern river flooded first, carrying meltwater down from the hills, and a week later the southern river rose with rain from the plains. The townspeople built their market on the low ridge between the two rivers, so that it stayed dry while the fields on either side flooded in turn.",
+      "stem": "According to the passage, why was the market built on the ridge?",
+      "options": ["So it faced the plains", "So it stayed dry when the rivers flooded", "So it was close to the hills", "So traders could cross both rivers"],
+      "correct_option": 1,
+      "eligible_mechanisms": ["decoy"]
     }
   ],
   "assessments": [
@@ -73,7 +84,7 @@
       "assessment_id": "stub-quiz",
       "title": "Stub quiz",
       "assessment_type": "quiz",
-      "item_ids": ["handwritten:q1", "handwritten:q2", "handwritten:q3"]
+      "item_ids": ["handwritten:q1", "handwritten:q2", "handwritten:q3", "handwritten:q4"]
     },
     {
       "assessment_id": "stub-survey",
