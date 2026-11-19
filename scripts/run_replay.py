@@ -72,6 +72,7 @@ from adr.replay.donors import Donors, Group
 from adr.replay.quick_map import (
     CALIBRATION_FRAC,
     SPLIT_SEED,
+    decided_heldout_model,
     final_eval_rows,
     fit_rows,
     quick_failure_map,
@@ -111,14 +112,6 @@ def load_bank(args) -> tuple[Assessment, dict[str, Item], dict[str, list[Rendere
     for v in read_jsonl(args.variants, RenderedItem):
         variants[v.item_id].append(v)
     return assessments[0], items, dict(variants)
-
-
-DATA_DECISIONS = Path(__file__).resolve().parents[1] / "configs" / "data_decisions.json"
-
-
-def decided_heldout_model(path: Path = DATA_DECISIONS) -> str:
-    """The held-out model's name, as recorded in configs/data_decisions.json."""
-    return json.loads(path.read_text(encoding="utf-8"))["heldout_model"]["name"]
 
 
 def load_logged(args, warnings: list[str]):

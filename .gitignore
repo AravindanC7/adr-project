@@ -17,6 +17,7 @@ cache/llm/*
 cache/llm-fake/
 results/outcomes/*
 results/runs/*
+results/calibration/*
 # real pilot answers: never in git (docs/pilot/README.md)
 pilot_data/
 !**/.gitkeep

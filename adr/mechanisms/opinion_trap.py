@@ -129,7 +129,7 @@ MECHANISM = OpinionTrapMechanism()
 # ------------------------------------------------------------------ reverse-keyed pairs
 # The one shared IPIP pair rule, used for AI runs (scripts/run_survey_banks.py) and meant for the
 # pilot cleaner too (server/clean.py), so the same pair of answers scores the same on both sides.
-# PROVISIONAL until Archana confirms it (docs/pilot/README.md).
+# Rule confirmed by Archana (Nov 18).
 
 
 def pair_side(answer: Any, n_options: int) -> int:
