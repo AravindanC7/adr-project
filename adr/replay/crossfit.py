@@ -142,9 +142,10 @@ class Trace:
     checks: np.ndarray
     total_checks: int
     cleared: bool = False  # the replay ended "cleared" (score reached B; checks stopped there)
-    # Where the check outcomes came from (AI sessions on the pilot bank, review H3):
-    # same_type = own rows on another item of the same item_type; fallback = another session of
-    # the same group; missing = no row at all (NoObservation: the check gives no evidence).
+    # Where the outcomes of the ACTIVE checks served came from (AI sessions on the pilot bank,
+    # review H3): same_type = own rows on another item of the same item_type; fallback = another
+    # session of the same group; missing = no row at all (NoObservation: no evidence). Passive
+    # checks are not counted: they are attempted on every item, also where they never apply.
     sources: tuple[int, int, int, int] = (0, 0, 0, 0)  # (same_type, fallback, synthetic, missing)
 
     def cleared_at(self, threshold: float) -> bool:
@@ -174,7 +175,7 @@ def trace(result: ReplayResult, who: str, fold: int, prior: float) -> Trace:
         checks,
         result.checks_run,
         result.final.status == "cleared",
-        (result.same_type, result.fallbacks, result.synthetic, result.skipped),
+        result.active_sources,
     )
 
 
