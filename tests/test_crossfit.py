@@ -718,6 +718,8 @@ def test_rates_report_tpr_per_ai_group():
     r = cf.rates([_gt("h", 0.0)], ai, [0.0], {"A": 2.0})["A"]
     assert r["tpr"] == pytest.approx(2 / 3)
     assert r["tpr[m:copy_paste:L0]"] == 0.5 and r["tpr[m:doc_upload:L3]"] == 1.0
+    for g in ("m:copy_paste:L0", "m:doc_upload:L3"):  # per-group AI cleared rates too
+        assert r[f"ai_ever_cleared_rate[{g}]"] == 0.0 and r[f"ai_cleared_rate[{g}]"] == 0.0
     one = cf.rates([_gt("h", 0.0)], ai[:2], [0.0], {"A": 2.0})["A"]
     assert not any(k.startswith("tpr[") for k in one)  # one group: pooled TPR only
 

@@ -726,7 +726,8 @@ def _columns(results: dict[str, dict]) -> list[str]:
     there is more than one group (review H3)."""
     keys = {k for summ in results.values() for r in summ["results"].values() for k in r}
     groups = sorted(k for k in keys if k.startswith("tpr["))
-    return [COLUMNS[0], *groups, *COLUMNS[1:]]
+    cleared = sorted(k for k in keys if k.startswith(("ai_ever_cleared_rate[", "ai_cleared_rate[")))
+    return [COLUMNS[0], *groups, *COLUMNS[1:], *cleared]  # per-group cleared rates at the end
 
 
 def described_text(results: dict[str, dict]) -> str:
