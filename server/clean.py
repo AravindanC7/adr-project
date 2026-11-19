@@ -22,7 +22,7 @@ Rows per answered item (all respondent_kind="human", data_origin=pilot|dry_run)
     missing, non-integer or out of range the second item gets no opinion-trap row at all
     (no observation); "implausible" wins over "contradiction". The rule is the shared
     pair_outcome in adr/mechanisms/opinion_trap.py, the same one the AI runs use, so human and AI
-    pairs score the same way. PROVISIONAL until Archana confirms it. --no-pairs turns it off.
+    pairs score the same way. Rule confirmed by Archana (Nov 18). --no-pairs turns it off.
   * the writing-style check (high / mid / low) for every open-text answer, scored here against
     the ASURRE training profile (scripts/prepare_style_profile.py). Style is passive: it observes
     every open-text answer whatever check was served, so it doesn't use the bank's
