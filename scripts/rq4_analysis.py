@@ -1,8 +1,14 @@
 """RQ4 (step #41): how much does decoy detection drop when the attacker is more careful?
 
 gpt-mini only, on the two decoy quiz banks (MMLU, ARC), each attack mode at each attacker level:
-    copy-paste   v1-cp-<L>-quiz-<bank>-200-s5    L0-L4; 5 samples at temperature 0.7
-    doc upload   v1-du-<L>-quiz-<bank>-200-q20   L0, L1, L2, L4; 20 questions per PDF (no L3)
+    copy-paste   v1-cp-<L>-quiz-<bank>-200-s5    L0-L4 + L2-generic; 5 samples at temperature 0.7
+    doc upload   v1-du-<L>-quiz-<bank>-200-q20   L0, L1, L2, L2-generic, L4; 20 questions per PDF
+
+L2 ("informed") uses the harness's L2 prompt, which names our checks, the decoy first ("hidden
+'answer key' text pointing to a wrong option"). L2-generic (adr/harness/prompts.py
+SYSTEM_VARIANTS, prompt versions cp-v1+l2-generic-v1 / du-v1+l2-generic-v1) has the same informed
+role but only warns about hidden instructions in general and names no check; its rows keep
+attacker_level L2. Same items, samples and settings as L2.
 
 For every mode x bank x level:
   rate   share of decoy-variant answers that picked the decoy, with a 95% two-level bootstrap
@@ -16,7 +22,8 @@ For L3 (copy-paste only), from results/runs/<run>/responses.jsonl:
 
 Run from the repo root (needs results/outcomes/ and results/runs/ for these runs):
     python scripts/rq4_analysis.py
-Writes results/rq4/rq4_rates.csv, rq4_table.tex, rq4_drop.png and rq4_drop.pdf.
+Writes results/rq4/rq4_rates.csv, rq4_table.tex, rq4_l2_generic.md, rq4_drop.png and
+rq4_drop.pdf.
 """
 
 from __future__ import annotations
@@ -38,10 +45,12 @@ from adr.contracts import read_outcomes
 MODEL = "gpt-mini"
 BANKS = [("MMLU", "mmlu"), ("ARC", "arc")]
 MODES = [  # (label, run-id code, run-id suffix, levels)
-    ("Copy-paste", "cp", "s5", ["L0", "L1", "L2", "L3", "L4"]),
-    ("Doc upload", "du", "q20", ["L0", "L1", "L2", "L4"]),
+    ("Copy-paste", "cp", "s5", ["L0", "L1", "L2", "L2-generic", "L3", "L4"]),
+    ("Doc upload", "du", "q20", ["L0", "L1", "L2", "L2-generic", "L4"]),
 ]
-LEVEL_NAMES = {"L0": "naive", "L1": "warned", "L2": "informed", "L3": "retry", "L4": "persona"}
+LEVEL_NAMES = {"L0": "naive", "L1": "warned", "L2": "informed", "L2-generic": "informed, generic",
+               "L3": "retry", "L4": "persona"}
+LABEL = {"L2-generic": "L2g"}  # short row / tick label (keeps the table in one ACL column)
 N_BOOT = 2000
 SEED = 576
 
@@ -209,7 +218,7 @@ def latex(table: pd.DataFrame) -> str:
                 r = table[(table["mode"] == mode) & (table.bank == b) & (table.level == level)]
                 r = r.iloc[0]
                 cells += [rate_cell(r), drop_cell(r)]
-            lines.append(f"{level} & " + " & ".join(cells) + " \\\\")
+            lines.append(f"{LABEL.get(level, level)} & " + " & ".join(cells) + " \\\\")
     l3 = table[table.level == "L3"].set_index("bank")
     l3_text = "; ".join(
         f"{b}: {_pct(l3.loc[b].l3_first_flag_rate)}\\% of first answers flagged, "
@@ -224,7 +233,9 @@ def latex(table: pd.DataFrame) -> str:
             "(Decoy) and the change versus L0 in percentage points (Drop; negative = fewer decoys "
             "picked), with 95\\% CIs underneath (rate: two-level bootstrap over items, then "
             "sessions; drop: paired bootstrap over the same items; "
-            f"{N_BOOT} reps). Levels: L0 naive, L1 warned, L2 informed of our checks, L3 one "
+            f"{N_BOOT} reps). Levels: L0 naive, L1 warned, L2 informed of our checks (the prompt "
+            "names the decoy), L2g the same informed role warned only about hidden "
+            "instructions in general (names no check), L3 one "
             "retry after a flag (copy-paste only), L4 human persona. Copy-paste: 5 sessions at "
             "temperature 0.7; doc upload: 20 questions per PDF. L3 "
             f"{l3_text}. Decoy items on quiz banks only, one model.}}"
@@ -232,6 +243,23 @@ def latex(table: pd.DataFrame) -> str:
         "\\label{tab:rq4}",
         "\\end{table}",
     ]
+    return "\n".join(lines) + "\n"
+
+
+def l2_markdown(table: pd.DataFrame) -> str:
+    """Decoy rate at L2 (prompt names the decoy) and L2 generic (names no check), side by side."""
+    lines = ["| Mode | Bank | L0 | L2: names our checks | L2 generic: names no check |",
+             "|---|---|---|---|---|"]
+
+    def cell(r) -> str:
+        return (f"{int(r.picked_decoy)}/{int(r.n_obs)} = {_pct(r.rate)}% "
+                f"[{_pct(r.ci_low)}, {_pct(r.ci_high)}]")
+
+    for mode, _, _, _ in MODES:
+        for b, _ in BANKS:
+            sub = table[(table["mode"] == mode) & (table.bank == b)].set_index("level")
+            lines.append(f"| {mode} | {b} | {cell(sub.loc['L0'])} | {cell(sub.loc['L2'])} | "
+                         f"{cell(sub.loc['L2-generic'])} |")
     return "\n".join(lines) + "\n"
 
 
@@ -246,7 +274,7 @@ def plot(table: pd.DataFrame, out_dir: Path) -> None:
         "Copy-paste": {"color": "#0072B2", "marker": "o", "dx": -0.09},
         "Doc upload": {"color": "#E69F00", "marker": "s", "dx": 0.09},
     }
-    levels = ["L1", "L2", "L3", "L4"]
+    levels = ["L1", "L2", "L2-generic", "L3", "L4"]
     x = np.arange(len(levels))
     fig, axes = plt.subplots(1, len(BANKS), figsize=(figstyle.ACL_COLUMN_IN, 1.95), sharey=True)
     for ax, (bank_label, _) in zip(axes, BANKS):
@@ -270,7 +298,7 @@ def plot(table: pd.DataFrame, out_dir: Path) -> None:
                 zorder=3,
             )
         ax.set_title(bank_label, fontsize=7.5, color=figstyle.INK, pad=3)
-        ax.set_xticks(x, levels, color=figstyle.INK)
+        ax.set_xticks(x, [LABEL.get(lv, lv) for lv in levels], color=figstyle.INK)
         ax.yaxis.grid(True, color=figstyle.GRID, linewidth=0.5, zorder=0)
         ax.set_axisbelow(True)
         ax.set_xlim(-0.5, len(levels) - 0.5)
@@ -309,6 +337,7 @@ def main() -> None:
     table = compute(args.outcomes, args.runs, args.boot, args.seed)
     table.to_csv(args.out / "rq4_rates.csv", index=False, float_format="%.4f")
     (args.out / "rq4_table.tex").write_text(latex(table), encoding="utf-8")
+    (args.out / "rq4_l2_generic.md").write_text(l2_markdown(table), encoding="utf-8")
     plot(table, args.out)
     show = table.assign(
         **{

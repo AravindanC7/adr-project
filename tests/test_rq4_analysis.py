@@ -129,20 +129,21 @@ def _l3_responses(tmp: Path, rid: str, items: list[str], sessions: int):
 def synthetic(tmp_path):
     items = [f"q{i}" for i in range(20)]
     for bank in ("mmlu", "arc"):
-        for level, p in {"L0": 0.8, "L1": 0.6, "L2": 0.4, "L3": 0.2, "L4": 0.8}.items():
+        for level, p in {"L0": 0.8, "L1": 0.6, "L2": 0.4, "L2-generic": 0.6, "L3": 0.2,
+                         "L4": 0.8}.items():
             _write(
                 tmp_path,
                 rq4.run_id("cp", level, bank, "s5"),
-                level,
+                level.removesuffix("-generic"),  # rows keep attacker_level L2 (contract: L0-L4)
                 "copy_paste",
                 dict.fromkeys(items, p),
                 5,
             )
-        for level, p in {"L0": 1.0, "L1": 1.0, "L2": 0.0, "L4": 1.0}.items():
+        for level, p in {"L0": 1.0, "L1": 1.0, "L2": 0.0, "L2-generic": 1.0, "L4": 1.0}.items():
             _write(
                 tmp_path,
                 rq4.run_id("du", level, bank, "q20"),
-                level,
+                level.removesuffix("-generic"),
                 "doc_upload",
                 dict.fromkeys(items, p),
                 1,
@@ -153,7 +154,7 @@ def synthetic(tmp_path):
 
 def test_rq4_rates_drops_and_l3_stats(synthetic):
     t = rq4.compute(synthetic / "outcomes", synthetic / "runs", 300, 0)
-    assert len(t) == 2 * 5 + 2 * 4  # cp L0-L4 and du L0, L1, L2, L4 per bank
+    assert len(t) == 2 * 6 + 2 * 5  # cp L0-L4 + L2-generic, du L0, L1, L2, L2-generic, L4
     cp = t[(t["mode"] == "Copy-paste") & (t.bank == "MMLU")].set_index("level")
     assert cp.loc["L0", "rate"] == pytest.approx(0.8) and cp.loc["L0", "drop"] == 0
     assert cp.loc["L2", "drop"] == pytest.approx(-0.4)
@@ -164,6 +165,9 @@ def test_rq4_rates_drops_and_l3_stats(synthetic):
     assert "L3" not in du.index
     assert du.loc["L2", "drop"] == pytest.approx(-1.0)
     assert du.loc["L2", "drop_ci_low"] == pytest.approx(-1.0)  # every item flips: no spread
+    assert cp.loc["L2-generic", "drop"] == pytest.approx(-0.2)
+    assert du.loc["L2-generic", "drop"] == pytest.approx(0.0)  # back to L0 without the named check
+    assert du.loc["L2-generic", "level_name"] == "informed, generic"
     l3 = cp.loc["L3"]
     assert l3.l3_n_answers == 100 and l3.l3_n_first_flagged == 40
     assert l3.l3_first_flag_rate == pytest.approx(0.4)
@@ -178,11 +182,13 @@ def test_rq4_outputs(synthetic):
     tex = rq4.latex(t)
     assert tex.count("\\\\") > 18 and "booktabs" in tex and "nan" not in tex.lower()
     assert "L3 one retry after a flag" in tex and "40.0\\% of first answers flagged" in tex
-    # one row per mode x level (cp L0-L4, du L0/L1/L2/L4), MMLU and ARC side by side
-    assert (
-        sum(line.startswith(("L0 &", "L1 &", "L2 &", "L3 &", "L4 &")) for line in tex.splitlines())
-        == 9
-    )
+    # one row per mode x level (cp L0-L4 + L2g, du L0/L1/L2/L2g/L4), banks side by side
+    rows = ("L0 &", "L1 &", "L2 &", "L2g &", "L3 &", "L4 &")
+    assert sum(line.startswith(rows) for line in tex.splitlines()) == 11
+    assert "names the decoy" in tex and "names no check" in tex
+    md = rq4.l2_markdown(t)
+    assert "| L2: names our checks | L2 generic: names no check |" in md
+    assert "| Doc upload | ARC | 20/20 = 100.0% [100.0, 100.0] | 0/20 = 0.0% [0.0, 0.0] | 20/20" in md
     assert "\\multicolumn{2}{c}{MMLU}" in tex and "\\textit{Doc upload}" in tex
     rq4.plot(t, out)
     assert (out / "rq4_drop.png").stat().st_size > 0 and (out / "rq4_drop.pdf").exists()
