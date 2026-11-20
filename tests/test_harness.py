@@ -268,7 +268,7 @@ def test_classify_error_429_retries_even_with_billing_words():
     )
     assert classify_error(_Err(gemini, 429)) == "rate_limit"
     assert classify_error(_Err(gemini)) == "rate_limit"  # no status attr: matched by text
-    assert classify_error(_Err("insufficient_quota: billing", 429)) == "rate_limit"
+    # (OpenAI's insufficient_quota 429 means no credit and is fatal: tests/test_llm_client_lock.py)
 
 
 def test_classify_error_still_fatal():
