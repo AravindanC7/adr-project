@@ -18,6 +18,8 @@ cache/llm-fake/
 results/outcomes/*
 results/runs/*
 results/calibration/*
+# router error analysis (scripts/error_analysis.py): per-step traces of pilot sessions
+results/error_analysis/
 # real pilot answers: never in git (docs/pilot/README.md)
 pilot_data/
 !**/.gitkeep
