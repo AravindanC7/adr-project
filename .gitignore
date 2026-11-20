@@ -34,3 +34,4 @@ results/baseline5/outcomes/
 
 # generated demo maps (scripts/make_demo_map.py): SYNTHETIC, never in git
 results/failure_map/demo_*.json
+results/human_rates/
