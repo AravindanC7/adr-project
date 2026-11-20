@@ -27,6 +27,11 @@ share one cached answer; the same holds for the copy-paste prompts). The open-te
 larger reply limits than the quiz runs (300 / 3000) so long written answers are not cut off;
 no reply was. Open-text answers are also scored by the passive style mechanism.
 
+Attacker level: `run --level L0` (default) or `--level L2`; `--level L2 --system-variant
+L2-generic` uses the generic L2 prompt (adr/harness/prompts.py SYSTEM_VARIANTS: the informed role
+without naming any check). Prompt versions are RQ4's: L2 = cp-v1 / du-v1, L2-generic =
+cp-v1+l2-generic-v1 / du-v1+l2-generic-v1; rows keep attacker_level L2 for both.
+
 Run ids: v1-cp-L0-<bank>-s5, v1-du-L0-<bank>[-q20]. Each run stops on (exit 2) any failed call,
 reply cut off at max_tokens, or spend-cap stop. Guards: gpt-mini only (never the held-out model),
 train-split items only, no OSMI item, and a style profile not fitted on OSMI.
@@ -60,7 +65,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from adr.contracts import Assessment, Item, NoObservation, RenderedItem, Response
 from adr.contracts.io import read_jsonl
 from adr.contracts.outcome import OutcomeRow, read_outcomes, write_outcomes
-from adr.harness.prompts import build_prompt
+from adr.harness.prompts import (
+    DOC_PROMPT_VERSION,
+    DOC_VARIANT_PROMPT_VERSION,
+    PROMPT_VERSION,
+    SYSTEM_VARIANTS,
+    build_prompt,
+)
 
 DATA = Path("data/processed/archana-survey-written-v1")
 STYLE_PROFILE = Path("data/processed/runs_v1/style_profile.json")
@@ -87,6 +98,20 @@ def run_id(bank: str, mode: str) -> str:
         return f"v1-cp-L0-{bank}-s{CP_SAMPLES}"
     q = BANKS[bank][2]
     return f"v1-du-L0-{bank}" + (f"-q{q}" if q else "")
+
+
+def level_settings(level: str, variant: str | None, mode: str) -> dict:
+    """attacker_level / system_variant / prompt_version for a run at `level` (L0 or L2), with an
+    optional SYSTEM_VARIANTS name. Prompt versions match RQ4's runs, so equal calls share cache."""
+    if level not in ("L0", "L2"):
+        raise SystemExit(f"survey-bank runs take --level L0 or L2, not {level}")
+    if variant is not None and SYSTEM_VARIANTS[variant][0] != level:
+        raise SystemExit(f"--system-variant {variant} needs --level {SYSTEM_VARIANTS[variant][0]}")
+    if mode == "cp":
+        version = SYSTEM_VARIANTS[variant][1] if variant else PROMPT_VERSION
+    else:
+        version = DOC_VARIANT_PROMPT_VERSION[variant] if variant else DOC_PROMPT_VERSION
+    return {"attacker_level": level, "system_variant": variant, "prompt_version": version}
 
 
 def sha256(path: Path) -> str:
@@ -202,13 +227,17 @@ def cmd_run(a) -> None:
     mechs = mechanisms_for(a.bank)
     client = client_for(a.fake)
     _, cp_max, q, du_max = BANKS[a.bank]
+    settings = level_settings(a.level, a.system_variant, a.mode)
+    if (a.level != "L0" or a.system_variant) and not a.run_id:
+        raise SystemExit("give --run-id for an L2 run (the default ids are the L0 runs')")
     rid = (a.run_id or run_id(a.bank, a.mode)) + ("-fake" if a.fake else "")
     results = "results-fake" if a.fake else "results"
-    note = "L0 gpt-mini on archana-survey-written-v1 (handoff 2026-11-17)"
+    label = a.system_variant or a.level
+    note = f"{label} gpt-mini on archana-survey-written-v1 (handoff 2026-11-17)"
     if a.mode == "cp":
         from adr.harness.copy_paste import CopyPasteConfig, run_copy_paste
 
-        cfg = CopyPasteConfig(run_id=rid, models=[MODEL], attacker_level="L0",
+        cfg = CopyPasteConfig(run_id=rid, models=[MODEL], **settings,
                               n_samples=CP_SAMPLES if a.samples is None else a.samples,
                               first_sample=a.first_sample,
                               temperature=CP_TEMP if a.temperature is None else a.temperature,
@@ -219,7 +248,7 @@ def cmd_run(a) -> None:
 
         if a.first_sample:
             raise SystemExit("--first-sample is copy-paste only")
-        cfg = DocUploadConfig(run_id=rid, models=[MODEL], attacker_level="L0",
+        cfg = DocUploadConfig(run_id=rid, models=[MODEL], **settings,
                               n_samples=DU_SAMPLES if a.samples is None else a.samples,
                               temperature=DU_TEMP if a.temperature is None else a.temperature,
                               max_tokens=du_max, questions_per_doc=q, results_dir=results,
@@ -353,6 +382,9 @@ def main() -> None:
     r.add_argument("--samples", type=_at_least(1), help=f"default cp {CP_SAMPLES}, du {DU_SAMPLES}")
     r.add_argument("--first-sample", type=_at_least(0), default=0, help="cp only: first sample index")
     r.add_argument("--temperature", type=float, help=f"default cp {CP_TEMP}, du {DU_TEMP}")
+    r.add_argument("--level", choices=["L0", "L2"], default="L0")
+    r.add_argument("--system-variant", choices=sorted(SYSTEM_VARIANTS),
+                   help="e.g. L2-generic (with --level L2): the L2 role, naming no check")
     rs = sub.add_parser("rescore")
     rs.add_argument("--style-profile", type=Path, default=STYLE_PROFILE)
     rs.add_argument("--runs", nargs="+", metavar="BANK=RUN_ID",
