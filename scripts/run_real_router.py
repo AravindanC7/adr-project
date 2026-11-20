@@ -174,7 +174,9 @@ def load_bank(path: str, assessment_id: str | None, mechanisms: list[str]):
     return assessment, items, variants
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """The command line. Its defaults are the calibrated router (configs/data_decisions.json,
+    "router_calibration"); tests/test_router_calibration.py checks they match."""
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -299,7 +301,11 @@ def main() -> None:
     ap.add_argument("--split-seed", type=int, default=SPLIT_SEED)
     ap.add_argument("--results-dir", default="results")
     ap.add_argument("--run-id")
-    args = ap.parse_args()
+    return ap
+
+
+def main() -> None:
+    args = build_parser().parse_args()
     global _FINGERPRINT
     _FINGERPRINT = run_fingerprint(
         sys.argv[1:],

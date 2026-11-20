@@ -67,5 +67,36 @@
     "used_for": "AI style rows of the v1 survey-bank runs (scripts/run_survey_banks.py rescore)",
     "check_against_handoff": "Same numbers as Archana's processed/style_profile.json in ADR-runs-handoff-2026-11-17.zip (file sha256 297203e7...0ed88e4): feature means, feature stds, mid/high thresholds, n_training, sources, raw/config sha256s and per-question response counts are all identical. The files differ only in the paths they record (Windows vs macOS) and decisions_sha256.",
     "hashes": "file_sha256 is the regenerated file as written. profile_sha256 is sha256 of the 'profile' object as compact JSON with sorted keys; it ignores paths, so it is the same for both files. The file's own decisions_sha256 refers to this file before this entry was added, so regenerating now gives a new file_sha256 but the same profile_sha256."
+  },
+  "router_calibration": {
+    "decided": "2026-11-20",
+    "step": "#42 threshold calibration on held-out replay",
+    "cap_design": "per_mech",
+    "mech_cap_frac": 0.65,
+    "clear_policy": "reopen",
+    "neg_floor_frac": 1.0,
+    "evidence_bounds": "each mechanism's running total is bounded to [neg_floor_frac * B, mech_cap_frac * A]: one check alone cannot pause a session; it can clear one (cleared = no evidence of AI found)",
+    "wald": {
+      "alpha": 0.01,
+      "beta": 0.05,
+      "A": 4.5539,
+      "B": -2.9857,
+      "formula": "A = ln((1 - beta) / alpha), B = ln(beta / (1 - alpha)); the cap and floor are fractions of these nominal values"
+    },
+    "threshold_rule": "The review threshold is calibrated on honest sessions by session-level cross-fitting (adr/replay/crossfit.py, folds from adr/replay/folds.py): every honest session is scored with a failure map that never saw it, and resampled honest sessions are drawn per fold from that fold's sessions only. A_0.05 (headline) and A_0.01 (secondary) are the smallest thresholds that pause at most 5% / 1% of the resampled honest sessions; A_max (lowest threshold pausing none of the real sessions) is also reported. 95% CIs bootstrap over sessions.",
+    "headline_threshold": "A_0.05",
+    "secondary_threshold": "A_0.01",
+    "ablations": {
+      "no_cap": "mech_cap_frac None: a single check may pause a session",
+      "twocheck": "neg_floor_frac 0.65: no single check may clear a session"
+    },
+    "evidence": {
+      "notes": "docs/notes/rq2_calibration.md",
+      "runs": "results/real-router/rq2-l012-floor750-{reopen,twocheck}-{all,no-low-effort} (not committed)",
+      "pilot": "pilot_data/pilot-2026-11-13-floor750.parquet",
+      "pilot_sha256": "f2602f198e05514c8dea4f421435f1446f9eb08f506870183e090a50fcec075e",
+      "ai_sessions": "120 composite gpt-mini sessions: L0, L2, L2g x copy_paste, doc_upload, 20 each"
+    },
+    "rule": "run_real_router.py's defaults must match this entry (tests/test_router_calibration.py). Change it only by a team decision, never per run."
   }
 }
