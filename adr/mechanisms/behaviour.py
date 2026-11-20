@@ -25,9 +25,12 @@ its content.
 The reading floor counts the item's passage, which is not in RenderedItem.visible (the harness
 and the page add it in front of the stem). Pass it as `passage=item.passage`; the server does.
 
-THRESHOLDS ARE PROVISIONAL. They are set from typical human reading and typing speeds so that
-an honest person almost never trips them. The pilot (#35) measures how often people do, and
-#42 calibrates them on held-out data. Change them there, not by eye.
+THRESHOLDS ARE CALIBRATED. They started from typical human reading and typing speeds. The
+reading floor was then calibrated on the pilot (#35) over held-out session folds (k=4, PR #40):
+1000 ms + 100 ms a word flagged too many honest answers, so it is now 750 ms + 50 ms a word.
+At that floor honest too_fast is 6.7% of answers over all 44 pilot sessions and 1.7% without
+the 4 low-effort ones. The paste, focus-loss and key-gap thresholds were left as they were.
+Recalibrate on held-out folds, not by eye.
 """
 
 from __future__ import annotations
@@ -51,13 +54,14 @@ UNTYPED_MIN_CHARS = 20
 UNTYPED_COVERAGE = 0.5
 # A brief blur (a notification, alt-tab and straight back) is not looking something up.
 MIN_AWAY_MS = 2000
-# Reading floor: a fast skim is about 600 words per minute, i.e. 100 ms a word, plus a moment
-# to find and click the answer. Faster than this, nobody read the question. Only the passage and
-# the question count: options are scanned, and Likert labels are the same on every question.
-# A short survey item comes to about 1.7 s, just under the common 2 s-per-item careless-
-# responding cut-off, so honest fast survey-takers stay "normal".
-READ_MS_PER_WORD = 100
-ANSWER_MS = 1000
+# Reading floor: 750 ms to find and click the answer plus 50 ms a word of passage and question
+# (a skim at about 1200 words per minute). Faster than this, nobody read the question. Only the
+# passage and the question count: options are scanned, and Likert labels are the same on every
+# question. Calibrated on held-out pilot session folds (k=4, PR #40); the first guess,
+# 1000 ms + 100 ms a word, put too many honest answers under the floor. A short survey item now
+# comes to about 1.1 s.
+READ_MS_PER_WORD = 50
+ANSWER_MS = 750
 # Fast typists average around 100-150 ms between keys; 30 ms sustained is not a person.
 MIN_INTERKEY_MS = 30
 MIN_KEYS_FOR_SPEED = 10

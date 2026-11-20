@@ -18,9 +18,11 @@ copy-paste, document export and browser agents still get (`adr/mechanisms/CANARY
 
 * it stays in the DOM, the copied text and the accessibility tree: never `display:none`,
   `visibility:hidden` or the `hidden` attribute, which would drop it from all three;
-* the server picks the hiding style (`ADR_HIDE`), so the screen-reader test (#44) can compare:
+* the server picks the hiding style (`ADR_HIDE`, default `clip_aria`; the final evaluation and
+  the pilot set `clip` explicitly), so the screen-reader test (#44) can compare:
   * `clip`: squeezed into a 1px clipped box; screen readers still read it;
-  * `clear`: full-size but colourless text, also colourless when highlighted;
+  * `clear`: full-size but colourless text, also colourless when highlighted; only for the #44
+    comparison (Windows High Contrast shows it);
   * `clip_aria`: `clip` plus `aria-hidden`, so screen readers skip it (set in `app.js`);
 * it is a `div`, not a `p`: Chrome copies a `p` with a blank line after it, which would break
   `copy_text`.
@@ -49,6 +51,32 @@ Ctrl+C into the clipboard.
 The consent text comes from `docs/pilot/consent.md` (`GET /study`). The debrief explains the
 hidden checks, so the server sends it only after the last question
 (`GET /session/{id}/debrief`, 409 before then); it is never in the page earlier.
+
+## Failure map on the live server (`ADR_MAP`, #43)
+
+`ADR_MAP=<file>` loads a FailureMap JSON (the format `adr/map/builder.py` and
+`scripts/build_failure_map.py` write, `results/failure_map/<version>.json`) through
+`adr.router.map_guard.load_router_map`, and the router scores every answer with it. Unset, the
+map is empty: nothing is scored and `ADR_PICK=router` serves every question plain.
+
+* `ADR_PICK=router`: the router picks the checks and stops serving questions once a session
+  is paused for review (`status` "review"); a cleared session gets the rest plain. In a flow,
+  a paused session skips the later parts and the evidence carries over between parts.
+* `ADR_PICK=all` (pilot design): every eligible question carries its check to the end, but the
+  router still scores, so `status` can still become "review" or "cleared".
+* Either way the page is the same: a paused session just looks finished. The status is only
+  visible through `GET /session/{id}` with `ADR_DEBUG_STATE=1` (its `X-ADR-Map` header names
+  the map version and file hash); the saved start record has `failure_map` {version, sha256,
+  path}.
+* The server stops at startup on a missing or invalid file, a map with no cells, a provisional
+  map (AI-only, or cells without human counts), a version naming it held-out or final
+  (`heldout`, `held-out`, `held_out`, `final`), and a synthetic map with `ADR_PILOT=1`.
+
+Demo (#47): `python scripts/make_demo_map.py` writes the SYNTHETIC map `synthetic-demo`
+(invented numbers from `adr/router/synthetic.py`) to `results/failure_map/demo_synthetic.json`,
+which git ignores. The real v2 map (Archana, #40) drops in the same way once it exists:
+`ADR_MAP=results/failure_map/v2.json`. With `ADR_DEBUG_STATE=1` the server console prints each
+new session id, so `/session/{id}` can be opened without DevTools.
 
 ## What the browser never gets
 

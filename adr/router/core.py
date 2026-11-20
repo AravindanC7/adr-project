@@ -13,6 +13,7 @@ Each step:
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass
 
@@ -32,6 +33,9 @@ from adr.contracts import (
 from adr.router.selection import utility
 from adr.router.sprt import capped_delta, sigmoid, wald_thresholds
 
+_CLEAR_TOL = 1e-9  # nats
+CLEAR_POLICIES = ("reopen", "sticky")
+
 
 @dataclass(frozen=True)
 class RouterConfig:
@@ -49,12 +53,50 @@ class RouterConfig:
     # (2.96 at the default A = 4.55). Below 1, no single mechanism can trigger review on its own.
     # None = no cap.
     mech_cap_frac: float | None = 0.65
+    # Optional groups of mechanisms that share ONE cap of the same size (mech_cap_frac * A),
+    # e.g. {"passive": ("behaviour", "style")}: correlated signals from the same person then can't
+    # add up past one cap together. None = off (each mechanism has its own cap, as before).
+    # NOTE: with groups, SessionState.contrib is keyed by the GROUP name, not the mechanism: read a
+    # mechanism's running total as state.contrib[router.cap_key(mechanism)] (review H6).
+    mech_group_caps: dict[str, tuple[str, ...]] | None = None
     objective: str = "kl"          # "kl" (Chernoff's rule) or "info_gain"; see selection.py
     tie_eps: float = 0.01          # candidates within this of the best are a tie
     allow_reorder: bool = True     # may serve items out of display order
     attack_mode: str | None = None # which failure-map cells to use; None = pooled over modes
     upper: float | None = None     # override A (after empirical calibration, step #42)
     lower: float | None = None     # override B
+    # False = never clear (router_noclear): keeps checking a low score. B still floors each
+    # mechanism's total, so both policies bound evidence the same way.
+    clear: bool = True
+    # What happens after a session is cleared (score <= B) and later evidence lifts it above B
+    # again, e.g. a passive check (style, behaviour) observed on every item:
+    #   "reopen" (default, the original behaviour): the status is recomputed after every update,
+    #            so the session becomes active again and gets checks again;
+    #   "sticky": cleared stays cleared (only plain items from then on). Review still wins: a
+    #            cleared session whose score reaches A is paused.
+    # Decided in calibration (#42); see docs/notes on the RQ2 single false pause.
+    clear_policy: str = "reopen"
+
+
+def _cap_keys(groups: dict[str, tuple[str, ...]] | None) -> dict[str, str]:
+    """mechanism -> group name, checked: known mechanisms, each in at most one group, and group
+    names that don't collide with a mechanism's own contrib key."""
+    if not groups:
+        return {}
+    known = set(ACTIVE_MECHANISMS) | set(PASSIVE_MECHANISMS)
+    out: dict[str, str] = {}
+    for name, members in groups.items():
+        if name in known:
+            raise ValueError(f"mech_group_caps: group name {name!r} is a mechanism name")
+        if not members:
+            raise ValueError(f"mech_group_caps: group {name!r} is empty")
+        for m in members:
+            if m not in known:
+                raise ValueError(f"mech_group_caps: unknown mechanism {m!r} in {name!r}")
+            if m in out:
+                raise ValueError(f"mech_group_caps: {m!r} is in both {out[m]!r} and {name!r}")
+            out[m] = name
+    return out
 
 
 def eligible_checks(item: Item, variants: list[RenderedItem]) -> list[RenderedItem]:
@@ -82,8 +124,16 @@ class SPRTRouter:
         self.B = config.lower if config.lower is not None else b
         if config.mech_cap_frac is not None and config.mech_cap_frac <= 0:
             raise ValueError("mech_cap_frac must be > 0 (or None for no cap)")
+        if config.clear_policy not in CLEAR_POLICIES:
+            raise ValueError(f"clear_policy must be one of {CLEAR_POLICIES}")
         # Per-mechanism cap in nats, from A after any `upper` override.
         self.mech_cap = None if config.mech_cap_frac is None else config.mech_cap_frac * self.A
+        # Each mechanism's (or group's) total is bounded to [B, +cap]: one check alone can reach
+        # B (clear) but not A (review). None when there is no cap, or B is not finite.
+        self.mech_floor = (
+            self.B if self.mech_cap is not None and math.isfinite(self.B) else None
+        )
+        self._cap_key = _cap_keys(config.mech_group_caps)
         self._assessments: dict[str, Assessment] = {}
         self._variant_index: dict[str, RenderedItem] = {
             v.variant_id: v for vs in variants.values() for v in vs
@@ -131,9 +181,11 @@ class SPRTRouter:
             check_outcome(mech, outcome)
             cell = self.fmap.lookup(mech, self.items[item_id].item_type, self.cfg.attack_mode)
             if cell is not None:
-                total = new.contrib.get(mech, 0.0)
-                delta = capped_delta(total, cell.llr(outcome), self.mech_cap)
-                new.contrib[mech] = total + delta
+                key = self.cap_key(mech)  # the mechanism, or the group it shares a cap with
+                total = new.contrib.get(key, 0.0)
+                # Bounded to [B, +cap]: B from this config, so it follows calibration.
+                delta = capped_delta(total, cell.llr(outcome), self.mech_cap, self.mech_floor)
+                new.contrib[key] = total + delta
         new.score += delta
         new.history.append((variant_id, outcome, delta))
         new.status = self._status(new)
@@ -166,11 +218,19 @@ class SPRTRouter:
     def _status(self, state: SessionState) -> str:
         if state.status == "review" or state.score >= self.A:
             return "review"
-        if state.score <= self.B:
+        if self.cfg.clear_policy == "sticky" and state.status == "cleared":
+            return "cleared"
+        # Tolerance: a mechanism at its floor makes score == B up to float rounding of the deltas.
+        if self.cfg.clear and state.score <= self.B + _CLEAR_TOL:
             return "cleared"
         if state.score >= self.cfg.escalate_frac * self.A:
             return "escalated"
         return "active"
+
+    def cap_key(self, mechanism: str) -> str:
+        """The key in SessionState.contrib that `mechanism` counts toward: its group's name when
+        RouterConfig.mech_group_caps puts it in a group, otherwise the mechanism itself."""
+        return self._cap_key.get(mechanism, mechanism)
 
     def checks(self, item_id: str) -> list[RenderedItem]:
         """This item's servable checks (eligible_checks), in variant-file order."""
@@ -193,7 +253,7 @@ class SPRTRouter:
             item = self.items[item_id]
             for v in self.checks(item_id):
                 if self.mech_cap is not None and (
-                    state.contrib.get(v.mechanism, 0.0) >= self.mech_cap
+                    state.contrib.get(self.cap_key(v.mechanism), 0.0) >= self.mech_cap
                 ):
                     continue  # this check can't add more evidence toward AI
                 cell = self.fmap.lookup(v.mechanism, item.item_type, self.cfg.attack_mode)

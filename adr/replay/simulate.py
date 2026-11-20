@@ -38,6 +38,16 @@ class ReplayResult:
     fallbacks: int                 # outcomes taken from another session of the same group
     synthetic: int                 # outcomes drawn from the failure map: no logged row
     skipped: int                   # NoObservation: no evidence given to the router
+    same_type: int = 0             # outcomes from this session's own rows on another item of the
+                                   # same item_type (AI sessions on the pilot bank)
+    # ACTIVE checks only (same_type, fallback, synthetic, missing): where the outcomes of the
+    # checks the policy served came from. Passive checks (style, behaviour) are attempted on
+    # every item, including item types they never apply to, so they are left out here.
+    active_sources: tuple[int, int, int, int] = (0, 0, 0, 0)
+    # Index into final.history of the update after which the session was FIRST cleared (None =
+    # never). With clear_policy "reopen" a session can be cleared and later reopened, so this can
+    # be set while the final status is not "cleared".
+    cleared_step: int | None = None
 
     @property
     def kind(self) -> str:
@@ -57,29 +67,47 @@ def replay_session(
     session_id = f"replay:{donor.group.label}:{seed}"
     state, choice = router.start(assessment, session_id, seed)
     shown = checks = skipped = 0
+    act = [0, 0, 0, 0]  # active checks: same_type, fallback, synthetic, missing
+
+    cleared_step: int | None = None
+
+    def counters() -> tuple[int, int, int]:
+        return (getattr(donor, "same_type", 0), donor.fallbacks, donor.synthetic)
+
+    def update(st, variant_id, outcome):
+        nonlocal cleared_step
+        st = router.update(st, variant_id, outcome)
+        if cleared_step is None and st.status == "cleared":
+            cleared_step = len(st.history) - 1
+        return st
+
     decided_at = None
     while choice is not None:
         shown += 1
         if shown > len(assessment.item_ids):
             raise RuntimeError(f"{type(router).__name__} served more items than the assessment has")
         if choice.mechanism is None:
-            state = router.update(state, choice.variant_id, "none")
+            state = update(state, choice.variant_id, "none")
         else:
             checks += 1
+            before = counters()
             try:
-                state = router.update(
+                state = update(
                     state, choice.variant_id, donor.outcome(choice.item_id, choice.mechanism)
                 )
             except NoObservation:
                 skipped += 1
-                state = router.update(state, choice.variant_id, None)
+                act[3] += 1
+                state = update(state, choice.variant_id, None)
+            for i, (a, b) in enumerate(zip(before, counters(), strict=True)):
+                act[i] += b - a
         for p in passive:
             try:
                 outcome = donor.outcome(choice.item_id, p)
             except NoObservation:
                 skipped += 1
                 continue
-            state = router.update(state, make_variant_id(choice.item_id, p), outcome)
+            state = update(state, make_variant_id(choice.item_id, p), outcome)
         if decided_at is None and state.status in ("review", "cleared"):
             decided_at = shown
         choice = router.next(state)
@@ -93,4 +121,7 @@ def replay_session(
         fallbacks=donor.fallbacks,
         synthetic=donor.synthetic,
         skipped=skipped,
+        same_type=getattr(donor, "same_type", 0),
+        active_sources=tuple(act),
+        cleared_step=cleared_step,
     )

@@ -2,7 +2,7 @@
 
 Final report: 8–10 pages, ACL format, due Fri Dec 4 (AGENTS.md Sections 4 and 14).
 `main.tex` has one section per row of the Section 14 table, each with a `% TODO (owner)` note.
-`custom.bib` has entries for the works named in AGENTS.md; fields marked `% CHECK` still need verifying.
+`custom.bib`: 24 entries. 23 were checked against the publisher, ACL Anthology or arXiv (Nov 15); `hohne2025` still has TODO author, volume and number fields (to be copied from the publisher's page). It has not yet been diffed against the Overleaf project's bibliography.
 
 ## Set up Overleaf (Harshini)
 

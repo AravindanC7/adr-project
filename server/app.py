@@ -28,10 +28,24 @@ The server scores each answer with the variant's mechanism and gives the router 
 
 Settings (environment variables):
   ADR_PICK=all | router   all (default, for the pilot): every question that can carry a check
-                          shows it. router: the SPRT router picks, which needs a failure map (#28).
+                          shows it, to the last question. router: the SPRT router picks checks
+                          from the failure map (ADR_MAP), and a session it pauses for review
+                          ends early. Either way the router scores every answer with the map.
+  ADR_MAP=<file>          The failure map the router scores with (#28, #43): FailureMap JSON as
+                          adr/map/builder.py + scripts/build_failure_map.py write it
+                          (results/failure_map/<version>.json). Unset: an empty map, so nothing
+                          is scored and ADR_PICK=router serves every question plain. Checked at
+                          startup (load_failure_map): a missing or invalid file, an empty map, a
+                          provisional one (AI-only, or cells with no human data), a held-out or
+                          final-evaluation map, or a synthetic map with ADR_PILOT=1 stops the
+                          server. Demo map: scripts/make_demo_map.py (SYNTHETIC numbers).
   ADR_HIDE=clip | clear | clip_aria
-                          How hidden text is hidden (see frontend/style.css). The screen-reader
-                          test (#44) compares them. Default clip.
+                          How hidden text is hidden (see frontend/style.css). Default clip_aria,
+                          for safety: screen readers skip the hidden text, so a blind respondent
+                          never hears a trap. The final evaluation and the pilot set clip
+                          explicitly (scripts/run_pilot.ps1), so their results stay comparable.
+                          clear is kept only for the screen-reader comparison (#44); Windows High
+                          Contrast also shows its text, another reason it isn't a default.
   ADR_STUB_MECHANISMS=1   Use the test stubs (tests/stubs.py) instead of adr/mechanisms/, for
                           trying the page before Archana's mechanisms are on main.
   ADR_PILOT=1             Human pilot (#30, #35): consent screen before question 1, a Stop
@@ -40,9 +54,11 @@ Settings (environment variables):
   ADR_DATA_DIR=<folder>   Save every session to <folder>/<session_id>.jsonl as it happens
                           (server/store.py). Withdrawing deletes the file. Unset: memory only.
   ADR_DEBUG_STATE=1       GET /session/{id} returns the SessionState, for the demo (#47) and
-                          logging. Never enable it in a session real people take.
+                          logging, with the map in an X-ADR-Map header; the server console logs
+                          each new session id. Never enable it in a session real people take.
 
-Not here yet: a real failure map for ADR_PICK=router (#28).
+The map's version and file hash stay on the server: in each session's record (_Session.fmap)
+and, when saving, in the saved start record. The page looks the same whatever the status.
 Saved sessions are raw records; #39 turns them into outcome-table rows.
 
 Run from the repo root:   uvicorn server.app:app --reload      then open http://127.0.0.1:8000
@@ -52,6 +68,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import random
@@ -62,6 +79,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
+from fastapi import Response as FastAPIResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
@@ -83,7 +101,11 @@ from adr.harness.copy_paste import plain_variant
 from adr.harness.registry import get_mechanism
 from adr.mechanisms.behaviour import MECHANISM as BEHAVIOUR
 from adr.router.core import SPRTRouter
+from adr.router.map_guard import load_router_map
 from server.store import SessionStore
+
+# uvicorn prints this logger to the console; the server's own messages go there.
+log = logging.getLogger("uvicorn.error")
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BANK = ROOT / "server" / "stub_items.json"
@@ -94,6 +116,10 @@ PILOT_DIR = ROOT / "docs" / "pilot"
 # answers (passive), so the page has nothing to inject for them; glitch tokens are out for now.
 INJECTED = ("decoy", "canary")
 Pick = Literal["all", "router"]
+EMPTY_MAP = FailureMap(version="empty", cells=[])
+# Words in a map's version that mark it as fitted on, or meant for, the final evaluation
+# (AGENTS.md section 8): the live server must never score anyone with one.
+HELDOUT_MARKERS = ("heldout", "held-out", "held_out", "final")
 Hide = Literal["clip", "clear", "clip_aria"]
 
 
@@ -200,6 +226,37 @@ def load_flow(path: str | Path, assessments: dict[str, Assessment]) -> Flow | No
     return flow
 
 
+def load_failure_map(path: str | Path, pilot: bool = False) -> tuple[FailureMap, dict[str, Any]]:
+    """The ADR_MAP file as a FailureMap, plus {version, sha256, path} to record with sessions.
+
+    Raises ValueError with the reason when the server must not use it: missing file, not a
+    FailureMap, no cells, provisional (adr/router/map_guard.py, no override here), held-out or
+    final-evaluation (HELDOUT_MARKERS in its version), or synthetic in a pilot."""
+    path = Path(path)
+    where = f"ADR_MAP={path}"
+    if not path.is_file():
+        raise ValueError(f"{where}: no such file. Build one with scripts/build_failure_map.py "
+                         "(or scripts/make_demo_map.py for the demo), or unset ADR_MAP.")
+    raw = path.read_bytes()
+    try:
+        fmap = load_router_map(path)  # ProvisionalMapError is a ValueError too
+    except ValueError as e:  # bad JSON, a FailureMap validation error, or provisional
+        raise ValueError(f"{where}: not usable as the server's failure map: {e}") from e
+    if not fmap.cells:
+        raise ValueError(f"{where}: map {fmap.version!r} has no cells; unset ADR_MAP for the "
+                         "empty map")
+    if any(m in fmap.version.lower() for m in HELDOUT_MARKERS):
+        raise ValueError(f"{where}: map {fmap.version!r} is a held-out / final-evaluation map "
+                         "(AGENTS.md section 8); the live server must not route with it")
+    synthetic = "synthetic" in fmap.version.lower() or "SYNTHETIC" in fmap.note
+    if pilot and synthetic:
+        raise ValueError(f"{where}: map {fmap.version!r} is SYNTHETIC (invented numbers); "
+                         "never with ADR_PILOT=1")
+    info = {"version": fmap.version, "sha256": hashlib.sha256(raw).hexdigest()[:12],
+            "path": str(path)}
+    return fmap, info
+
+
 def check_answer(item: Item, answer: Any) -> None:
     """Raise ValueError unless `answer` fits the item type (option index, ranking, number, text)."""
     n = len(item.options or [])
@@ -277,6 +334,7 @@ class _Session:
     later_parts: list[Assessment] = field(default_factory=list)
     done_before: int = 0
     total: int = 0
+    fmap: dict[str, Any] = field(default_factory=dict)  # {version, sha256, path} it is scored with
 
 
 # ---------------------------------------------------------------- app
@@ -294,6 +352,7 @@ def create_app(
     hide: Hide | None = None,
     pilot: bool | None = None,
     data_dir: str | Path | None | _Unset = _FROM_ENV,
+    map_path: str | Path | None = None,
 ) -> FastAPI:
     """Arguments left out come from the environment (ADR_*). Saving is the exception:
     ADR_DATA_DIR is read only when both `pilot` and `data_dir` are left out, i.e. when the
@@ -311,7 +370,7 @@ def create_app(
     if mechanisms is None:
         mechanisms = load_injected_mechanisms(os.environ.get("ADR_STUB_MECHANISMS") == "1")
     pick = pick or os.environ.get("ADR_PICK", "all")  # type: ignore[assignment]
-    hide = hide or os.environ.get("ADR_HIDE", "clip")  # type: ignore[assignment]
+    hide = hide or os.environ.get("ADR_HIDE", "clip_aria")  # type: ignore[assignment]
     if pick not in ("all", "router") or hide not in ("clip", "clear", "clip_aria"):
         raise ValueError(f"bad ADR_PICK={pick!r} or ADR_HIDE={hide!r}")
     if pilot is None:
@@ -321,6 +380,12 @@ def create_app(
     if pilot and data_dir is None:
         raise ValueError("ADR_PILOT=1 needs ADR_DATA_DIR, or the pilot's answers are lost")
     store = SessionStore(data_dir) if data_dir else None
+    debug_state = os.environ.get("ADR_DEBUG_STATE") == "1"
+    map_path = map_path or os.environ.get("ADR_MAP") or None
+    if map_path:
+        fmap, map_info = load_failure_map(map_path, pilot=pilot)
+    else:
+        fmap, map_info = EMPTY_MAP, {"version": EMPTY_MAP.version, "sha256": None, "path": None}
     # Read at startup, so a broken file stops the server before anyone sees the page.
     consent = screen_text(PILOT_DIR / "consent.md") if pilot else None
     debrief = screen_text(PILOT_DIR / "debrief.md") if pilot else None
@@ -331,7 +396,7 @@ def create_app(
 
     variants = build_variants(items, mechanisms)
     by_variant = {v.variant_id: v for vs in variants.values() for v in vs}
-    router = SPRTRouter(items, variants, FailureMap(version="empty", cells=[]))
+    router = SPRTRouter(items, variants, fmap)
     sessions: dict[str, _Session] = {}
 
     app = FastAPI(title="Survey server", docs_url=None, redoc_url=None, openapi_url=None)
@@ -414,7 +479,8 @@ def create_app(
         session_id = uuid.uuid4().hex
         state, choice = router.start(assessment, session_id, seed=secrets.randbelow(2**31))
         s = sessions[session_id] = _Session(
-            state=state, assessment=assessment, current=choice, consented=req.consent
+            state=state, assessment=assessment, current=choice, consented=req.consent,
+            fmap=map_info,
         )
         if flow:
             s.later_parts = [assessments[p] for p in flow.parts[1:]]
@@ -422,7 +488,10 @@ def create_app(
         if store:
             store.start(session_id, assessment_id=assessment.assessment_id, pilot=pilot,
                         consented=req.consent, consent_version=consent_version,
-                        seed=state.seed)
+                        seed=state.seed, failure_map=map_info)
+        if debug_state:  # so the presenter can open /session/{id} without DevTools
+            log.info("ADR_DEBUG_STATE: session %s started (%s); state at /session/%s",
+                     session_id, assessment.assessment_id, session_id)
         s.current = next_choice(s)
         return step(s)
 
@@ -489,10 +558,19 @@ def create_app(
                 telemetry=req.telemetry.model_dump(),
                 outcomes=s.outcomes[n_outcomes:],
             )
-        while s.current is None and s.later_parts:  # a flow: straight on to the next part
+        # A flow: straight on to the next part, unless the router paused the session for review
+        # (ADR_PICK=router). One person takes every part, so the evidence carries over.
+        while s.current is None and s.later_parts and not (
+            pick == "router" and s.state.status == "review"
+        ):
             s.done_before += len(s.assessment.item_ids)
             s.assessment = s.later_parts.pop(0)
-            s.state, _ = router.start(s.assessment, session_id, seed=s.state.seed)
+            before = s.state
+            s.state, _ = router.start(s.assessment, session_id, seed=before.seed)
+            s.state = s.state.model_copy(update={
+                "score": before.score, "status": before.status, "contrib": dict(before.contrib),
+                "history": list(before.history),
+            })
             s.current = next_choice(s)
             if saving:
                 store.part(session_id, assessment_id=s.assessment.assessment_id)
@@ -524,11 +602,13 @@ def create_app(
             raise HTTPException(409, "the session isn't finished yet")
         return Debrief(paragraphs=debrief)
 
-    if os.environ.get("ADR_DEBUG_STATE") == "1":
+    if debug_state:
 
         @app.get("/session/{session_id}")
-        def session_state(session_id: str) -> SessionState:
-            return get_session(session_id).state
+        def session_state(session_id: str, response: FastAPIResponse) -> SessionState:
+            s = get_session(session_id)
+            response.headers["X-ADR-Map"] = f"{s.fmap['version']} sha256:{s.fmap['sha256']}"
+            return s.state
 
     # Last, so the API routes above take precedence over static files.
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

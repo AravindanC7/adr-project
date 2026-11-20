@@ -44,7 +44,7 @@ pytest                                                    # all tests should pas
 Also on `main`: Archana's loaders and mechanisms (PR #3, #7, #8, #19) and Harshini's respondent page and
 mechanism injection (PR #1, #6) and paper skeleton (PR #18).
 
-**Not started:** baseline 5 (step #33).
+**Baseline 5 (step #33), in review:** published survey traps (Wang et al. (CSCW 2025) prompt injection, Westwood-type attention checks in our wording) re-tested on gpt-mini, copy-paste L0, L2 and a generic L2 that names no trap. `adr/baselines/published_traps.py`, `scripts/baseline5.py`, results in `results/baseline5/`.
 
 ## Try it
 
@@ -76,6 +76,27 @@ pip install -e ".[plot]"
 python scripts/plot_budget_curve.py results/runs/budget-synthetic-quiz/budget_curve.csv
 # what limits the router on one assessment (see docs/notes/router_synthetic_diagnosis.md):
 python scripts/diagnose_router.py --synthetic survey
+# The first REAL router + baselines run, once pilot rows exist (step #42). The threshold comes
+# from replayed honest sessions: every session is scored with a map fitted without its fold, and
+# resampled honest sessions are built from each fold's held-out sessions (4-fold cross-fitting,
+# low-effort sessions spread across the folds). Headline: TPR at 5% FPR; TPR at 1% FPR and
+# A_max (pauses none of the real sessions) are secondary. The unit is the session: one person
+# may span sessions. The map is strict (never --ai-only); only mechanisms with both AI and human
+# rows are used. Needs the pilot bank (server/pilot_items.json). Options: --exclude-sessions FILE
+# (low-effort sensitivity run), --cap-variant per_mech passive_group open_text_group no_cap
+# (compare cap designs; no_cap is an ablation row only, never the headline), --final (held-out
+# rows). With decoy as the only check, TPR at 1% = 0 is expected: the cap (0.65A) stops any
+# single check from pausing a session, and the output says so. About 25 min with the defaults.
+python scripts/run_real_router.py \
+    --ai-outcomes results/outcomes/v1-cp-L0-quiz-mmlu-200-s5.parquet \
+                  results/outcomes/v1-cp-L0-quiz-arc-200-s5.parquet \
+                  results/outcomes/v1-du-L0-quiz-mmlu-200-q20.parquet \
+                  results/outcomes/v1-du-L0-quiz-arc-200-q20.parquet \
+    --pilot-outcomes results/outcomes/pilot-2026-11-13.parquet \
+    --low-effort pilot_data/low_effort_ids.txt --cap-variant per_mech no_cap
+# -> results/real-router/<run_id>/: comparison.csv/.md, thresholds.csv (pooled A_0.05 /
+#    A_0.01 / A_max per policy, from session-level cross-fitting),
+#    budget_curve.csv/.png, metrics.json, config.yaml
 ```
 
 ```bash
@@ -84,6 +105,9 @@ pip install -e ".[server]"
 uvicorn server.app:app --reload                       # then open http://127.0.0.1:8000
 ADR_STUB_MECHANISMS=1 uvicorn server.app:app          # with the stub decoy + canary injected
 # Settings (all in server/app.py): ADR_PICK=all|router, ADR_HIDE=clip|clear|clip_aria
+# Router scoring on the live server (#43): ADR_MAP=<FailureMap JSON>; unset = empty map
+python scripts/make_demo_map.py                       # SYNTHETIC demo map -> results/failure_map/demo_synthetic.json
+ADR_MAP=results/failure_map/demo_synthetic.json ADR_PICK=router ADR_DEBUG_STATE=1 uvicorn server.app:app
 
 # Browser test that copied text equals copy_text (needs a ~150 MB Chromium, once):
 pip install -e ".[browser]" && python -m playwright install chromium

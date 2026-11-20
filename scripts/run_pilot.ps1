@@ -33,6 +33,7 @@ if (-not $ngrok) { throw "ngrok not found. Install it: winget install Ngrok.Ngro
 $env:ADR_PILOT = "1"
 $env:ADR_DATA_DIR = $full
 $env:ADR_ITEMS = $Items
+$env:ADR_HIDE = "clip"   # explicit: the server default is clip_aria; the pilot used clip
 Remove-Item Env:ADR_DEBUG_STATE, Env:ADR_STUB_MECHANISMS -ErrorAction SilentlyContinue
 
 # 127.0.0.1: only ngrok can reach the server. --no-access-log: behind a tunnel uvicorn would

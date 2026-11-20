@@ -66,12 +66,14 @@ from adr.contracts import (
     read_outcomes,
 )
 from adr.contracts.outcome import utc_now
-from adr.harness.copy_paste import _git_commit, plain_variant
+from adr.harness.copy_paste import plain_variant
+from adr.harness.provenance import git_state
 from adr.replay.compare import BETAS, budget_curve, compare, comparison_table, write_comparison
 from adr.replay.donors import Donors, Group
 from adr.replay.quick_map import (
     CALIBRATION_FRAC,
     SPLIT_SEED,
+    decided_heldout_model,
     final_eval_rows,
     fit_rows,
     quick_failure_map,
@@ -111,14 +113,6 @@ def load_bank(args) -> tuple[Assessment, dict[str, Item], dict[str, list[Rendere
     for v in read_jsonl(args.variants, RenderedItem):
         variants[v.item_id].append(v)
     return assessments[0], items, dict(variants)
-
-
-DATA_DECISIONS = Path(__file__).resolve().parents[1] / "configs" / "data_decisions.json"
-
-
-def decided_heldout_model(path: Path = DATA_DECISIONS) -> str:
-    """The held-out model's name, as recorded in configs/data_decisions.json."""
-    return json.loads(path.read_text(encoding="utf-8"))["heldout_model"]["name"]
 
 
 def load_logged(args, warnings: list[str]):
@@ -266,6 +260,7 @@ def main() -> None:
     ap.add_argument("--results-dir", default="results")
     ap.add_argument("--run-id")
     args = ap.parse_args()
+    git = git_state()  # the code that runs: HEAD + dirty flag, read at the START
     run_id = args.run_id or f"replay-{datetime.now():%Y%m%d-%H%M%S}"
     passive = tuple(p for p in args.passive.split(",") if p)
 
@@ -366,7 +361,7 @@ def main() -> None:
         "seed": args.seed,
         "n_boot": args.boot,
         "budget_curve_betas": list(betas) if args.compare else None,
-        "git_commit": _git_commit(),
+        **git,
         "created_at": utc_now(),
     }, sort_keys=False, allow_unicode=True), encoding="utf-8")
     extra_files = ", comparison.csv, comparison.md, budget_curve.csv" if args.compare else ""

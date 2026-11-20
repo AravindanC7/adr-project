@@ -120,12 +120,15 @@ def test_no_observation_is_skipped_and_never_scored():
     res = replay_session(router, assessment, donor, passive=("behaviour",), seed=1)
     assert 1 <= res.items_shown <= len(assessment.item_ids)  # ended normally, no loop
     assert res.skipped == res.items_shown                  # one skipped behaviour per item
+    # a passive check with no data is not a missing ACTIVE check (review H3 table)
+    assert res.active_sources[3] == 0
     assert not any("|behaviour|" in v for v, _, _ in res.final.history)
 
     donor = _NoData(donor.inner, blind="decoy")           # an active check with no data
     res = replay_session(router, assessment, donor, seed=1)
     decoys = [h for h in res.final.history if "|decoy|" in h[0]]
     assert res.skipped == len(decoys) >= 1
+    assert res.active_sources[3] == len(decoys)            # active checks with no data
     assert all(out == "none" and d == 0.0 for _, out, d in decoys)  # shown, nothing to score
     assert {v for v, _, _ in decoys} <= set(res.final.served)       # the trapped ids, served
     assert "decoy" not in res.final.contrib
