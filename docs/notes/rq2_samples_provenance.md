@@ -64,6 +64,13 @@ and `actual_code_commit` (faa5262), plus each `config.yaml`'s sha256. It also gi
 the three runner files faa5262 changed (`adr/harness/copy_paste.py`, `scripts/run_copy_paste.py`,
 `scripts/run_survey_banks.py`), at faa5262 and at 0fe82d1.
 
+**Bundle v2.** `drive_uploads/v1-L0-gpt-mini-rq2-samples-2026-11-18-v2.zip`, sha256
+`bdb42e4db01b674b1b9903d1a3a77f4293967484968b93e7405636410e6ac4bf`.
+It holds the same ten runs as the original bundle (96 files, byte-identical), plus this
+note and the JSON (98 files). The original `v1-L0-gpt-mini-rq2-samples-2026-11-18.zip`
+(sha256 `9e6abc17…10f41e4`) is kept unchanged. The copies of this note and the JSON inside v2
+predate this paragraph, because a file can't contain the checksum of the zip it's in.
+
 ## Reproduction check before spending
 
 Before any paid call, the existing samples were re-run with the same drivers and settings, from

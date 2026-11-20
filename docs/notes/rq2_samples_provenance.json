@@ -88,5 +88,16 @@
       "finished_at": "2026-11-19T01:12:46+00:00",
       "config_yaml_sha256": "d4c1c7c0dea32fbae602156eeb78ccefa07a9eab2f3c082ffb6e81a3f6ef2dfb"
     }
+  },
+  "bundle": {
+    "file": "drive_uploads/v1-L0-gpt-mini-rq2-samples-2026-11-18-v2.zip",
+    "sha256": "bdb42e4db01b674b1b9903d1a3a77f4293967484968b93e7405636410e6ac4bf",
+    "contents": "the same ten runs as v1-L0-gpt-mini-rq2-samples-2026-11-18.zip (96 files, byte-identical) plus docs/notes/rq2_samples_provenance.md and this JSON; 98 files",
+    "supersedes": {
+      "file": "drive_uploads/v1-L0-gpt-mini-rq2-samples-2026-11-18.zip",
+      "sha256": "9e6abc17c00e98f6968c794711ed7495d34baa2979fc5d87054db2d1810f41e4",
+      "kept_unchanged": true
+    },
+    "note": "the note and JSON inside the zip predate this 'bundle' entry: a file can't hold the checksum of the zip that contains it"
   }
 }
