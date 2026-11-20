@@ -65,6 +65,9 @@ class CopyPasteConfig:
     models: list[str]
     attacker_level: str = "L0"
     n_samples: int = 1  # independent "sessions" per model; use temperature > 0 if > 1
+    # Index of the first sample: a later run can add samples first_sample.. to an earlier one
+    # (the index is part of the cache key and of the session_id, so they never repeat it).
+    first_sample: int = 0
     temperature: float | None = 0.0
     max_tokens: int = 300
     persona: str = DEFAULT_PERSONA
@@ -142,6 +145,10 @@ def run_copy_paste(
     appears in `variants`, plus any passive ones (e.g. style) to score every response."""
     for m in cfg.models:
         client.spec(m)  # fail fast on an unknown model
+    if cfg.n_samples < 1:
+        raise ValueError(f"n_samples must be at least 1, got {cfg.n_samples}")
+    if cfg.first_sample < 0:
+        raise ValueError(f"first_sample must be 0 or more, got {cfg.first_sample}")
     git = git_state()  # the code that runs: HEAD + dirty flag, read at the START
     if cfg.n_samples > 1 and not cfg.temperature:
         raise ValueError("n_samples > 1 with temperature 0 repeats the same answer; raise it")
@@ -165,7 +172,7 @@ def run_copy_paste(
             if rendered.mechanism and rendered.mechanism not in mechanisms:
                 raise ValueError(f"no mechanism object for {rendered.mechanism!r}")
             for model in cfg.models:
-                for s in range(cfg.n_samples):
+                for s in range(cfg.first_sample, cfg.first_sample + cfg.n_samples):
                     jobs.append(_Job(model, s, item, rendered))
 
     run_dir = Path(cfg.results_dir) / "runs" / cfg.run_id

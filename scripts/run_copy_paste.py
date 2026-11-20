@@ -62,6 +62,8 @@ def main() -> None:
                     help="replace the level's system prompt with a named variant, e.g.\n"
                          "L2-generic (with --level L2): warns about hidden instructions, names no check")
     ap.add_argument("--samples", type=int, default=1)
+    ap.add_argument("--first-sample", type=int, default=0,
+                    help="index of the first sample (add samples to an earlier run)")
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--run-id")
@@ -118,6 +120,7 @@ def main() -> None:
         models=models,
         attacker_level=args.level,
         n_samples=args.samples,
+        first_sample=args.first_sample,
         temperature=args.temperature,
         max_workers=args.workers,
         system_variant=args.system_variant,
