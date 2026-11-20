@@ -58,6 +58,12 @@ not the code that ran. There is **no dirty flag** in the configs: the harness do
 one. Read `git_commit` in these ten configs as "the checkout the runs were launched from", and
 take the code from faa5262.
 
+The same correction in machine-readable form is `rq2_samples_provenance.json` (next to this note).
+For every run id it lists `recorded_commit` (0fe82d1, as in `config.yaml`, which is not changed)
+and `actual_code_commit` (faa5262), plus each `config.yaml`'s sha256. It also gives the SHA-256 of
+the three runner files faa5262 changed (`adr/harness/copy_paste.py`, `scripts/run_copy_paste.py`,
+`scripts/run_survey_banks.py`), at faa5262 and at 0fe82d1.
+
 ## Reproduction check before spending
 
 Before any paid call, the existing samples were re-run with the same drivers and settings, from

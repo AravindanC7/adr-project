@@ -1,0 +1,92 @@
+{
+  "about": "Machine-readable provenance correction for the RQ2 extra L0 samples (PR #45). Each run's config.yaml records git_commit 0fe82d1 (HEAD of the checkout the runs were launched from); the code that ran is faa5262 on arav/first-sample. The original config.yaml values are not changed. See rq2_samples_provenance.md.",
+  "actual_code_commit": "faa5262",
+  "recorded_commit": "0fe82d1",
+  "why_they_differ": "harness git_commit = `git rev-parse --short HEAD` in the current directory; the runs were launched from the main checkout (HEAD 0fe82d1) with the arav/first-sample worktree's scripts, which import adr/ from that worktree",
+  "runner_files_changed_by_faa5262": {
+    "adr/harness/copy_paste.py": {
+      "sha256_at_actual_code_commit_faa5262": "9e8b6aeb3b12ae78d9d678df73ff577b24af5486a34140bb6aaee5229f675e37",
+      "sha256_at_recorded_commit_0fe82d1": "b53d3461255886b1043c099ab72cbed61a812b65716ea10a93ac65d289b874cd"
+    },
+    "scripts/run_copy_paste.py": {
+      "sha256_at_actual_code_commit_faa5262": "d69762dd67514d1c64e8db39315c7ebad09207b12f218fc5396664ea7c1cd9ae",
+      "sha256_at_recorded_commit_0fe82d1": "f108a89fcf2e41a050ea0e07cc17396939c20f3df6e5dcea99b994b3a9e82635"
+    },
+    "scripts/run_survey_banks.py": {
+      "sha256_at_actual_code_commit_faa5262": "7fae85fafac62a16f275a3cd552367bd5b30dee19148960f02cd5e19c3d81c43",
+      "sha256_at_recorded_commit_0fe82d1": "ee0eaca32317ee4c9846c9343649c84d27562faca69c3e22d6fc43bcb2d2292f"
+    }
+  },
+  "runs": {
+    "v1-cp-L0-quiz-mmlu-200-s5-19": {
+      "recorded_commit": "0fe82d1",
+      "actual_code_commit": "faa5262",
+      "mode": "copy_paste",
+      "finished_at": "2026-11-19T00:33:56+00:00",
+      "config_yaml_sha256": "a2b8ad179a61150b7088fc3f229aa826942ee0eb028bed6df4f27c79a7cdc7f2"
+    },
+    "v1-cp-L0-quiz-arc-200-s5-19": {
+      "recorded_commit": "0fe82d1",
+      "actual_code_commit": "faa5262",
+      "mode": "copy_paste",
+      "finished_at": "2026-11-19T01:00:40+00:00",
+      "config_yaml_sha256": "e4143d1080b6fc9fb23e7165cf6a19ad27df34b04203408931492daff438ca60"
+    },
+    "v1-cp-L0-survey-ipip-s5-19": {
+      "recorded_commit": "0fe82d1",
+      "actual_code_commit": "faa5262",
+      "mode": "copy_paste",
+      "finished_at": "2026-11-19T01:04:02+00:00",
+      "config_yaml_sha256": "666a0fb89138e410166f38bcb65afa6586978ee9b81f1c2b101d65ae071a1732"
+    },
+    "v1-cp-L0-survey-gss-s5-19": {
+      "recorded_commit": "0fe82d1",
+      "actual_code_commit": "faa5262",
+      "mode": "copy_paste",
+      "finished_at": "2026-11-19T01:04:35+00:00",
+      "config_yaml_sha256": "a1838b5a43084743a93823d6390d029e95a808adbaba8564081665249e1cb796"
+    },
+    "v1-cp-L0-assignment-asurre-train-s5-19": {
+      "recorded_commit": "0fe82d1",
+      "actual_code_commit": "faa5262",
+      "mode": "copy_paste",
+      "finished_at": "2026-11-19T01:06:46+00:00",
+      "config_yaml_sha256": "99afaed56aec0d7e5e70750b74e19748c2c857a98cda52b5791ce5f8fdfd6a7c"
+    },
+    "v1-du-L0-quiz-mmlu-200-q20-t07-s20": {
+      "recorded_commit": "0fe82d1",
+      "actual_code_commit": "faa5262",
+      "mode": "doc_upload",
+      "finished_at": "2026-11-19T01:09:16+00:00",
+      "config_yaml_sha256": "e9386cf41202e392cbbccb19dd5606ee308b6c42641dbf2e3c74afc3d25c1e4b"
+    },
+    "v1-du-L0-quiz-arc-200-q20-t07-s20": {
+      "recorded_commit": "0fe82d1",
+      "actual_code_commit": "faa5262",
+      "mode": "doc_upload",
+      "finished_at": "2026-11-19T01:11:38+00:00",
+      "config_yaml_sha256": "6ce5253394f292021f69ab56c23f12d2c6db69b3f87d5073fa6511e7c4b481c5"
+    },
+    "v1-du-L0-survey-ipip-q20-t07-s20": {
+      "recorded_commit": "0fe82d1",
+      "actual_code_commit": "faa5262",
+      "mode": "doc_upload",
+      "finished_at": "2026-11-19T01:12:02+00:00",
+      "config_yaml_sha256": "534df47ee7a50fd84f982b265c8bf502a2a06a50e643a0d4ca9d17c23cad892e"
+    },
+    "v1-du-L0-survey-gss-t07-s20": {
+      "recorded_commit": "0fe82d1",
+      "actual_code_commit": "faa5262",
+      "mode": "doc_upload",
+      "finished_at": "2026-11-19T01:12:11+00:00",
+      "config_yaml_sha256": "d5281adf4cb8025049061e3f4bcd971bf53472bb72ecdd818dffa5d88260a31e"
+    },
+    "v1-du-L0-assignment-asurre-train-t07-s20": {
+      "recorded_commit": "0fe82d1",
+      "actual_code_commit": "faa5262",
+      "mode": "doc_upload",
+      "finished_at": "2026-11-19T01:12:46+00:00",
+      "config_yaml_sha256": "d4c1c7c0dea32fbae602156eeb78ccefa07a9eab2f3c082ffb6e81a3f6ef2dfb"
+    }
+  }
+}

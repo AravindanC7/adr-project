@@ -188,6 +188,48 @@ def test_driver_first_sample_is_copy_paste_only(driver):
         driver("--bank", "survey-gss", "--mode", "du", "--first-sample", "5")
 
 
+# ---------------------------------------------------------------- numeric controls (#45 review)
+@pytest.mark.parametrize("bad", [{"n_samples": 0}, {"n_samples": -2}, {"first_sample": -1}])
+def test_copy_paste_rejects_bad_sample_controls_before_any_call(tmp_path, bad):
+    client, fake = make_client(tmp_path)
+    assessment, items, variants, mechs = _setup()
+    cfg = CopyPasteConfig(run_id="bad", models=["fake-a"], temperature=0.7,
+                          results_dir=str(tmp_path), **bad)
+    with pytest.raises(ValueError, match="n_samples must be at least 1|first_sample must be 0"):
+        run_copy_paste(client, assessment, items, variants, mechs, cfg)
+    assert fake.calls == 0
+    assert not (tmp_path / "runs" / "bad").exists()  # no empty or partial run is written
+
+
+@pytest.mark.parametrize("n", [0, -1])
+def test_doc_upload_rejects_n_samples_below_one(tmp_path, n):
+    from adr.harness.doc_upload import DocUploadConfig, run_doc_upload
+
+    client, fake = make_client(tmp_path)
+    assessment, items, variants, mechs = _setup()
+    cfg = DocUploadConfig(run_id="bad", models=["fake-a"], n_samples=n, results_dir=str(tmp_path))
+    with pytest.raises(ValueError, match="n_samples must be at least 1"):
+        run_doc_upload(client, assessment, items, variants, mechs, cfg)
+    assert fake.calls == 0
+
+
+@pytest.mark.parametrize("argv", [
+    ("--mode", "cp", "--samples", "0"),          # was silently replaced by the default
+    ("--mode", "du", "--samples", "0"),
+    ("--mode", "cp", "--samples", "-3"),
+    ("--mode", "cp", "--first-sample", "-1"),
+])
+def test_driver_rejects_bad_sample_options(driver, argv, capsys):
+    with pytest.raises(SystemExit) as stop:
+        driver("--bank", "survey-gss", *argv)
+    assert stop.value.code == 2 and "must be at least" in capsys.readouterr().err
+
+
+def test_driver_samples_one_is_one_not_the_default(driver):
+    cfg = driver("--bank", "survey-gss", "--mode", "cp", "--samples", "1")
+    assert cfg.n_samples == 1 != rsb.CP_SAMPLES
+
+
 # ---------------------------------------------------------------- rescore --runs
 class _Stop(Exception):
     pass

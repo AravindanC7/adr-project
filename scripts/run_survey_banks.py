@@ -209,7 +209,8 @@ def cmd_run(a) -> None:
         from adr.harness.copy_paste import CopyPasteConfig, run_copy_paste
 
         cfg = CopyPasteConfig(run_id=rid, models=[MODEL], attacker_level="L0",
-                              n_samples=a.samples or CP_SAMPLES, first_sample=a.first_sample,
+                              n_samples=CP_SAMPLES if a.samples is None else a.samples,
+                              first_sample=a.first_sample,
                               temperature=CP_TEMP if a.temperature is None else a.temperature,
                               max_tokens=cp_max, results_dir=results, note=note)
         rows = run_copy_paste(client, assessment, items, variants, mechs, cfg)
@@ -219,7 +220,7 @@ def cmd_run(a) -> None:
         if a.first_sample:
             raise SystemExit("--first-sample is copy-paste only")
         cfg = DocUploadConfig(run_id=rid, models=[MODEL], attacker_level="L0",
-                              n_samples=a.samples or DU_SAMPLES,
+                              n_samples=DU_SAMPLES if a.samples is None else a.samples,
                               temperature=DU_TEMP if a.temperature is None else a.temperature,
                               max_tokens=du_max, questions_per_doc=q, results_dir=results,
                               note=note)
@@ -328,6 +329,16 @@ def cmd_rescore(a) -> None:
             print(f"{rid}: {len(base)} -> {len(rows)} rows; {dict(changes) or 'no changes'}")
 
 
+def _at_least(low: int):
+    """argparse type: an int >= low (so --samples 0 or --first-sample -1 fail at once)."""
+    def parse(text: str) -> int:
+        value = int(text)
+        if value < low:
+            raise argparse.ArgumentTypeError(f"must be at least {low}, got {value}")
+        return value
+    return parse
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -339,8 +350,8 @@ def main() -> None:
     r.add_argument("--mode", choices=["cp", "du"], required=True)
     r.add_argument("--fake", action="store_true")
     r.add_argument("--run-id", help="override the default run id (e.g. to add samples)")
-    r.add_argument("--samples", type=int, help=f"default cp {CP_SAMPLES}, du {DU_SAMPLES}")
-    r.add_argument("--first-sample", type=int, default=0, help="cp only: first sample index")
+    r.add_argument("--samples", type=_at_least(1), help=f"default cp {CP_SAMPLES}, du {DU_SAMPLES}")
+    r.add_argument("--first-sample", type=_at_least(0), default=0, help="cp only: first sample index")
     r.add_argument("--temperature", type=float, help=f"default cp {CP_TEMP}, du {DU_TEMP}")
     rs = sub.add_parser("rescore")
     rs.add_argument("--style-profile", type=Path, default=STYLE_PROFILE)

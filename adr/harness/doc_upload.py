@@ -157,6 +157,8 @@ def run_doc_upload(
     build_doc_prompt(assessment.assessment_type, 1, cfg.attacker_level, cfg.persona)
     for m in cfg.models:
         client.spec(m)  # fail fast on an unknown model
+    if cfg.n_samples < 1:
+        raise ValueError(f"n_samples must be at least 1, got {cfg.n_samples}")
     if cfg.n_samples > 1 and not cfg.temperature:
         raise ValueError("n_samples > 1 with temperature 0 repeats the same answer; raise it")
     for item_id in assessment.item_ids:

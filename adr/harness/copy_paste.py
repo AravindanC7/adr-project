@@ -150,6 +150,10 @@ def run_copy_paste(
     appears in `variants`, plus any passive ones (e.g. style) to score every response."""
     for m in cfg.models:
         client.spec(m)  # fail fast on an unknown model
+    if cfg.n_samples < 1:
+        raise ValueError(f"n_samples must be at least 1, got {cfg.n_samples}")
+    if cfg.first_sample < 0:
+        raise ValueError(f"first_sample must be 0 or more, got {cfg.first_sample}")
     if cfg.n_samples > 1 and not cfg.temperature:
         raise ValueError("n_samples > 1 with temperature 0 repeats the same answer; raise it")
     l3 = cfg.attacker_level == "L3"
