@@ -76,6 +76,11 @@ class RouterConfig:
     #            cleared session whose score reaches A is paused.
     # Decided in calibration (#42); see docs/notes on the RQ2 single false pause.
     clear_policy: str = "reopen"
+    # Each mechanism's (or cap group's) negative floor, as a fraction of B: floor = frac * B.
+    # 1.0 (default) = floor at B, so one check alone can clear a session. 0.65 ("two-check
+    # clearing") gives the floor the same size as the positive cap (0.65 * A): one check alone
+    # can neither pause nor clear; clearing needs evidence from at least two checks.
+    neg_floor_frac: float = 1.0
 
 
 def _cap_keys(groups: dict[str, tuple[str, ...]] | None) -> dict[str, str]:
@@ -126,12 +131,16 @@ class SPRTRouter:
             raise ValueError("mech_cap_frac must be > 0 (or None for no cap)")
         if config.clear_policy not in CLEAR_POLICIES:
             raise ValueError(f"clear_policy must be one of {CLEAR_POLICIES}")
+        if not config.neg_floor_frac > 0:
+            raise ValueError("neg_floor_frac must be > 0")
         # Per-mechanism cap in nats, from A after any `upper` override.
         self.mech_cap = None if config.mech_cap_frac is None else config.mech_cap_frac * self.A
         # Each mechanism's (or group's) total is bounded to [B, +cap]: one check alone can reach
         # B (clear) but not A (review). None when there is no cap, or B is not finite.
         self.mech_floor = (
-            self.B if self.mech_cap is not None and math.isfinite(self.B) else None
+            config.neg_floor_frac * self.B
+            if self.mech_cap is not None and math.isfinite(self.B)
+            else None
         )
         self._cap_key = _cap_keys(config.mech_group_caps)
         self._assessments: dict[str, Assessment] = {}

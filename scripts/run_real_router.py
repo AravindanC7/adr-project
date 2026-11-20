@@ -207,6 +207,14 @@ def main() -> None:
         "it gets checks again) or sticky (it stays cleared). Applies to every router row",
     )
     ap.add_argument(
+        "--neg-floor-frac",
+        type=float,
+        default=1.0,
+        help="each check's negative floor as a fraction of B (default 1.0: one check alone can "
+        "clear a session). 0.65 = two-check clearing: the floor has the size of the positive cap "
+        "(0.65 * A), so no single check can clear. Applies to every router row and cap variant",
+    )
+    ap.add_argument(
         "--fold-seed",
         default=DEFAULT_SEED,
         help="fold seed string; keep the recorded default for reported runs",
@@ -405,7 +413,9 @@ def main() -> None:
                     f"NOTE: cap variant {v} has no effect here: of {g} = {list(members)}, only "
                     f"{present or 'none'} have both AI and human rows."
                 )
-    base = replace(RouterConfig(), clear_policy=args.clear_policy)
+    base = replace(
+        RouterConfig(), clear_policy=args.clear_policy, neg_floor_frac=args.neg_floor_frac
+    )
     cfg = replace(base, **CAP_VARIANTS[variants_cap[0]])
 
     folds = fold_lists(assignment, args.folds, keep=sessions)

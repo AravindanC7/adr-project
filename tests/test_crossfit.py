@@ -935,3 +935,14 @@ def test_resume_reruns_only_missing_steps_and_refuses_other_settings(tmp_path):
     proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
                           check=False)
     assert proc.returncode != 0 and "other settings or inputs" in proc.stderr
+
+
+def test_run_real_router_neg_floor_frac_reaches_every_router_row(tmp_path):
+    _files(tmp_path)
+    proc = subprocess.run(
+        _cmd(tmp_path, "--neg-floor-frac", "0.65", "--cap-variant", "per_mech", "no_cap"),
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    cfg = yaml.safe_load((tmp_path / "real-router" / "r" / "config.yaml").read_text())
+    assert cfg["router_config"]["neg_floor_frac"] == 0.65
