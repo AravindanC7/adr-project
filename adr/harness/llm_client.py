@@ -287,9 +287,12 @@ def make_provider(spec: ModelSpec) -> Provider:
 # ---------------------------------------------------------------- errors
 _RATE_WORDS = ("rate limit", "rate_limit", "resource_exhausted", "overloaded", "too many requests")
 _KEY_WORDS = ("invalid api key", "api key not valid", "invalid x-api-key", "incorrect api key")
-# Fatal even on a 429: no credit left, or a bad key. Retrying cannot help.
-_ALWAYS_FATAL_WORDS = ("credit balance", *_KEY_WORDS)
-_FATAL_WORDS = (*_ALWAYS_FATAL_WORDS, "insufficient_quota", "billing", "not found")
+# Fatal even on a 429: no credit left, or a bad key. Retrying cannot help. OpenAI answers an
+# empty balance with 429 "You have no credits remaining" / code insufficient_quota (a real rate
+# limit is rate_limit_exceeded); Anthropic says "credit balance". Retrying those only stalls a run.
+_NO_CREDIT_WORDS = ("credit balance", "no credits remaining", "insufficient_quota")
+_ALWAYS_FATAL_WORDS = (*_NO_CREDIT_WORDS, *_KEY_WORDS)
+_FATAL_WORDS = (*_ALWAYS_FATAL_WORDS, "billing", "not found")
 
 
 def classify_error(e: Exception) -> str:
@@ -298,7 +301,8 @@ def classify_error(e: Exception) -> str:
     "no_temperature": the model refuses a temperature setting -> drop it and retry now
     "rate_limit":     slow down and retry (any 429 / RESOURCE_EXHAUSTED, 529, overloaded)
     "fatal":          retrying can't help (bad key, no credit, bad request, unknown model);
-                      on a 429 only "credit balance" and invalid-key messages are fatal
+                      on a 429 only no-credit messages ("credit balance", "no credits
+                      remaining", insufficient_quota) and invalid-key messages are fatal
     "retry":          probably transient (timeouts, 5xx) -> short backoff and retry
     """
     msg = str(e).lower()
@@ -308,7 +312,7 @@ def classify_error(e: Exception) -> str:
         return "no_temperature"
     if any(w in msg for w in _ALWAYS_FATAL_WORDS):
         return "fatal"
-    # A 429 / RESOURCE_EXHAUSTED is a rate or quota limit: back off and retry, even when the
+    # Any other 429 / RESOURCE_EXHAUSTED is a rate or quota limit: back off and retry, even when the
     # message mentions billing or quota (Gemini's per-minute limits say "check your plan and
     # billing details"). max_retries still bounds it, so a spent daily quota ends as an error.
     if status == 429 or "resource_exhausted" in msg:
@@ -342,12 +346,30 @@ class LLMClient:
     providers: dict[str, Provider] = field(default_factory=dict)  # name -> provider (overrides)
     max_retries: int = 5
     _sleep: Callable[[float], None] = time.sleep  # replaced in tests
+    # The job this client spends for (a run, or a driver's set of runs). Its ledger lines carry
+    # "job": job_id, so job_spend_usd() counts only this job even when other jobs or sessions
+    # share the cache. Default: $ADR_JOB_ID; without one, the job is this client instance.
+    job_id: str | None = None
+    # Stop new (uncached) calls once this job's own spend reaches this. Default:
+    # $ADR_JOB_SPEND_CAP_USD. Separate from weekly_spend_cap_usd, the team's cap on everyone's
+    # calls this week, which is unchanged.
+    job_spend_cap_usd: float | None = None
 
     def __post_init__(self) -> None:
         self.cache_dir = Path(self.cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._ledger = self.cache_dir / "_spend_ledger.jsonl"
         self._lock = threading.Lock()
+        # One lock per cache key: a second identical request waits for the first, then reads its
+        # cached answer. Identical in-flight calls (e.g. a plain and an opinion-trap variant with
+        # the same prompt) cost one API call and get one answer. Within one process only:
+        # separate processes sharing a cache can still both call.
+        self._key_locks: dict[str, threading.Lock] = {}
+        if self.job_id is None:
+            self.job_id = os.environ.get("ADR_JOB_ID") or None
+        if self.job_spend_cap_usd is None and os.environ.get("ADR_JOB_SPEND_CAP_USD"):
+            self.job_spend_cap_usd = float(os.environ["ADR_JOB_SPEND_CAP_USD"])
+        self._spent_here = 0.0  # this instance's own paid calls (the job when job_id is None)
         self._warned_no_price: set[str] = set()
         self._no_temperature: set[str] = set()
 
@@ -386,6 +408,30 @@ class LLMClient:
             if rec.get("usd") and _iso_week(rec["ts"]) == week:
                 total += rec["usd"]
         return total
+
+    def job_spend_usd(self) -> float:
+        """This job's spend: the ledger lines tagged with job_id (any process, any week) or, with
+        no job_id, this client instance's own paid calls. Never other jobs' or sessions' calls."""
+        if self.job_id is None:
+            return self._spent_here
+        if not self._ledger.exists():
+            return 0.0
+        total = 0.0
+        for line in self._ledger.read_text(encoding="utf-8").splitlines():
+            rec = json.loads(line)
+            if rec.get("job") == self.job_id and rec.get("usd"):
+                total += rec["usd"]
+        return total
+
+    def _key_lock(self, key: str) -> threading.Lock:
+        with self._lock:
+            return self._key_locks.setdefault(key, threading.Lock())
+
+    @staticmethod
+    def _from_cache(hit: dict[str, Any], model: str, key: str) -> Completion:
+        r = hit["response"]
+        return Completion(r["text"], model, key, True, r["input_tokens"], r["output_tokens"],
+                          r.get("cost_usd"), r.get("finish_reason"))
 
     def _cost(self, spec: ModelSpec, tin: int, tout: int) -> float | None:
         if spec.price_in_per_mtok is None or spec.price_out_per_mtok is None:
@@ -456,24 +502,42 @@ class LLMClient:
         key = cache_key(spec, request)
         hit = self.read_cache(key)
         if hit is not None:
-            r = hit["response"]
-            return Completion(
-                r["text"],
-                model,
-                key,
-                True,
-                r["input_tokens"],
-                r["output_tokens"],
-                r.get("cost_usd"),
-                r.get("finish_reason"),
-            )
+            return self._from_cache(hit, model, key)
 
+        with self._key_lock(key):  # one in-flight call per key; identical requests wait here
+            hit = self.read_cache(key)  # the request we waited for has cached its answer
+            if hit is not None:
+                return self._from_cache(hit, model, key)
+            return self._call_and_cache(spec, model, key, request, system, messages,
+                                        temperature, max_tokens, attachments)
+
+    def _call_and_cache(
+        self,
+        spec: ModelSpec,
+        model: str,
+        key: str,
+        request: dict[str, Any],
+        system: str | None,
+        messages: list[Message],
+        temperature: float | None,
+        max_tokens: int,
+        attachments: list[Attachment] | None,
+    ) -> Completion:
+        """The uncached path of complete(): spend checks, the provider call with retries, then
+        the cache file and the ledger line. Called with the key's lock held."""
         if self.weekly_spend_cap_usd is not None:
             spent = self.week_spend_usd()
             if spent >= self.weekly_spend_cap_usd:
                 raise SpendCapExceeded(
                     f"this week's spend ${spent:.2f} reached the cap "
                     f"${self.weekly_spend_cap_usd:.2f}; cached answers still work"
+                )
+        if self.job_spend_cap_usd is not None:
+            job_spent = self.job_spend_usd()
+            if job_spent >= self.job_spend_cap_usd:
+                raise SpendCapExceeded(
+                    f"job {self.job_id or '(this client)'} spent ${job_spent:.2f}, reaching its "
+                    f"cap ${self.job_spend_cap_usd:.2f}; cached answers still work"
                 )
 
         provider = self._provider(model)
@@ -529,8 +593,10 @@ class LLMClient:
                 "created_at": now,
             },
         )
+        entry = {"ts": now, "model": model, "in": tin, "out": tout, "usd": cost}
+        if self.job_id is not None:
+            entry["job"] = self.job_id  # so job_spend_usd() counts only this job's calls
         with self._lock, self._ledger.open("a", encoding="utf-8") as f:
-            f.write(
-                json.dumps({"ts": now, "model": model, "in": tin, "out": tout, "usd": cost}) + "\n"
-            )
+            f.write(json.dumps(entry) + "\n")
+            self._spent_here += cost or 0.0
         return Completion(text, model, key, False, tin, tout, cost, reason)
