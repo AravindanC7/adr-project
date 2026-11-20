@@ -9,7 +9,7 @@ A weekly spend cap stops new (uncached) calls once the week's estimated spend re
 
 Usage:
     client = LLMClient.from_config("configs/models.yaml")
-    out = client.complete("claude-small", [{"role": "user", "content": "Hi"}],
+    out = client.complete("gpt-mini", [{"role": "user", "content": "Hi"}],
                           prompt_version="cp-v1")
     out.text, out.cached, out.cache_key
 

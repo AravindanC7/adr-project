@@ -8,16 +8,36 @@ Live timeline: https://claude.ai/artifact/CoAhT5HJsBkLfWZbdZKFVz
 
 ## Setup
 
+Needs Python 3.10 or newer. macOS's built-in `python3` is 3.9 and won't work.
+
 ```bash
-python3.13 -m venv .venv      # needs Python 3.10+; macOS's built-in python3 is 3.9 and won't work
+python3.13 -m venv .venv      # or python3.12, python3.11, ...; check with: python --version
 source .venv/bin/activate
-# Check with: python --version (must be 3.10 or newer)
-pip install -e ".[dev]"                                   # core + pytest + ruff
+pip install -e ".[dev,server,plot,browser]"               # core + pytest + ruff + web page + plots + Playwright
+python -m playwright install chromium                     # once: Chromium (~450 MB) + headless shell (~290 MB)
 pip install -e ".[anthropic,openai]"                      # only the providers you use
-cp .env.example .env                                      # add API keys
-cp configs/models.example.yaml configs/models.yaml        # pick models, prices, spend cap
-pytest                                                    # all tests should pass
+cp .env.example .env                                      # add API keys here, nowhere else
+pytest                                                    # all tests should pass (about 8 min)
 ```
+
+Windows (PowerShell):
+
+```powershell
+py -3.12 -m venv .venv                                    # any installed 3.10+ works (py -0 lists them)
+.venv\Scripts\Activate.ps1                                # Git Bash: source .venv/Scripts/activate
+pip install -e ".[dev,server,plot,browser]"
+python -m playwright install chromium
+pip install -e ".[anthropic,openai]"
+Copy-Item .env.example .env
+pytest
+```
+
+`configs/models.yaml` (team models, prices, spend cap, held-out model) is tracked in git: use it
+as is and don't copy the example over it. `configs/models.example.yaml` mirrors it for reference.
+
+Tests that need an extra are skipped, not failed, when it is missing: 14 need `fastapi`
+(`.[server]`), 1 needs `matplotlib` (`.[plot]`), and `tests/test_frontend_copy.py` needs
+`.[browser]` plus the Chromium download.
 
 ## Status (main, Nov 16)
 
@@ -50,25 +70,26 @@ mechanism injection (PR #1, #6) and paper skeleton (PR #18).
 
 ```bash
 # Copy-paste attacker on 4 handwritten items with stub traps, fully offline:
-python scripts/run_copy_paste.py --stub --fake
+python scripts/run_copy_paste.py --stub --fake --run-id stub-cp
 
 # Same, against one real model from configs/models.yaml (costs a few cents at most):
-python scripts/run_copy_paste.py --stub --models claude-small
+python scripts/run_copy_paste.py --stub --models gpt-mini
 
 # Document-upload attacker: the 4 items as one PDF with invisible traps (same flags):
-python scripts/run_doc_upload.py --stub --fake
+python scripts/run_doc_upload.py --stub --fake --run-id stub-du
 
 # Browser-agent attacker: a model fills in the real web page, reading it as text or as the
 # accessibility tree (needs the server and browser extras):
 python scripts/run_browser_agent.py --stub --fake --observe text   # or --observe a11y
 
-# Router vs early baselines on SYNTHETIC data (about 20 s):
+# Router vs early baselines on SYNTHETIC data (about 20-100 s, depending on the machine):
 python scripts/router_synthetic_demo.py
 python scripts/router_synthetic_demo.py --passive     # also observe behaviour on every item
 
-# Replay the router and baselines on logged outcomes (a smoke test on our 4 items so far):
+# Replay the router and baselines on logged outcomes. Smoke test on the 4 stub items, using the
+# outcome tables of the two --stub --fake runs above:
 python scripts/run_replay.py --stub \
-    --outcomes results/outcomes/first-real-L0.parquet results/outcomes/first-real-du-L0.parquet
+    --outcomes results/outcomes/stub-cp.parquet results/outcomes/stub-du.parquet
 # add --compare to run the router and baselines 1-4 on the same respondents and write
 # comparison.csv / comparison.md / budget_curve.csv; then plot the budget curve:
 python scripts/run_replay.py --synthetic quiz --compare --n 500 --run-id budget-synthetic-quiz
@@ -108,8 +129,11 @@ ADR_STUB_MECHANISMS=1 uvicorn server.app:app          # with the stub decoy + ca
 # Router scoring on the live server (#43): ADR_MAP=<FailureMap JSON>; unset = empty map
 python scripts/make_demo_map.py                       # SYNTHETIC demo map -> results/failure_map/demo_synthetic.json
 ADR_MAP=results/failure_map/demo_synthetic.json ADR_PICK=router ADR_DEBUG_STATE=1 uvicorn server.app:app
+# PowerShell sets the variables first (they stay set for that window):
+#   $env:ADR_STUB_MECHANISMS="1"; uvicorn server.app:app
+#   $env:ADR_MAP="results/failure_map/demo_synthetic.json"; $env:ADR_PICK="router"; $env:ADR_DEBUG_STATE="1"; uvicorn server.app:app
 
-# Browser test that copied text equals copy_text (needs a ~150 MB Chromium, once):
+# Browser test that copied text equals copy_text (Chromium ~450 MB + headless shell ~290 MB, once):
 pip install -e ".[browser]" && python -m playwright install chromium
 pytest tests/test_frontend_copy.py                    # skipped if Playwright isn't installed
 ```
