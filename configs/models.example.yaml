@@ -1,4 +1,6 @@
-# Copy to configs/models.yaml and fill in at kickoff.
+# Reference copy of configs/models.yaml (which is tracked in git: don't overwrite it with this).
+# Use it to see the fields, or as a starting point for a model list of your own.
+# API keys never go here: put them in .env (copy .env.example).
 # - `name` is our short label; it goes into the outcome table's `model` column.
 # - `provider` is one of: anthropic, openai, google, openai_compatible.
 # - `model_id` is the exact API model string. Check the provider's docs; don't guess.
@@ -8,32 +10,32 @@
 weekly_spend_cap_usd: 25.0
 
 models:
-  - name: claude-small
+  - name: claude-haiku
     provider: anthropic
     model_id: claude-haiku-5-5
-    price_in_per_mtok: null
-    price_out_per_mtok: null
-    heldout: true   # the held-out model (claude-haiku, team decision Nov 17): final evaluation only
+    price_in_per_mtok: 0.10
+    price_out_per_mtok: 0.50
+    heldout: true   # the held-out model (team decision Nov 17): final --final evaluation only
 
-  - name: gpt-small
+  - name: gpt-mini
     provider: openai
-    model_id: "<fill in at kickoff>"
-    price_in_per_mtok: null
-    price_out_per_mtok: null
+    model_id: gpt-5.4-mini-2026-03-17
+    price_in_per_mtok: 0.75
+    price_out_per_mtok: 4.50
     heldout: false
+
+  - name: gemini-flash
+    provider: google
+    model_id: gemini-3.5-flash
+    price_in_per_mtok: 1.50
+    price_out_per_mtok: 9.00
+    heldout: false  # not used: $50 prepay minimum (Nov 17)
 
   - name: open-weight
     provider: openai_compatible
-    model_id: "<e.g. a Qwen or Llama instruct model on your server>"
-    base_url_env: OPEN_WEIGHT_BASE_URL
+    model_id: "<run `ollama list` and put the model name here>"
+    base_url_env: OPEN_WEIGHT_BASE_URL   # names of .env variables, not the values
     api_key_env: OPEN_WEIGHT_API_KEY
     price_in_per_mtok: 0.0
     price_out_per_mtok: 0.0
     heldout: false
-
-  - name: gemini-small
-    provider: google
-    model_id: "<fill in at kickoff>"
-    price_in_per_mtok: null
-    price_out_per_mtok: null
-    heldout: false  # not used: $50 prepay minimum (Nov 17)
