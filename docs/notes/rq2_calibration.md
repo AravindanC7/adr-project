@@ -80,6 +80,42 @@ Wrongly cleared AI sessions are, with one exception, sessions the router would n
 
 So clearing (cleared = no evidence of AI found) halves the checks every honest person sees, for the cost of 1 AI session out of 120. The other wrongly cleared AI sessions, mostly L2, give no evidence of AI to any policy: L2's prompt names our checks and the attacker avoids them. That is an RQ4 finding about the attacker, not a cost of clearing.
 
+## Error-analysis pointer: the one session clearing costs
+
+**`composite:gpt-mini:copy_paste:L2g:0`** (composite AI session: copy-paste, generic-warning attacker L2g, sample 0). It is the only AI session the router clears and router_noclear pauses, and it happens under all 4 fold maps. The replay is all 44 honest sessions, reopen, with each policy at its own A_0.01 (router 0.951, router_noclear 0.951). Below are outcomes and log-likelihood contributions (nats) only, with no answer text.
+
+**The session's own logged answers.** The pilot bank's checks are answered from the session's own rows on items of the same type:
+- canary on its 4 open-text items: followed_instruction ×2, clean ×2;
+- style: low ×4, mid ×3, high ×1.
+
+**The router clears it after one open-text item** (pilot open-text item 2):
+
+| fold map | canary | style | score at the clear (B = −2.986) |
+|---|---|---|---|
+| 0, 1 | clean −1.32 | high −2.28 | **−3.60** |
+| 2, 3 | clean −1.32 | high −1.77 | **−3.09** |
+
+Totals per check at the clear: canary −1.32, style −2.28 (maps 0 and 1) or −1.77 (maps 2 and 3). After that the router serves plain items only (cleared = no evidence of AI found).
+
+**router_noclear sees the same first item, then keeps checking:**
+1. Open-text item 1: canary **followed_instruction +3.93**, style low −0.12 to −0.17.
+2. Decoys: picked_decoy +0.52 to +0.63 on every map, plus picked_correct +0.14 / +0.21 on maps 0 and 1.
+
+It pauses at 0.96–1.22, just over its A_0.01 of 0.951. Totals at the pause:
+
+| fold map | canary | style | decoy | score at the pause |
+|---|---|---|---|---|
+| 0 | +2.61 | −2.40 | +0.77 | 0.98 |
+| 1 | +2.61 | −2.42 | +0.76 | 0.96 |
+| 2 | +2.61 | −1.94 | +0.52 | 1.19 |
+| 3 | +2.61 | −1.94 | +0.55 | 1.22 |
+
+**For the error analysis:**
+- **This is the router's clearing decision working as designed.** Two different checks agreed the first open-text answer looked human: the hidden instruction was ignored, and the style score was in the human-leaning bucket. So two-check clearing (twocheck) loses this session too.
+- **The attacker followed the hidden instruction on only half of its answers.** Whether the router catches it depends on which item comes first.
+- **The pause margin is thin.** router_noclear pauses it only just above its threshold (0.96 against 0.951 on map 1).
+- **Style "high" counts as human-leaning evidence in these maps.** Its log-likelihood ratio is negative because the AI sessions rarely land in the high bucket. Worth checking against the style classifier's orientation (Archana).
+
 ## Caveats
 
 - **The real honest pause rate is above nominal at the 1% threshold:** 2 of 44 (4.5%), 2 of 40 without the low-effort sessions. Fewer than 3 real honest sessions reach each threshold, so the 1% tail is extrapolated from 44 sessions.
