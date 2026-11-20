@@ -913,6 +913,10 @@ def run_tasks(
     return {key: done[key] for key in tasks}
 
 
+def _sha256(path: str) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
 def write_inputs(out: Path, args, run_id: str) -> None:
     """inputs.txt next to the outputs: every input file, the settings and the git commit."""
     lines = [
@@ -923,7 +927,7 @@ def write_inputs(out: Path, args, run_id: str) -> None:
         "ai_outcomes:",
         *[f"  {Path(f).resolve()}" for f in args.ai_outcomes],
         "pilot_outcomes:",
-        *[f"  {Path(f).resolve()}" for f in args.pilot_outcomes],
+        *[f"  {Path(f).resolve()}  sha256 {_sha256(f)}" for f in args.pilot_outcomes],
         f"bank: {Path(args.bank).resolve()}",
         f"low_effort: {args.low_effort}",
         f"exclude_sessions: {args.exclude_sessions}",

@@ -5,6 +5,7 @@ All data is SYNTHETIC, pilot-shaped rows built here (not the dry-run data: the b
 data_origin "dry_run"). No model calls.
 """
 
+import hashlib
 import json
 import random
 import subprocess
@@ -906,7 +907,10 @@ def test_jobs_gives_identical_outputs(tmp_path):
         b = json.loads((par / "steps" / name).read_text())
         assert a["summary"] == b["summary"] and a["seed"] == b["seed"] == 0, name
         assert a["fingerprint"] == b["fingerprint"]  # --jobs is not a setting
-    assert (par / "inputs.txt").exists() and "ai_outcomes:" in (par / "inputs.txt").read_text()
+    inputs = (par / "inputs.txt").read_text()
+    assert "ai_outcomes:" in inputs
+    digest = hashlib.sha256((tmp_path / "pilot.parquet").read_bytes()).hexdigest()
+    assert f"pilot.parquet  sha256 {digest}" in inputs  # the pilot file's hash is recorded
 
 
 def test_resume_reruns_only_missing_steps_and_refuses_other_settings(tmp_path):
