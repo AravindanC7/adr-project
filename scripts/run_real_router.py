@@ -65,7 +65,8 @@ from adr.contracts import (
     read_outcomes,
 )
 from adr.contracts.outcome import utc_now
-from adr.harness.copy_paste import _git_commit, plain_variant
+from adr.harness.copy_paste import plain_variant
+from adr.harness.provenance import git_state
 from adr.harness.registry import get_mechanism
 from adr.replay.compare import BETAS
 from adr.replay.composite import add_attacker_variant, check_allowed, join_ai_sessions
@@ -306,6 +307,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    git = git_state()  # the code that runs: HEAD + dirty flag, read at the START
     global _FINGERPRINT
     _FINGERPRINT = run_fingerprint(
         sys.argv[1:],
@@ -695,7 +697,7 @@ def main() -> None:
                 "policies": list(COMPARE),
                 "budget_curve_betas": [r["beta"] for r in curve if r["policy"] == "router"],
                 "n_boot": args.boot,
-                "git_commit": _git_commit(),
+                **git,
                 "created_at": utc_now(),
             },
             sort_keys=False,
@@ -853,7 +855,7 @@ def _jsonable(obj):
 
 def run_fingerprint(argv: list[str], files: list[str]) -> str:
     """Settings + inputs: the command line without the NOT_SETTINGS flags, plus each input file's
-    size and modification time, plus the git commit."""
+    size and modification time, plus the git state (commit and dirty flag)."""
     args, skip = [], False
     for a in argv:
         if a in NOT_SETTINGS:
@@ -867,7 +869,7 @@ def run_fingerprint(argv: list[str], files: list[str]) -> str:
     for f in sorted(set(files)):
         st = Path(f).stat()
         stats.append((str(Path(f).resolve()), st.st_size, int(st.st_mtime)))
-    blob = json.dumps({"argv": args, "inputs": stats, "git": _git_commit()}, sort_keys=True)
+    blob = json.dumps({"argv": args, "inputs": stats, "git": git_state()}, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
@@ -937,7 +939,7 @@ def write_inputs(out: Path, args, run_id: str) -> None:
     """inputs.txt next to the outputs: every input file, the settings and the git commit."""
     lines = [
         f"run_id: {run_id}",
-        f"git_commit: {_git_commit()}",
+        *[f"{k}: {v}" for k, v in git_state().items()],  # git_commit, git_dirty
         f"fingerprint: {_FINGERPRINT}",
         "command: " + " ".join(sys.argv),
         "ai_outcomes:",

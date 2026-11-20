@@ -1,0 +1,30 @@
+run_id: b5-cp-L0-gpt-mini-s5
+models:
+- gpt-mini
+attacker_level: L0
+n_samples: 5
+temperature: 0.7
+max_tokens: 300
+persona: a 34-year-old office manager from Ohio with a two-year college degree, who
+  answers surveys quickly and casually
+max_workers: 4
+results_dir: results/baseline5
+note: 'baseline 5: published survey traps'
+prompt_version: cp-v1
+mode: copy_paste
+assessment_id: baseline5-published-traps
+n_items: 25
+n_variants: 25
+mechanisms: []
+model_ids:
+  gpt-mini: gpt-5.4-mini-2026-03-17
+heldout_models: []
+git_commit: e34b6da
+finished_at: '2026-11-18T05:00:45+00:00'
+n_jobs: 125
+n_rows: 125
+n_errors: 0
+n_skipped_observations: 0
+skipped_observations: {}
+stopped_for_budget: false
+n_truncated_replies: 0

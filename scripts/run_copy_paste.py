@@ -28,6 +28,7 @@ from adr.contracts import Assessment, Item, RenderedItem
 from adr.contracts.io import read_jsonl
 from adr.harness.copy_paste import CopyPasteConfig, plain_variant, run_copy_paste
 from adr.harness.llm_client import FakeProvider, LLMClient, ModelSpec
+from adr.harness.prompts import PROMPT_VERSION, SYSTEM_VARIANTS
 from adr.harness.registry import load_mechanisms
 from adr.mechanisms.style import StyleMechanism, load_style_profile
 
@@ -57,7 +58,12 @@ def main() -> None:
     )
     ap.add_argument("--level", default="L0", choices=["L0", "L1", "L2", "L3", "L4"],
                     help="L3 = L1 prompt + one retry after a flagged answer")
+    ap.add_argument("--system-variant", choices=sorted(SYSTEM_VARIANTS),
+                    help="replace the level's system prompt with a named variant, e.g.\n"
+                         "L2-generic (with --level L2): warns about hidden instructions, names no check")
     ap.add_argument("--samples", type=int, default=1)
+    ap.add_argument("--first-sample", type=int, default=0,
+                    help="index of the first sample (add samples to an earlier run)")
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--run-id")
@@ -114,8 +120,12 @@ def main() -> None:
         models=models,
         attacker_level=args.level,
         n_samples=args.samples,
+        first_sample=args.first_sample,
         temperature=args.temperature,
         max_workers=args.workers,
+        system_variant=args.system_variant,
+        prompt_version=(SYSTEM_VARIANTS[args.system_variant][1] if args.system_variant
+                        else PROMPT_VERSION),
     )
     rows = run_copy_paste(client, assessment, items, variants, mechanisms, cfg)
 

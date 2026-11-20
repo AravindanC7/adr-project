@@ -97,7 +97,7 @@ def test_every_eligible_question_carries_its_check(traps):
     assert [bool(it["aux"]) for it in quiz] == [True, True, False, True]
     assert [bool(it["passage"]) for it in quiz] == [False, False, False, True]
     assert [bool(it["aux"]) for it in survey] == [True, False, False, False, False]
-    assert quiz[0]["aux"]["at"] == "after_stem" and quiz[0]["aux"]["style"] == "clip"
+    assert quiz[0]["aux"]["at"] == "after_stem" and quiz[0]["aux"]["style"] == "clip_aria"
     assert "marigold" in survey[0]["aux"]["text"]
     # Only the hidden text itself, never the decoy index or the answer key behind it.
     assert "decoy_option_index" not in json.dumps(quiz) and "canary_token" not in json.dumps(survey)
@@ -130,6 +130,20 @@ def test_answers_are_scored_by_the_check_they_carried(traps):
     step = respond(traps, step, "I like the people. marigold0").json()
     history = traps.get(f"/session/{step['session_id']}").json()["history"]
     assert history[0][1] == "followed_instruction"
+
+
+def _first_aux_style(app):
+    step = TestClient(app).post("/session/start", json={"assessment_id": "stub-quiz"}).json()
+    return step["item"]["aux"]["style"]
+
+
+def test_default_hiding_style_is_clip_aria(monkeypatch):
+    # Safe for screen-reader users; the final evaluation and the pilot pass clip explicitly.
+    monkeypatch.delenv("ADR_HIDE", raising=False)
+    assert _first_aux_style(create_app(mechanisms={"decoy": StubDecoy()})) == "clip_aria"
+    assert _first_aux_style(create_app(mechanisms={"decoy": StubDecoy()}, hide="clip")) == "clip"
+    monkeypatch.setenv("ADR_HIDE", "clip")  # what scripts/run_pilot.ps1 sets
+    assert _first_aux_style(create_app(mechanisms={"decoy": StubDecoy()})) == "clip"
 
 
 @pytest.mark.parametrize("hide", ["clip", "clear", "clip_aria"])
@@ -292,7 +306,7 @@ def test_an_unscorable_answer_counts_as_shown_with_no_evidence(monkeypatch, tmp_
 
 
 def test_the_reading_floor_counts_the_items_passage(tmp_path, monkeypatch):
-    # A real Item with a passage, through the server: 40 + 5 words -> a 5500 ms floor.
+    # A real Item with a passage, through the server: 40 + 5 words -> a 3000 ms floor.
     monkeypatch.setenv("ADR_DEBUG_STATE", "1")
     bank = tmp_path / "bank.json"
     item = {
@@ -316,7 +330,7 @@ def test_the_reading_floor_counts_the_items_passage(tmp_path, monkeypatch):
     shown = client.post("/session/start", json={"assessment_id": "p"}).json()["item"]
     assert shown["passage"] == item["passage"]  # sent with the visible item
     outcomes = []
-    for ms in (3000, 6000):  # enough for the stem alone; enough for passage + stem
+    for ms in (2000, 6000):  # enough for the stem alone; enough for passage + stem
         step = client.post("/session/start", json={"assessment_id": "p"}).json()
         step = respond(client, step, 0, ms=ms).json()
         history = client.get(f"/session/{step['session_id']}").json()["history"]

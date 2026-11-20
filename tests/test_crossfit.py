@@ -946,3 +946,21 @@ def test_run_real_router_neg_floor_frac_reaches_every_router_row(tmp_path):
     assert proc.returncode == 0, proc.stderr[-3000:]
     cfg = yaml.safe_load((tmp_path / "real-router" / "r" / "config.yaml").read_text())
     assert cfg["router_config"]["neg_floor_frac"] == 0.65
+
+
+def test_run_real_router_config_records_the_git_state_after_build_parser(tmp_path):
+    """After the build_parser() refactor the run config still records the code that ran, as main
+    does: git_state() (HEAD + tracked-files dirty flag) read when the run starts."""
+    from adr.harness.provenance import git_state
+
+    _files(tmp_path)
+    proc = subprocess.run(
+        _cmd(tmp_path), cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=False
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    cfg = yaml.safe_load((tmp_path / "real-router" / "r" / "config.yaml").read_text())
+    assert {"git_commit", "git_dirty"} <= set(cfg)
+    expected = git_state(ROOT)
+    assert cfg["git_commit"] == expected["git_commit"]
+    assert cfg["git_dirty"] == expected["git_dirty"]
+    assert isinstance(cfg["git_dirty"], bool)

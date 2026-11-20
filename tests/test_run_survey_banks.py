@@ -50,3 +50,66 @@ def test_rescore_applies_the_pair_rule_per_session():
                    ("s2", "ipip:e1"): "plausible"}  # s2: neutral -> e2 has no row
     assert changes == {"opinion_trap: plausible -> contradiction": 1,
                        "opinion_trap: plausible -> None": 1}
+
+
+# ---------------------------------------------------------------- --level / --system-variant
+import pytest
+
+from adr.contracts import Assessment
+from adr.harness.copy_paste import CopyPasteConfig, run_copy_paste
+from adr.harness.doc_upload import DocUploadConfig, run_doc_upload
+from adr.harness.llm_client import FakeProvider, LLMClient, ModelSpec
+from adr.harness.prompts import SYSTEM_BY_LEVEL, SYSTEM_VARIANTS
+from scripts.run_survey_banks import level_settings
+
+
+@pytest.mark.parametrize("level, variant, mode, version", [
+    ("L0", None, "cp", "cp-v1"), ("L0", None, "du", "du-v1"),
+    ("L2", None, "cp", "cp-v1"), ("L2", None, "du", "du-v1"),           # RQ4's L2 versions
+    ("L2", "L2-generic", "cp", "cp-v1+l2-generic-v1"),
+    ("L2", "L2-generic", "du", "du-v1+l2-generic-v1"),
+])
+def test_level_settings_use_rq4_prompt_versions(level, variant, mode, version):
+    assert level_settings(level, variant, mode) == {
+        "attacker_level": level, "system_variant": variant, "prompt_version": version}
+
+
+@pytest.mark.parametrize("level, variant", [("L1", None), ("L0", "L2-generic")])
+def test_level_settings_reject_other_levels_and_mismatched_variants(level, variant):
+    with pytest.raises(SystemExit):
+        level_settings(level, variant, "cp")
+
+
+@pytest.mark.parametrize("variant", [None, "L2-generic"])
+@pytest.mark.parametrize("mode", ["cp", "du"])
+def test_l2_settings_reach_the_model_and_the_rows(tmp_path, variant, mode):
+    seen = []
+
+    def reply(system, messages, attachments=None):
+        seen.append(system)
+        return "Q1: 4\nQ2: 0" if attachments else "4"
+
+    client = LLMClient(models={"fake": ModelSpec("fake", "fake", "fake-v1", 0.0, 0.0)},
+                       cache_dir=tmp_path / "cache", providers={"fake": FakeProvider(reply)})
+    a = Assessment(assessment_id="s", title="S", assessment_type="survey",
+                   item_ids=["ipip:e1", "ipip:e2"])
+    items = {i: ITEMS[i] for i in a.item_ids}
+    variants = {i: [trap(i)] for i in a.item_ids}
+    settings = level_settings("L2", variant, mode)
+    from adr.harness.registry import load_mechanisms
+
+    mechs = load_mechanisms(["opinion_trap"])
+    if mode == "cp":
+        cfg = CopyPasteConfig(run_id="r", models=["fake"], n_samples=2, first_sample=3,
+                              temperature=0.7, results_dir=str(tmp_path), **settings)
+        rows = run_copy_paste(client, a, items, variants, mechs, cfg)
+    else:
+        cfg = DocUploadConfig(run_id="r", models=["fake"], n_samples=2, temperature=0.7,
+                              results_dir=str(tmp_path), **settings)
+        rows = run_doc_upload(client, a, items, variants, mechs, cfg)
+    expected = SYSTEM_VARIANTS[variant][2] if variant else SYSTEM_BY_LEVEL["L2"]
+    assert seen and set(seen) == {expected}
+    assert {r.attacker_level for r in rows} == {"L2"}
+    assert {r.prompt_version for r in rows} == {settings["prompt_version"]}
+    if mode == "cp":  # samples 3 and 4: first_sample still works with a level / variant
+        assert {r.session_id.rsplit(":", 1)[1] for r in rows} == {"3", "4"}

@@ -43,11 +43,17 @@ from adr.contracts import (
     write_outcomes,
 )
 from adr.contracts.outcome import utc_now
-from adr.harness.copy_paste import _git_commit, observe, plain_variant
+from adr.harness.copy_paste import observe, plain_variant
 from adr.harness.llm_client import LLMClient, SpendCapExceeded
 from adr.harness.parse import parse_answer
 from adr.harness.pdf_render import render_assessment_pdf
-from adr.harness.prompts import DEFAULT_PERSONA, DOC_PROMPT_VERSION, build_doc_prompt
+from adr.harness.prompts import (
+    DEFAULT_PERSONA,
+    DOC_PROMPT_VERSION,
+    DOC_VARIANT_PROMPT_VERSION,
+    build_doc_prompt,
+)
+from adr.harness.provenance import git_state
 
 
 @dataclass
@@ -64,6 +70,9 @@ class DocUploadConfig:
     results_dir: str = "results"
     note: str = ""
     prompt_version: str = field(default=DOC_PROMPT_VERSION)
+    # a SYSTEM_VARIANTS name (e.g. "L2-generic"): replaces the level's system prompt; set
+    # prompt_version to DOC_VARIANT_PROMPT_VERSION[name] so its cache entries and rows stay apart
+    system_variant: str | None = None
 
 
 @dataclass
@@ -157,8 +166,17 @@ def run_doc_upload(
     build_doc_prompt(assessment.assessment_type, 1, cfg.attacker_level, cfg.persona)
     for m in cfg.models:
         client.spec(m)  # fail fast on an unknown model
+    if cfg.n_samples < 1:
+        raise ValueError(f"n_samples must be at least 1, got {cfg.n_samples}")
+    git = git_state()  # the code that runs: HEAD + dirty flag, read at the START
     if cfg.n_samples > 1 and not cfg.temperature:
         raise ValueError("n_samples > 1 with temperature 0 repeats the same answer; raise it")
+    if cfg.system_variant is not None:
+        build_doc_prompt(assessment.assessment_type, 1, cfg.attacker_level, cfg.persona,
+                         cfg.system_variant)  # the variant must belong to this level
+        if cfg.prompt_version != DOC_VARIANT_PROMPT_VERSION[cfg.system_variant]:
+            raise ValueError(f"{cfg.system_variant} needs prompt_version="
+                             f"{DOC_VARIANT_PROMPT_VERSION[cfg.system_variant]!r}")
     for item_id in assessment.item_ids:
         for rendered in variants.get(item_id) or []:
             if rendered.item_id != item_id:
@@ -185,7 +203,8 @@ def run_doc_upload(
 
     def work(job: _Job):
         system, messages = build_doc_prompt(
-            assessment.assessment_type, len(job.doc.questions), cfg.attacker_level, cfg.persona
+            assessment.assessment_type, len(job.doc.questions), cfg.attacker_level, cfg.persona,
+            cfg.system_variant,
         )
         try:
             out = client.complete(
@@ -281,7 +300,7 @@ def run_doc_upload(
         "mechanisms": sorted(mechanisms),
         "model_ids": {m: client.spec(m).model_id for m in cfg.models},
         "heldout_models": [m for m in cfg.models if client.spec(m).heldout],
-        "git_commit": _git_commit(),
+        **git,
         "finished_at": utc_now(),
         "n_jobs": len(jobs),
         "n_rows": len(rows),
