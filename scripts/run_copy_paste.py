@@ -2,7 +2,7 @@
 
 Quick checks (no data needed yet; uses the 4 handwritten test items and stub traps):
     python scripts/run_copy_paste.py --stub --fake                   # offline, no API keys
-    python scripts/run_copy_paste.py --stub --models claude-small    # one real model
+    python scripts/run_copy_paste.py --stub --models gpt-mini        # one real model
 
 Real run, once Archana's loaders and mechanisms exist:
     python scripts/run_copy_paste.py --assessment data/processed/quiz_slice.json \
