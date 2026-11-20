@@ -30,6 +30,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from adr.analysis import style as figstyle
+from adr.analysis.bootstrap import two_level_bootstrap
 from adr.contracts import read_outcomes
 
 MODEL = "gpt-mini"
@@ -46,28 +48,6 @@ GROUPS = [  # (column suffix / key, legend label, filter on knows)
 ]
 N_BOOT = 2000
 SEED = 576
-
-
-def two_level_bootstrap(per_item: list[np.ndarray], n_boot: int, rng) -> np.ndarray:
-    """Bootstrap rates: resample items, then each sampled item's observations (sessions).
-
-    Items may have different numbers of observations; an item with one observation always
-    contributes that value. An empty group (no items) gives NaN for every replicate."""
-    per_item = [np.asarray(a, dtype=float) for a in per_item if len(a)]
-    n_items = len(per_item)
-    if n_items == 0:
-        return np.full(n_boot, np.nan)
-    n_obs = np.array([len(a) for a in per_item])
-    width = int(n_obs.max())
-    padded = np.full((n_items, width), np.nan)
-    for i, a in enumerate(per_item):
-        padded[i, : len(a)] = a
-    items = rng.integers(0, n_items, size=(n_boot, n_items))
-    k = n_obs[items]  # observations available for each sampled item
-    pick = np.floor(rng.random((n_boot, n_items, width)) * k[..., None]).astype(int)
-    values = padded[items[..., None], pick]
-    mask = np.arange(width)[None, None, :] < k[..., None]  # draw n_i sessions for item i
-    return np.where(mask, values, 0.0).sum(axis=(1, 2)) / mask.sum(axis=(1, 2))
 
 
 def compute(outcomes_dir: Path, difficulty: Path, n_boot: int, seed: int) -> pd.DataFrame:
@@ -112,20 +92,8 @@ def plot(table: pd.DataFrame, out_dir: Path) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    plt.rcParams.update(
-        {
-            "font.family": "serif",
-            "font.serif": ["Times New Roman", "Times", "Nimbus Roman", "DejaVu Serif"],
-            "font.size": 7.5,
-            "axes.labelsize": 7.5,
-            "xtick.labelsize": 7,
-            "ytick.labelsize": 7,
-            "legend.fontsize": 6.8,
-            "pdf.fonttype": 42,
-            "ps.fonttype": 42,
-        }
-    )
-    ink, muted, grid = "#222222", "#555555", "#DDDDDD"
+    figstyle.apply(plt)
+    ink, muted, grid = figstyle.INK, figstyle.MUTED, figstyle.GRID
     # Okabe-Ito (colour-blind safe), plus hatching so the bars survive greyscale printing.
     style = {
         "all": {"color": "#6E6E6E", "hatch": None},
@@ -170,12 +138,7 @@ def plot(table: pd.DataFrame, out_dir: Path) -> None:
     ax.set_yticks([0, 25, 50, 75, 100])
     ax.yaxis.grid(True, color=grid, linewidth=0.5, zorder=0)
     ax.set_axisbelow(True)
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    for side in ("left", "bottom"):
-        ax.spines[side].set_color(muted)
-        ax.spines[side].set_linewidth(0.6)
-    ax.tick_params(colors=muted, width=0.6, length=2.5)
+    figstyle.tidy_axes(ax)
     ax.legend(
         loc="upper center",
         bbox_to_anchor=(0.5, 1.2),

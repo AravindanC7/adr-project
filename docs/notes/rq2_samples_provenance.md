@@ -53,11 +53,23 @@ the same sha256 before and after the commit.
 **What `config.yaml` records, and why it is not faa5262.** The harness's `git_commit` is
 `git rev-parse --short HEAD` in the *current directory*. The runs were launched from the main
 checkout (so they write next to the existing samples) using the worktree's scripts. So every
-new `config.yaml` has `git_commit: 0fe82d1` (inferred from the code while the runs were going;
-checked against the finished configs in the follow-up commit), which is the main checkout's HEAD (`arav/survey-runs`) and
+new `config.yaml` has `git_commit: 0fe82d1` (checked: all ten finished configs say so), which is the main checkout's HEAD (`arav/survey-runs`) and
 not the code that ran. There is **no dirty flag** in the configs: the harness doesn't record
 one. Read `git_commit` in these ten configs as "the checkout the runs were launched from", and
 take the code from faa5262.
+
+The same correction in machine-readable form is `rq2_samples_provenance.json` (next to this note).
+For every run id it lists `recorded_commit` (0fe82d1, as in `config.yaml`, which is not changed)
+and `actual_code_commit` (faa5262), plus each `config.yaml`'s sha256. It also gives the SHA-256 of
+the three runner files faa5262 changed (`adr/harness/copy_paste.py`, `scripts/run_copy_paste.py`,
+`scripts/run_survey_banks.py`), at faa5262 and at 0fe82d1.
+
+**Bundle v2.** `drive_uploads/v1-L0-gpt-mini-rq2-samples-2026-11-18-v2.zip`, sha256
+`bdb42e4db01b674b1b9903d1a3a77f4293967484968b93e7405636410e6ac4bf`.
+It holds the same ten runs as the original bundle (96 files, byte-identical), plus this
+note and the JSON (98 files). The original `v1-L0-gpt-mini-rq2-samples-2026-11-18.zip`
+(sha256 `9e6abc17…10f41e4`) is kept unchanged. The copies of this note and the JSON inside v2
+predate this paragraph, because a file can't contain the checksum of the zip it's in.
 
 ## Reproduction check before spending
 
@@ -80,6 +92,35 @@ sessions `:5`…`:19`, and the upload run with `--samples 20 --temperature 0.7` 
 Cost was estimated from the `cost_usd` of the existing runs' cache entries, with every response
 row priced as its own call so the race's duplicate calls are included. Upper bound: $3.51 for
 all ten runs (cap $5).
+
+## Outcome (checked after the runs finished)
+
+- All ten runs: 0 errors, 0 truncated replies, no spend-cap stop, `models: [gpt-mini]`,
+  `heldout_models: []`, `git_commit: 0fe82d1`. Copy-paste configs record `first_sample: 5,
+  n_samples: 15`; upload configs record `n_samples: 20, temperature: 0.7`.
+- Spend: about **$3.37**, summed from the `cost_usd` of the new cache entries (ipip/gss race
+  duplicates add at most a few cents).
+- Rescore: only the six new survey-bank runs, with
+  `run_survey_banks.py rescore --runs BANK=RUN_ID ...` (the default style profile and IPIP pair
+  rule, as for the existing runs). ipip copy-paste 1500 → 1465 rows (80 contradiction, 35 no
+  row); ipip upload 2000 → 1863 (9 contradiction, 137 no row); gss and assignment unchanged. The
+  existing runs' outcome files are byte-identical before and after.
+- Samples per bank, checked with `join_ai_sessions` (`adr/replay/composite.py`). Copy-paste uses
+  the `-s5` run plus the `-s5-19` run; upload uses only the `-t07-s20` run. Every (mode, bank,
+  sample) comes from exactly one run, and the join gives 40 composite sessions (20 copy-paste,
+  20 upload) with no missing (sample, bank):
+
+  | bank | copy-paste samples | upload samples |
+  |---|---|---|
+  | quiz-mmlu-200 | 0–19 (20) | 0–19 (20) |
+  | quiz-arc-200 | 0–19 (20) | 0–19 (20) |
+  | survey-ipip | 0–19 (20) | 0–19 (20) |
+  | survey-gss | 0–19 (20) | 0–19 (20) |
+  | assignment-asurre-train | 0–19 (20) | 0–19 (20) |
+
+- Tests: `tests/test_first_sample.py` covers `first_sample` (new indices are new calls; the same
+  index under another run id is a cache hit) and the driver's `--run-id/--samples/--first-sample/
+  --temperature` and `rescore --runs` options.
 
 ## The plain / opinion-trap cache race (existing ipip and gss runs)
 

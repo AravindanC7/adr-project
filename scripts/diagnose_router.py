@@ -93,14 +93,19 @@ def ai_sessions(router, assessment, items, donors, groups, n) -> list[dict]:
     return out
 
 
-def summarize_ai(name, sessions, A, cap) -> dict:
+def summarize_ai(name, sessions, A, cap, cap_key=lambda m: m) -> dict:
+    """cap_key: SPRTRouter.cap_key. With mech_group_caps, SessionState.contrib is keyed by the
+    GROUP name, so a mechanism's total is read at cap_key(mechanism) (review H6)."""
     mechs = Counter(parse_variant_id(v)[1] for x in sessions for v, o, _ in x["state"].history
                     if parse_variant_id(v)[1] in ACTIVE_MECHANISMS and o != "none")
     scores = np.array([x["state"].score for x in sessions])
     capped = {}
     if cap is not None:
         for m in sorted(mechs):
-            at_cap = [x["state"] for x in sessions if x["state"].contrib.get(m, 0) >= cap - 1e-9]
+            at_cap = [
+                x["state"] for x in sessions
+                if x["state"].contrib.get(cap_key(m), 0) >= cap - 1e-9
+            ]
             capped[m] = {"at_cap": len(at_cap), "below_A": sum(st.score < A for st in at_cap)}
     plain = sum((x["plain_no_value"] for x in sessions), Counter())
     return {
@@ -112,7 +117,7 @@ def summarize_ai(name, sessions, A, cap) -> dict:
             np.quantile(scores, [.1, .25, .5, .75, .9]), 2).tolist(),
         "share_score_at_least_A": round(float(np.mean(scores >= A)), 3),
         "statuses": dict(Counter(x["state"].status for x in sessions)),
-        "mean_contribution": {m: round(statistics.mean(x["state"].contrib.get(m, 0.0)
+        "mean_contribution": {m: round(statistics.mean(x["state"].contrib.get(cap_key(m), 0.0)
                                                        for x in sessions), 2) for m in mechs},
         "capped_but_below_A": capped,
         "plain_before_clearing_by_reason": dict(sorted(plain.items())),
@@ -182,7 +187,8 @@ def main() -> None:
     report["ai_sessions"] = []
     for name, pol in (("router", router), ("all_checks", allc)):
         summary = summarize_ai(name, ai_sessions(pol, assessment, items, donors, ai_groups,
-                                                 args.n_ai), router.A, router.mech_cap)
+                                                 args.n_ai), router.A, router.mech_cap,
+                               router.cap_key)
         report["ai_sessions"].append(summary)
         print(f"-- {name}")
         for key, value in summary.items():
