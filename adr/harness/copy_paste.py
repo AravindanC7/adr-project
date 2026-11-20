@@ -24,7 +24,6 @@ Outputs:
 from __future__ import annotations
 
 import json
-import subprocess
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
@@ -57,6 +56,7 @@ from adr.harness.prompts import (
     build_retry_messages,
     is_flag,
 )
+from adr.harness.provenance import git_state
 
 
 @dataclass
@@ -129,15 +129,6 @@ def _l3_summary(responses: list[dict]) -> dict:
     }
 
 
-def _git_commit() -> str | None:
-    try:
-        return subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, encoding="utf-8", check=True
-        ).stdout.strip()
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def run_copy_paste(
     client: LLMClient,
     assessment: Assessment,
@@ -151,6 +142,7 @@ def run_copy_paste(
     appears in `variants`, plus any passive ones (e.g. style) to score every response."""
     for m in cfg.models:
         client.spec(m)  # fail fast on an unknown model
+    git = git_state()  # the code that runs: HEAD + dirty flag, read at the START
     if cfg.n_samples > 1 and not cfg.temperature:
         raise ValueError("n_samples > 1 with temperature 0 repeats the same answer; raise it")
     if cfg.system_variant is not None:
@@ -299,7 +291,7 @@ def run_copy_paste(
         "mechanisms": sorted(mechanisms),
         "model_ids": {m: client.spec(m).model_id for m in cfg.models},
         "heldout_models": [m for m in cfg.models if client.spec(m).heldout],
-        "git_commit": _git_commit(),
+        **git,
         "finished_at": utc_now(),
         "n_jobs": len(jobs),
         "n_rows": len(rows),

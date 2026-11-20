@@ -8,7 +8,8 @@ only the choice of check differs:
      (plans.FixedPlanRouter).
   4. Random: a random available check for each item.
 
-Baseline 5 (published survey traps, #33) comes later.
+Baseline 5 (published survey traps, #33) is a fixed set of traps scored on its own, not a policy:
+adr/baselines/published_traps.py and scripts/baseline5.py.
 
 Every baseline serves only router.core.eligible_checks() (active mechanisms the item lists in
 eligible_mechanisms), the same rule as the router. Every baseline goes through items in display order and, unlike the router, never clears a

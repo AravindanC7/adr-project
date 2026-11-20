@@ -60,7 +60,8 @@ from adr.contracts import (
     read_outcomes,
 )
 from adr.contracts.outcome import utc_now
-from adr.harness.copy_paste import _git_commit, plain_variant
+from adr.harness.copy_paste import plain_variant
+from adr.harness.provenance import git_state
 from adr.harness.registry import get_mechanism
 from adr.replay.compare import BETAS
 from adr.replay.composite import add_attacker_variant, check_allowed, join_ai_sessions
@@ -274,6 +275,7 @@ def main() -> None:
     ap.add_argument("--results-dir", default="results")
     ap.add_argument("--run-id")
     args = ap.parse_args()
+    git = git_state()  # the code that runs: HEAD + dirty flag, read at the START
     run_id = args.run_id or f"real-router-{datetime.now():%Y%m%d-%H%M%S}"
 
     ai = read_rows(args.ai_outcomes)
@@ -649,7 +651,7 @@ def main() -> None:
                 "policies": list(COMPARE),
                 "budget_curve_betas": [r["beta"] for r in curve if r["policy"] == "router"],
                 "n_boot": args.boot,
-                "git_commit": _git_commit(),
+                **git,
                 "created_at": utc_now(),
             },
             sort_keys=False,

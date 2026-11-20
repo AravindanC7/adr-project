@@ -58,10 +58,10 @@ from adr.contracts import (
     write_outcomes,
 )
 from adr.contracts.outcome import utc_now
-from adr.harness.copy_paste import _git_commit
 from adr.harness.llm_client import LLMClient, SpendCapExceeded
 from adr.harness.parse import parse_answer
 from adr.harness.prompts import BA_PROMPT_VERSION, DEFAULT_PERSONA, build_browser_prompt
+from adr.harness.provenance import git_state
 
 OBSERVE_MODES = ("text", "a11y")
 TYPING_MODES = ("instant", "keys")
@@ -282,6 +282,7 @@ def run_browser_agent(
 
     for m in cfg.models:
         client.spec(m)  # fail fast on an unknown model
+    git = git_state()  # the code that runs: HEAD + dirty flag, read at the START
     if cfg.n_samples > 1 and not cfg.temperature:
         raise ValueError("n_samples > 1 with temperature 0 repeats the same answer; raise it")
     bank = bank_path or os.environ.get("ADR_ITEMS", DEFAULT_BANK)
@@ -354,7 +355,7 @@ def run_browser_agent(
         "model_ids": {m: client.spec(m).model_id for m in cfg.models},
         "heldout_models": [m for m in cfg.models if client.spec(m).heldout],
         "browser": f"chromium {browser_version}",
-        "git_commit": _git_commit(),
+        **git,
         "finished_at": utc_now(),
         "n_sessions": n_sessions,
         "n_rows": len(rows),

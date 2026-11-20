@@ -1,67 +1,88 @@
-% Placeholder entries for works named in AGENTS.md Sections 8 and 16.
-% A "CHECK key:" line above an entry lists fields not yet verified -- confirm against the paper,
-% ACL Anthology or arXiv. (BibTeX allows notes only BETWEEN entries, never inside one.)
-% before submission. Prefer copying the official BibTeX from the ACL Anthology or arXiv page.
+% custom.bib -- 24 entries. Supersedes the Overleaf placeholder bib (19 entries, identical to
+% harshini/paper); every key kept, all fields verified. hohne2025's author, journal, volume,
+% number, pages and DOI are from Harshini's verified BibTeX on PR #36. Checked against the
+% publisher, ACL Anthology or arXiv (Nov 15, 2026); key-level diff against the Overleaf copy
+% posted on PR #36 (Nov 18).
 
-CHECK shekhar2026dope: full title; author list
+@article{westwood2025,
+  title   = {The Potential Existential Threat of Large Language Models to Online Survey Research},
+  author  = {Westwood, Sean J.},
+  journal = {Proceedings of the National Academy of Sciences},
+  year    = {2025},
+  volume  = {122},
+  number  = {47},
+  pages   = {e2518075122},
+  doi     = {10.1073/pnas.2518075122}
+}
+
+@misc{wang2026asurre,
+  title         = {Towards Detecting {AI}-Assisted Responses in Online Surveys},
+  author        = {Wang, Qizhou and Mamaev, Bogdan and Leckie, Christopher},
+  year          = {2026},
+  eprint        = {2609.17317},
+  archivePrefix = {arXiv},
+  note          = {Accepted to {EMNLP} 2026}
+}
+
+@article{wang2023traps,
+  title   = {Safeguarding Crowdsourcing Surveys from {ChatGPT} through Prompt Injection},
+  author  = {Wang, Chaofan and Kernan Freire, Samuel and Zhang, Mo and Wei, Jing and Goncalves, Jorge and Kostakos, Vassilis and Bozzon, Alessandro and Niforatos, Evangelos},
+  journal = {Proceedings of the ACM on Human-Computer Interaction},
+  volume  = {9},
+  number  = {7},
+  pages   = {1--29},
+  year    = {2025},
+  doi     = {10.1145/3757503}
+}
+
+@inproceedings{xu2026soups,
+  title         = {A Penny for Your Prompts: Experiments Detecting and Mitigating {LLM} Usage by Survey Respondents},
+  author        = {Xu, Zane and Malkin, Nathan},
+  booktitle     = {Symposium on Usable Privacy and Security ({SOUPS})},
+  year          = {2026},
+  eprint        = {2607.00403},
+  archivePrefix = {arXiv}
+}
+
+@misc{veselovsky2023artificial,
+  title         = {Artificial Artificial Artificial Intelligence: Crowd Workers Widely Use Large Language Models for Text Production Tasks},
+  author        = {Veselovsky, Veniamin and Horta Ribeiro, Manoel and West, Robert},
+  year          = {2023},
+  eprint        = {2306.07899},
+  archivePrefix = {arXiv}
+}
+
+@article{zhang2025homogenization,
+  title   = {Generative {AI} Meets Open-Ended Survey Responses: Research Participant Use of {AI} and Homogenization},
+  author  = {Zhang, Simone and Xu, Janet and Alvero, AJ},
+  journal = {Sociological Methods \& Research},
+  volume  = {54},
+  number  = {3},
+  pages   = {1197--1242},
+  year    = {2025},
+  doi     = {10.1177/00491241251327130}
+}
+
 @misc{shekhar2026dope,
-  title         = {DoPE},
-  author        = {Shekhar, Ashish Raj and others},
+  title         = {{DoPE}: Decoy Oriented Perturbation Encapsulation Human-Readable, {AI}-Hostile Documents for Academic Integrity},
+  author        = {Shekhar, Ashish Raj and Agarwal, Shiven and Bordoloi, Priyanuj and Shah, Yash and Anvekar, Tejas and Gupta, Vivek},
   year          = {2026},
   eprint        = {2601.12505},
   archivePrefix = {arXiv}
 }
 
-CHECK shekhar2026integrity: full title; author list; exact booktitle, pages
 @inproceedings{shekhar2026integrity,
-  title     = {Integrity Shield},
-  author    = {Shekhar, Ashish Raj and others},
-  booktitle = {Proceedings of EACL 2026: System Demonstrations},
-  year      = {2026}
+  title     = {Integrity Shield A System for Ethical {AI} Use \& Authorship Transparency in Assessments},
+  author    = {Shekhar, Ashish Raj and Agarwal, Shiven and Bordoloi, Priyanuj and Shah, Yash and Anvekar, Tejas and Gupta, Vivek},
+  booktitle = {Proceedings of the 19th Conference of the European Chapter of the Association for Computational Linguistics (Volume 3: System Demonstrations)},
+  pages     = {417--427},
+  year      = {2026},
+  address   = {Rabat, Morocco},
+  publisher = {Association for Computational Linguistics},
+  url       = {https://aclanthology.org/2026.eacl-demo.29/},
+  doi       = {10.18653/v1/2026.eacl-demo.29}
 }
 
-CHECK wang2026asurre: full title (detecting AI-assisted survey responses); first names
-@misc{wang2026asurre,
-  title         = {ASURRE},
-  author        = {Wang and Mamaev and Leckie},
-  year          = {2026},
-  eprint        = {2609.17317},
-  archivePrefix = {arXiv}
-}
-
-CHECK wang2023traps: title (prompt-injection traps in surveys); author list
-@misc{wang2023traps,
-  title         = {TODO},
-  author        = {Wang and others},
-  year          = {2023},
-  eprint        = {2306.08833},
-  archivePrefix = {arXiv}
-}
-
-CHECK hohne2025: title, venue (prompt-injection traps in surveys); author list
-@misc{hohne2025,
-  title  = {TODO},
-  author = {H{\"o}hne and others},
-  year   = {2025}
-}
-
-CHECK westwood2025: title (survey bot passing 99.8% of attention checks); first name; volume, number, pages
-@article{westwood2025,
-  title   = {TODO},
-  author  = {Westwood},
-  journal = {Proceedings of the National Academy of Sciences},
-  year    = {2025}
-}
-
-CHECK xu2026soups: title (LLM use rates across crowd platforms); first names
-@inproceedings{xu2026soups,
-  title     = {TODO},
-  author    = {Xu and Malkin},
-  booktitle = {Symposium on Usable Privacy and Security (SOUPS)},
-  year      = {2026}
-}
-
-CHECK wald1945: verify; verify; verify
 @article{wald1945,
   title   = {Sequential Tests of Statistical Hypotheses},
   author  = {Wald, Abraham},
@@ -69,90 +90,155 @@ CHECK wald1945: verify; verify; verify
   year    = {1945},
   volume  = {16},
   number  = {2},
-  pages   = {117--186}
+  pages   = {117--186},
+  doi     = {10.1214/aoms/1177731118}
 }
 
-CHECK vankrimpen2001: title (sequential person-fit in adaptive testing); verify; journal, volume, pages
+@article{chernoff1959,
+  title   = {Sequential Design of Experiments},
+  author  = {Chernoff, Herman},
+  journal = {The Annals of Mathematical Statistics},
+  year    = {1959},
+  volume  = {30},
+  number  = {3},
+  pages   = {755--770},
+  doi     = {10.1214/aoms/1177706205}
+}
+
+@article{efron1979,
+  title   = {Bootstrap Methods: Another Look at the Jackknife},
+  author  = {Efron, Bradley},
+  journal = {The Annals of Statistics},
+  year    = {1979},
+  volume  = {7},
+  number  = {1},
+  pages   = {1--26},
+  doi     = {10.1214/aos/1176344552}
+}
+
 @article{vankrimpen2001,
-  title   = {TODO},
+  title   = {{CUSUM}-Based Person-Fit Statistics for Adaptive Testing},
   author  = {van Krimpen-Stoop, Edith M. L. A. and Meijer, Rob R.},
+  journal = {Journal of Educational and Behavioral Statistics},
   year    = {2001},
-  journal = {TODO}
+  volume  = {26},
+  number  = {2},
+  pages   = {199--217},
+  doi     = {10.3102/10769986026002199}
 }
 
-CHECK krishna2023paraphrasing: author list; verify
+@inproceedings{greshake2023indirect,
+  title     = {Not What You've Signed Up For: Compromising Real-World {LLM}-Integrated Applications with Indirect Prompt Injection},
+  author    = {Greshake, Kai and Abdelnabi, Sahar and Mishra, Shailesh and Endres, Christoph and Holz, Thorsten and Fritz, Mario},
+  booktitle = {Proceedings of the 16th ACM Workshop on Artificial Intelligence and Security (AISec)},
+  pages     = {79--90},
+  year      = {2023},
+  doi       = {10.1145/3605764.3623985}
+}
+
+@misc{nasr2025,
+  title         = {The Attacker Moves Second: Stronger Adaptive Attacks Bypass Defenses Against {LLM} Jailbreaks and Prompt Injections},
+  author        = {Nasr, Milad and Carlini, Nicholas and Sitawarin, Chawin and Schulhoff, Sander V. and Hayes, Jamie and Ilie, Michael and Pluto, Juliette and Song, Shuang and Chaudhari, Harsh and Shumailov, Ilia and Thakurta, Abhradeep and Xiao, Kai Yuanqing and Terzis, Andreas and Tram{\`e}r, Florian},
+  year          = {2025},
+  eprint        = {2510.09023},
+  archivePrefix = {arXiv}
+}
+
+@inproceedings{zhan2025,
+  title     = {Adaptive Attacks Break Defenses Against Indirect Prompt Injection Attacks on {LLM} Agents},
+  author    = {Zhan, Qiusi and Fang, Richard and Panchal, Henil Shalin and Kang, Daniel},
+  booktitle = {Findings of the Association for Computational Linguistics: {NAACL} 2025},
+  pages     = {7116--7132},
+  year      = {2025},
+  address   = {Albuquerque, New Mexico},
+  publisher = {Association for Computational Linguistics},
+  doi       = {10.18653/v1/2025.findings-naacl.395},
+  editor    = {Chiruzzo, Luis and Ritter, Alan and Wang, Lu},
+  month     = apr,
+  url       = {https://aclanthology.org/2025.findings-naacl.395/}
+}
+
 @inproceedings{krishna2023paraphrasing,
   title     = {Paraphrasing Evades Detectors of {AI}-Generated Text, but Retrieval is an Effective Defense},
-  author    = {Krishna, Kalpesh and others},
+  author    = {Krishna, Kalpesh and Song, Yixiao and Karpinska, Marzena and Wieting, John and Iyyer, Mohit},
   booktitle = {Advances in Neural Information Processing Systems},
-  year      = {2023}
+  year      = {2023},
+  volume    = {36},
+  pages     = {27469--27500}
 }
 
-CHECK liang2023detectors: author list; volume, pages
 @article{liang2023detectors,
   title   = {{GPT} Detectors Are Biased Against Non-Native {E}nglish Writers},
-  author  = {Liang, Weixin and others},
+  author  = {Liang, Weixin and Yuksekgonul, Mert and Mao, Yining and Wu, Eric and Zou, James},
   journal = {Patterns},
-  year    = {2023}
+  volume  = {4},
+  number  = {7},
+  pages   = {100779},
+  year    = {2023},
+  doi     = {10.1016/j.patter.2023.100779}
 }
 
-CHECK land2024magikarp: verify; exact booktitle, pages
 @inproceedings{land2024magikarp,
-  title     = {Fishing for Magikarp: Automatically Detecting Under-trained Tokens in Large Language Models},
+  title     = {Fishing for {Magikarp}: Automatically Detecting Under-trained Tokens in Large Language Models},
   author    = {Land, Sander and Bartolo, Max},
-  booktitle = {Proceedings of EMNLP 2024},
-  year      = {2024}
+  booktitle = {Proceedings of the 2024 Conference on Empirical Methods in Natural Language Processing},
+  year      = {2024},
+  pages     = {11631--11646},
+  doi       = {10.18653/v1/2024.emnlp-main.649}
 }
 
-CHECK nasr2025: title, venue (adaptive attacks break static defenses); verify
-@misc{nasr2025,
-  title  = {TODO},
-  author = {Nasr and others},
-  year   = {2025}
-}
-
-CHECK zhan2025: title, venue (adaptive attacks break static defenses); verify
-@misc{zhan2025,
-  title  = {TODO},
-  author = {Zhan and others},
-  year   = {2025}
-}
-
-CHECK santurkar2023opinionqa: author list; verify
 @inproceedings{santurkar2023opinionqa,
   title     = {Whose Opinions Do Language Models Reflect?},
-  author    = {Santurkar, Shibani and others},
+  author    = {Santurkar, Shibani and Durmus, Esin and Ladhak, Faisal and Lee, Cinoo and Liang, Percy and Hashimoto, Tatsunori},
   booktitle = {Proceedings of the 40th International Conference on Machine Learning (ICML)},
-  year      = {2023}
+  year      = {2023},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {202},
+  pages     = {29971--30004},
+  publisher = {PMLR}
 }
 
-CHECK hendrycks2021mmlu: author list
 @inproceedings{hendrycks2021mmlu,
   title     = {Measuring Massive Multitask Language Understanding},
-  author    = {Hendrycks, Dan and others},
+  author    = {Hendrycks, Dan and Burns, Collin and Basart, Steven and Zou, Andy and Mazeika, Mantas and Song, Dawn and Steinhardt, Jacob},
   booktitle = {International Conference on Learning Representations (ICLR)},
-  year      = {2021}
+  year      = {2021},
+  url       = {https://openreview.net/forum?id=d7KBjmI3GmQ}
 }
 
-CHECK clark2018arc: author list; verify
 @misc{clark2018arc,
   title         = {Think you have Solved Question Answering? Try {ARC}, the {AI2} Reasoning Challenge},
-  author        = {Clark, Peter and others},
+  author        = {Clark, Peter and Cowhey, Isaac and Etzioni, Oren and Khot, Tushar and Sabharwal, Ashish and Schoenick, Carissa and Tafjord, Oyvind},
   year          = {2018},
   eprint        = {1803.05457},
   archivePrefix = {arXiv}
 }
 
-CHECK ipip: cite the IPIP Big Five source the loader uses; verify; verify
-@misc{ipip,
-  title  = {International Personality Item Pool},
-  author = {Goldberg, Lewis R. and others},
-  year   = {TODO}
+@article{ipip,
+  title   = {The {International Personality Item Pool} and the Future of Public-Domain Personality Measures},
+  author  = {Goldberg, Lewis R. and Johnson, John A. and Eber, Herbert W. and Hogan, Robert and Ashton, Michael C. and Cloninger, C. Robert and Gough, Harrison G.},
+  journal = {Journal of Research in Personality},
+  volume  = {40},
+  number  = {1},
+  pages   = {84--96},
+  year    = {2006},
+  doi     = {10.1016/j.jrp.2005.08.007}
 }
 
-CHECK gss: NORC citation for the GSS release the loader uses; verify; verify
 @misc{gss,
-  title  = {General Social Survey},
-  author = {{NORC at the University of Chicago}},
-  year   = {TODO}
+  title        = {General Social Survey, 2018 Cross-Section},
+  author       = {Smith, Tom W. and Davern, Michael and Freese, Jeremy and Morgan, Stephen L.},
+  howpublished = {[Machine-readable data file], {NORC} at the University of Chicago, Chicago},
+  year         = {2018}
+}
+
+@article{hohne2025,
+  title   = {{LLM}-Driven Bot Infiltration: Protecting Web Surveys through Prompt Injections},
+  author  = {H{\"o}hne, Jan Karem and Claassen, Joshua and Wolf, Ben Lasse},
+  journal = {International Journal of Social Research Methodology},
+  year    = {2025},
+  volume  = {29},
+  number  = {6},
+  pages   = {999--1006},
+  doi     = {10.1080/13645579.2025.2598606}
 }
