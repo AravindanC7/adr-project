@@ -39,10 +39,15 @@ metrics.json and config.yaml. --final reads held-out rows, as run_replay does; n
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import multiprocessing
 import sys
+from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 import pandas as pd
@@ -269,11 +274,30 @@ def main() -> None:
         "variants and map cells removed; same folds and split) and write leave_one_out.csv and a "
         "table in comparison.md. Replay only, no model calls",
     )
+    ap.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="run the independent tasks (policies, cap variants, leave-one-check-out steps, "
+        "budget-curve betas) in this many worker processes; results are identical to --jobs 1",
+    )
+    ap.add_argument(
+        "--resume",
+        action="store_true",
+        help="load tasks whose steps/<task>.json already exists in the output folder instead of "
+        "rerunning them (refused if they were made with different settings or inputs)",
+    )
     ap.add_argument("--calibration-frac", type=float, default=CALIBRATION_FRAC)
     ap.add_argument("--split-seed", type=int, default=SPLIT_SEED)
     ap.add_argument("--results-dir", default="results")
     ap.add_argument("--run-id")
     args = ap.parse_args()
+    global _FINGERPRINT
+    _FINGERPRINT = run_fingerprint(
+        sys.argv[1:],
+        [*args.ai_outcomes, *args.pilot_outcomes, args.bank]
+        + [f for f in (args.low_effort, args.exclude_sessions) if f and Path(f).is_file()],
+    )
     run_id = args.run_id or f"real-router-{datetime.now():%Y%m%d-%H%M%S}"
 
     ai = read_rows(args.ai_outcomes)
@@ -433,29 +457,35 @@ def main() -> None:
             v["nominal_fpr"] = NOMINAL_FPR.get(t, float(t[2:]) if t.startswith("A_0") else None)
         return summ
 
-    results: dict[str, dict] = {}
-    for name in COMPARE:
-        results[name] = run(name, cfg)
-        r = results[name]["results"]
-        print(
-            f"  {name:15s} "
-            + "  ".join(
-                f"{t}={v['A']:.2f}: TPR {v['tpr']:.2f}, honest paused {v['honest_pause_rate']:.2f}"
-                for t, v in r.items()
-            )
+    # ---- every independent piece of work is one task; each writes steps/<key>.json when it
+    # finishes, so a crash loses only the tasks in progress, and --resume skips finished ones.
+    # Tasks seed themselves (args.seed), so --jobs N gives exactly the --jobs 1 numbers.
+    out = Path(args.results_dir) / "real-router" / run_id
+    steps_dir = out / "steps"
+    steps_dir.mkdir(parents=True, exist_ok=True)
+    write_inputs(out, args, run_id)
+
+    def loo_context(m: str) -> Context:
+        keep = [x for x in mechanisms if x != m]
+        a_m, items_m, variants_m = load_bank(args.bank, args.assessment_id, keep)
+        human_m = human[human["mechanism"].ne(m)]
+        return Context(
+            a_m,
+            items_m,
+            variants_m,
+            human_m,
+            ai_eval[ai_eval["mechanism"].ne(m)],
+            all_maps(splits.train[splits.train["mechanism"].ne(m)], human_m, folds),
+            tuple(x for x in keep if x in PASSIVE_MECHANISMS),
         )
 
+    tasks: dict[str, Callable[[], dict]] = {}
+    for name in COMPARE:
+        tasks[f"policy-{name}"] = partial(run, name, cfg)
     for v in variants_cap[1:]:  # extra cap designs: the router only, same split and folds;
         # thresholds from the same procedure on this design's own honest scores
-        name = ABLATIONS.get(v, f"router[{v}]")
-        results[name] = run("router", replace(base, **CAP_VARIANTS[v]))
-        r = results[name]["results"]
-        print(
-            f"  {name:15s} "
-            + "  ".join(f"{t}={x['A']:.2f}: TPR {x['tpr']:.2f}" for t, x in r.items())
-        )
-
-    loo: list[dict] = []
+        tasks[f"cap-{v}"] = partial(run, "router", replace(base, **CAP_VARIANTS[v]))
+    loo_plan: list[tuple[str, str]] = []
     dropped_done: list[str] = []
     for m in [x.strip() for x in (args.drop_mechanisms or "").split(",") if x.strip()]:
         if m not in mechanisms:
@@ -465,17 +495,6 @@ def main() -> None:
         if not keep:
             print(f"NOTE: --drop-mechanisms {m}: it is the only check here; skipped")
             continue
-        a_m, items_m, variants_m = load_bank(args.bank, args.assessment_id, keep)
-        human_m = human[human["mechanism"].ne(m)]
-        ctx = Context(
-            a_m,
-            items_m,
-            variants_m,
-            human_m,
-            ai_eval[ai_eval["mechanism"].ne(m)],
-            all_maps(splits.train[splits.train["mechanism"].ne(m)], human_m, folds),
-            tuple(x for x in keep if x in PASSIVE_MECHANISMS),
-        )
         dropped_done.append(m)
         policies = LOO_POLICIES
         if not any(x in ACTIVE_MECHANISMS for x in keep):
@@ -485,30 +504,45 @@ def main() -> None:
                 "best_single and all_checks need an active check, so only the router is rerun"
             )
         for pol in policies:
-            summ = run(pol, cfg, ctx)
-            for t in _ordered(summ):
-                v, ci = summ["results"][t], summ["ci95"][t]
-                loo.append(
-                    {
-                        "dropped": m,
-                        "policy": pol,
-                        "threshold": t,
-                        "A": v["A"],
-                        "tpr": v["tpr"],
-                        "tpr_lo": (ci.get("tpr") or (None, None))[0],
-                        "tpr_hi": (ci.get("tpr") or (None, None))[1],
-                        "checks_per_honest_session": v["checks_per_honest_session"],
-                        "honest_pause_rate": v["honest_pause_rate"],
-                        "nominal_fpr": v["nominal_fpr"],
-                    }
-                )
-            r = summ["results"]
-            print(
-                f"  without {m:12s} {pol:12s} "
-                + "  ".join(
-                    f"{t}: TPR {r[t]['tpr']:.2f}, checks {r[t]['checks_per_honest_session']:.1f}"
-                    for t in _ordered(summ)
-                )
+            loo_plan.append((m, pol))
+            tasks[f"loo-{m}-{pol}"] = partial(_loo_run, run, loo_context, m, pol, cfg)
+    betas = [float(b) for b in args.betas.split(",") if b]
+    for b in betas:
+        tasks[f"beta-{b:g}"] = partial(run, "router", replace(cfg, beta=b))
+
+    done = run_tasks(tasks, steps_dir, args.jobs, args.resume, args.seed)
+
+    results: dict[str, dict] = {name: done[f"policy-{name}"] for name in COMPARE}
+    for v in variants_cap[1:]:
+        results[ABLATIONS.get(v, f"router[{v}]")] = done[f"cap-{v}"]
+    for name, summ in results.items():
+        r = summ["results"]
+        print(
+            f"  {name:15s} "
+            + "  ".join(
+                f"{t}={v['A']:.2f}: TPR {v['tpr']:.2f}, honest paused {v['honest_pause_rate']:.2f}"
+                for t, v in r.items()
+            )
+        )
+
+    loo: list[dict] = []
+    for m, pol in loo_plan:
+        summ = done[f"loo-{m}-{pol}"]
+        for t in _ordered(summ):
+            v, ci = summ["results"][t], summ["ci95"][t]
+            loo.append(
+                {
+                    "dropped": m,
+                    "policy": pol,
+                    "threshold": t,
+                    "A": v["A"],
+                    "tpr": v["tpr"],
+                    "tpr_lo": (ci.get("tpr") or (None, None))[0],
+                    "tpr_hi": (ci.get("tpr") or (None, None))[1],
+                    "checks_per_honest_session": v["checks_per_honest_session"],
+                    "honest_pause_rate": v["honest_pause_rate"],
+                    "nominal_fpr": v["nominal_fpr"],
+                }
             )
 
     def key(a: float) -> str:
@@ -526,15 +560,9 @@ def main() -> None:
         row["checks_per_honest_person_lo"], row["checks_per_honest_person_hi"] = ci or (None, None)
         return row
 
-    curve = [
-        curve_row("router", float(b), run("router", replace(cfg, beta=float(b))))
-        for b in args.betas.split(",")
-        if b
-    ]
+    curve = [curve_row("router", b, done[f"beta-{b:g}"]) for b in betas]
     curve += [curve_row(n, None, results[n]) for n in COMPARE if n != "router"]
 
-    out = Path(args.results_dir) / "real-router" / run_id
-    out.mkdir(parents=True, exist_ok=True)
     if missing_keys is not None:
         missing_keys.to_csv(out / "missing_keys.csv", index=False)
     findings = cap_findings(results["router"], cfg, mechanisms)
@@ -636,6 +664,8 @@ def main() -> None:
                 "min_upload_sessions_for_tpr": args.min_upload_sessions,
                 "n_missing_keys": None if missing_keys is None else len(missing_keys),
                 "drop_mechanisms": dropped_done,
+                "fingerprint": _FINGERPRINT,
+                "steps": sorted(p.name for p in steps_dir.glob("*.json")),
                 "calibration_frac": args.calibration_frac,
                 "split_seed": args.split_seed,
                 "map_versions": [m.version for m in maps],
@@ -784,6 +814,121 @@ def sources_text(results: dict[str, dict]) -> str:
             f"{v['fallback']:.1f} | {v['synthetic']:.1f} | {v['missing']:.1f} |"
         )
     return "\n".join(lines) + "\n"
+
+
+# ------------------------------------------------------------------ tasks (--jobs, --resume)
+_TASKS: dict[str, Callable[[], dict]] = {}  # read by forked workers
+_FINGERPRINT = ""
+# flags that never change a result: (flag, takes a value)
+NOT_SETTINGS = {"--jobs": True, "--resume": False, "--run-id": True, "--results-dir": True}
+
+
+def _json_default(o):
+    if hasattr(o, "item"):  # numpy scalars
+        return o.item()
+    raise TypeError(f"not JSON serializable: {type(o).__name__}")
+
+
+def _jsonable(obj):
+    """The exact form a step is saved and reloaded in, so a fresh and a resumed (or parallel and
+    serial) run assemble identical results."""
+    return json.loads(json.dumps(obj, default=_json_default))
+
+
+def run_fingerprint(argv: list[str], files: list[str]) -> str:
+    """Settings + inputs: the command line without the NOT_SETTINGS flags, plus each input file's
+    size and modification time, plus the git commit."""
+    args, skip = [], False
+    for a in argv:
+        if a in NOT_SETTINGS:
+            skip = NOT_SETTINGS[a]
+            continue
+        if skip:
+            skip = False
+            continue
+        args.append(a)
+    stats = []
+    for f in sorted(set(files)):
+        st = Path(f).stat()
+        stats.append((str(Path(f).resolve()), st.st_size, int(st.st_mtime)))
+    blob = json.dumps({"argv": args, "inputs": stats, "git": _git_commit()}, sort_keys=True)
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def _loo_run(run, loo_context, m: str, pol: str, cfg) -> dict:
+    return run(pol, cfg, loo_context(m))
+
+
+def _task_worker(key: str) -> tuple[str, dict]:
+    return key, _jsonable(_TASKS[key]())
+
+
+def run_tasks(
+    tasks: dict[str, Callable[[], dict]], steps_dir: Path, jobs: int, resume: bool, seed: int
+) -> dict[str, dict]:
+    """Run every task (in `jobs` forked processes when jobs > 1) and save each one's summary to
+    steps_dir/<key>.json as soon as it finishes. Returns {key: summary} in the tasks' order."""
+    global _TASKS
+    done: dict[str, dict] = {}
+    todo = []
+    for key in tasks:
+        path = steps_dir / f"{key}.json"
+        if resume and path.exists():
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            if saved.get("fingerprint") != _FINGERPRINT:
+                raise SystemExit(
+                    f"--resume: {path} was made with other settings or inputs "
+                    f"({saved.get('fingerprint')} != {_FINGERPRINT}); move it away or drop "
+                    "--resume"
+                )
+            done[key] = saved["summary"]
+            print(f"  resume: {key} loaded from {path.name}", flush=True)
+        else:
+            todo.append(key)
+
+    def save(key: str, summary: dict) -> None:
+        path = steps_dir / f"{key}.json"
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps(
+                {"task": key, "seed": seed, "fingerprint": _FINGERPRINT, "summary": summary},
+                indent=1,
+            ),
+            encoding="utf-8",
+        )
+        tmp.replace(path)  # atomic: a crash never leaves a half-written step
+        done[key] = summary
+        print(f"  step done: {key} ({len(done)}/{len(tasks)})", flush=True)
+
+    _TASKS = tasks
+    if jobs <= 1 or len(todo) <= 1:
+        for key in todo:
+            save(key, _jsonable(tasks[key]()))
+    else:
+        ctx = multiprocessing.get_context("fork")  # workers inherit the loaded data
+        with ProcessPoolExecutor(max_workers=min(jobs, len(todo)), mp_context=ctx) as ex:
+            futures = [ex.submit(_task_worker, key) for key in todo]
+            for fut in as_completed(futures):
+                save(*fut.result())
+    return {key: done[key] for key in tasks}
+
+
+def write_inputs(out: Path, args, run_id: str) -> None:
+    """inputs.txt next to the outputs: every input file, the settings and the git commit."""
+    lines = [
+        f"run_id: {run_id}",
+        f"git_commit: {_git_commit()}",
+        f"fingerprint: {_FINGERPRINT}",
+        "command: " + " ".join(sys.argv),
+        "ai_outcomes:",
+        *[f"  {Path(f).resolve()}" for f in args.ai_outcomes],
+        "pilot_outcomes:",
+        *[f"  {Path(f).resolve()}" for f in args.pilot_outcomes],
+        f"bank: {Path(args.bank).resolve()}",
+        f"low_effort: {args.low_effort}",
+        f"exclude_sessions: {args.exclude_sessions}",
+    ]
+    (out / "inputs.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def plain(obj):
