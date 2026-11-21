@@ -88,16 +88,35 @@ for:
 
 ## Cost estimate per provider
 
-Estimated from the real per-call token counts of the 30 matching gpt-mini training runs:
-14.15M input and 0.665M output tokens, actual cost $13.60.
+The estimate uses the per-call token counts of the matching gpt-mini training runs (same banks, levels, modes and samples), applied to the planned call counts. Prices are from `configs/models.yaml`, which is also what the spend cap counts.
 
-| job | estimate | cap |
+The claude-haiku adjustments come from the two smoke calls on the same prompt:
+- **Input tokens:** gpt-mini's × 1.39.
+- **Visible reply tokens:** gpt-mini's × 1.39.
+- **Hidden output:** about 191 billed output tokens per call that are not in the reply text. The smoke reply was 46 plain words, about 80 tokens, out of 271 billed.
+
+| job | calls | best estimate | cap |
+|---|---|---|---|
+| claude-haiku (36 runs) | 57,092 | **$8.0** | $10 |
+| gpt-mini (6 OSMI runs) | 1,292 | **$0.55** | $10 |
+
+claude-haiku by bank (calls, best estimate):
+
+| bank | copy-paste | upload |
 |---|---|---|
-| claude-haiku (36 runs) | about $1.8 at gpt-mini's token counts; up to about $8.7 if every reply carries the extra output tokens seen in the smoke call | $10 |
-| gpt-mini (6 OSMI runs) | about $0.55 | $10 |
+| quiz-mmlu-200 | 24,000, $2.94 | 1,200, $0.67 |
+| quiz-arc-200 | 24,000, $2.84 | 1,200, $0.56 |
+| survey-ipip | 3,000, $0.34 | 180, $0.06 |
+| survey-gss | 480, $0.06 | 60, $0.02 |
+| assignment-asurre-train | 1,560, $0.22 | 120, $0.05 |
+| assignment-asurre-osmi-heldout | 1,200, $0.17 | 92, $0.04 |
 
-Both jobs are under the cap. claude-haiku is the one that could reach it. If it does, the cap stops its
-calls and the driver fails on that run (`check_run`) instead of going on.
+Most of the cost (85%) is the hidden output on the 48,000 short quiz copy-paste answers.
+- **Where the estimate is weakest:** it rests on one smoke call. If the hidden output is about 240 tokens per call instead of 191, claude-haiku reaches the $10 cap.
+- **If the hidden output instead scales with reply length:** the estimate would be $5.6.
+- **Conservative bound:** taking the higher of the two cases for each bank gives $9.6.
+
+If claude-haiku hits the cap, the cap stops its calls and the driver fails on that run (`check_run`) instead of going on. A restart with a higher cap resumes; finished runs are skipped.
 
 **Smoke calls, Nov 21.** One call per model on the training item `asurre_nature_phd_2019`; never the held-out bank.
 - claude-haiku: 43 input, 271 output tokens, $0.00014.
