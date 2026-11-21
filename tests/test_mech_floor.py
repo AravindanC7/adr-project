@@ -271,3 +271,47 @@ def test_replay_records_the_first_cleared_step_even_when_reopened():
         ends[policy] = res.final.status
     assert ends["sticky"] == "cleared"  # stayed cleared
     assert ends["reopen"] in ("active", "escalated")  # reopened: no longer cleared
+
+
+# ---------------------------------------------------------------- two-check clearing
+def test_neg_floor_frac_default_keeps_the_floor_at_b():
+    router, _ = _router(RouterConfig())
+    assert RouterConfig().neg_floor_frac == 1.0 and router.mech_floor == router.B
+
+
+def test_two_check_clearing_one_check_alone_cannot_reach_b_but_two_can():
+    cfg = replace(RouterConfig(), neg_floor_frac=0.65)
+    router, assessment = _router(cfg)
+    assert router.mech_floor == pytest.approx(0.65 * router.B)
+    # one check alone, as human-looking as it gets: stuck at 0.65 * B, never cleared
+    state = _feed(router, assessment, "decoy", "picked_correct", 12)
+    assert state.contrib["decoy"] == pytest.approx(0.65 * router.B)
+    assert state.score > router.B and state.status != "cleared"
+    # a second check's human-looking evidence takes it past B: cleared
+    for i in range(3):
+        state = router.update(state, make_variant_id(f"arc:f{i}", "style"), "low")
+        if state.status == "cleared":
+            break
+    assert state.status == "cleared" and state.score <= router.B + 1e-9
+    assert state.contrib["style"] >= 0.65 * router.B - 1e-9  # each check within its own floor
+
+
+def test_two_check_clearing_applies_to_cap_groups_too():
+    cfg = replace(
+        RouterConfig(),
+        neg_floor_frac=0.65,
+        clear=False,
+        mech_group_caps={"passive": ("behaviour", "style")},
+    )
+    router, assessment = _router(cfg)
+    state, _ = router.start(assessment, "s", 0)
+    for i in range(6):  # two passive checks, but one group: one floor
+        state = router.update(state, make_variant_id(f"arc:f{i}", "behaviour"), "normal")
+        state = router.update(state, make_variant_id(f"arc:f{i}", "style"), "low")
+    assert state.contrib == {"passive": pytest.approx(0.65 * router.B)}
+    assert state.score > router.B
+
+
+def test_neg_floor_frac_must_be_positive():
+    with pytest.raises(ValueError, match="neg_floor_frac"):
+        _router(replace(RouterConfig(), neg_floor_frac=0.0))
