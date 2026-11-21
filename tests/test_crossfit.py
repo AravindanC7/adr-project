@@ -890,6 +890,10 @@ def _run(tmp_path, run_id, *extra):
     return tmp_path / "real-router" / run_id, proc
 
 
+@pytest.mark.skipif(
+    not run_real_router.fork_available(),
+    reason="--jobs > 1 needs fork (not on Windows): it falls back to one task at a time",
+)
 def test_jobs_gives_identical_outputs(tmp_path):
     _two_mechanism_files(tmp_path)
     serial, _ = _run(tmp_path, "serial", "--jobs", "1")
@@ -964,3 +968,14 @@ def test_run_real_router_config_records_the_git_state_after_build_parser(tmp_pat
     assert cfg["git_commit"] == expected["git_commit"]
     assert cfg["git_dirty"] == expected["git_dirty"]
     assert isinstance(cfg["git_dirty"], bool)
+
+
+def test_jobs_falls_back_to_one_at_a_time_without_fork(tmp_path, monkeypatch, capsys):
+    """Windows has no fork: --jobs > 1 must not crash, it runs the tasks serially."""
+    monkeypatch.setattr(run_real_router.multiprocessing, "get_all_start_methods", lambda: ["spawn"])
+    assert not run_real_router.fork_available()
+    tasks = {f"t{i}": (lambda i=i: {"value": i}) for i in range(3)}
+    done = run_real_router.run_tasks(tasks, tmp_path, jobs=4, resume=False, seed=0)
+    assert done == {f"t{i}": {"value": i} for i in range(3)}
+    assert "needs the 'fork' start method" in capsys.readouterr().out
+    assert sorted(p.name for p in tmp_path.glob("*.json")) == ["t0.json", "t1.json", "t2.json"]

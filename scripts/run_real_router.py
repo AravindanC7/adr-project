@@ -881,6 +881,11 @@ def _task_worker(key: str) -> tuple[str, dict]:
     return key, _jsonable(_TASKS[key]())
 
 
+def fork_available() -> bool:
+    """--jobs > 1 forks workers that inherit the loaded data; Windows has no fork."""
+    return "fork" in multiprocessing.get_all_start_methods()
+
+
 def run_tasks(
     tasks: dict[str, Callable[[], dict]], steps_dir: Path, jobs: int, resume: bool, seed: int
 ) -> dict[str, dict]:
@@ -919,6 +924,14 @@ def run_tasks(
         print(f"  step done: {key} ({len(done)}/{len(tasks)})", flush=True)
 
     _TASKS = tasks
+    if jobs > 1 and not fork_available():
+        print(
+            "NOTE: --jobs > 1 needs the 'fork' start method, which this platform (e.g. Windows) "
+            "does not have: the tasks are closures over the loaded data and cannot be sent to "
+            "spawned workers. Running them one at a time instead (same results).",
+            flush=True,
+        )
+        jobs = 1
     if jobs <= 1 or len(todo) <= 1:
         for key in todo:
             save(key, _jsonable(tasks[key]()))
