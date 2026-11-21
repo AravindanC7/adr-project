@@ -424,8 +424,14 @@ def rates(
         groups = sorted({ai_group(f) for f in ai})
         if len(groups) > 1:  # TPR per model / attack mode / level too (review H3)
             for g in groups:
-                hits = [np.mean([t.score >= a for t in f]) for f in ai if ai_group(f) == g]
-                out[name][f"tpr[{g}]"] = float(np.mean(hits))
+                fs = [f for f in ai if ai_group(f) == g]
+                out[name][f"tpr[{g}]"] = float(np.mean([np.mean([t.score >= a for t in f]) for f in fs]))
+                out[name][f"ai_ever_cleared_rate[{g}]"] = float(
+                    np.mean([np.mean([t.ever_cleared_at(a) for t in f]) for f in fs])
+                )
+                out[name][f"ai_cleared_rate[{g}]"] = float(
+                    np.mean([np.mean([t.cleared_at(a) for t in f]) for f in fs])
+                )
     return out
 
 
