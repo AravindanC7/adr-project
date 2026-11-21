@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from adr.contracts import Assessment, Item, RenderedItem
 from adr.contracts.io import read_jsonl
 from adr.harness.copy_paste import CopyPasteConfig, plain_variant, run_copy_paste
+from adr.harness.final_guard import check_final
 from adr.harness.llm_client import FakeProvider, LLMClient, ModelSpec
 from adr.harness.prompts import PROMPT_VERSION, SYSTEM_VARIANTS
 from adr.harness.registry import load_mechanisms
@@ -67,6 +68,12 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--run-id")
+    ap.add_argument(
+        "--final",
+        action="store_true",
+        help="the final evaluation only: allows the held-out model and held-out survey items;\n"
+        "the run id must contain 'final' (adr/harness/final_guard.py)",
+    )
     args = ap.parse_args()
 
     if args.stub:
@@ -115,6 +122,8 @@ def main() -> None:
             raise SystemExit("give --models (names from configs/models.yaml)")
 
     run_id = args.run_id or f"cp-{args.level}-{datetime.now():%Y%m%d-%H%M%S}"
+    if not args.fake:  # never touch the held-out model or survey outside the final run
+        check_final(client, models, items, assessment.item_ids, args.final, run_id)
     cfg = CopyPasteConfig(
         run_id=run_id,
         models=models,

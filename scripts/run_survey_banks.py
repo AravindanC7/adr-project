@@ -74,14 +74,21 @@ from adr.harness.prompts import (
 )
 
 DATA = Path("data/processed/archana-survey-written-v1")
+# The held-out OSMI bank, built by scripts/build_runs_v1.py --heldout-asurre-only (#55). Read only
+# with --final (the final evaluation), and only after freeze_manifest.py has checked its sha256.
+HELDOUT_DATA = Path("data/processed/osmi-heldout-final")
+HELDOUT_BANK = "assignment-asurre-osmi-heldout"
 STYLE_PROFILE = Path("data/processed/runs_v1/style_profile.json")
-MODEL = "gpt-mini"
+MODEL = "gpt-mini"  # the default; --model claude-haiku (the held-out model) needs --final
+MODELS = ("gpt-mini", "claude-haiku")
 HELDOUT_SOURCE = "asurre_osmi_2017_18"
 BANKS = {  # bank -> (active mechanisms, cp max_tokens, du questions_per_doc, du max_tokens)
     "survey-ipip": (["opinion_trap"], 300, 20, 3000),
     "survey-gss": (["opinion_trap"], 300, None, 3000),
     "assignment-asurre-train": (["canary", "style"], 1000, None, 6000),
+    HELDOUT_BANK: (["canary", "style"], 1000, None, 6000),  # same settings as the training bank
 }
+TRAINING_BANKS = [b for b in BANKS if b != HELDOUT_BANK]
 CP_SAMPLES, CP_TEMP = 5, 0.7
 DU_SAMPLES, DU_TEMP = 1, 0.0
 PAIR_RULE = ("score_reverse_pairs v1: same raw side = contradiction (implausible wins), "
@@ -118,23 +125,36 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def load(bank: str):
-    manifest = json.loads((DATA / "manifest.json").read_text(encoding="utf-8"))
+def load(bank: str, final: bool = False):
+    """The bank's assessment, items and variants. Training banks hold only training items; the
+    held-out OSMI bank is read only with final=True and must hold only OSMI items."""
+    heldout = bank == HELDOUT_BANK
+    if heldout and not final:
+        raise SystemExit(f"{bank} is the held-out survey: only the final run (--final) reads it")
+    data = HELDOUT_DATA if heldout else DATA
+    manifest = json.loads((data / "manifest.json").read_text(encoding="utf-8"))
     if manifest["heldout_asurre_source"] != HELDOUT_SOURCE:
         raise SystemExit(f"manifest holds out {manifest['heldout_asurre_source']}, not OSMI")
     entry = next(a for a in manifest["assessments"] if a["assessment_id"] == bank)
-    a_path, v_path = norm(entry["assessment"]), norm(entry["variants"])
+    a_path, v_path = (
+        (data / "assessments" / f"{bank}.json", data / "variants" / f"{bank}.jsonl")
+        if heldout  # its manifest records the builder's own output paths (any machine)
+        else (norm(entry["assessment"]), norm(entry["variants"]))
+    )
     for p in (a_path, v_path):
         if not p.exists():
             raise FileNotFoundError(f"manifest path {p} doesn't resolve")
     assessment = Assessment.model_validate_json(a_path.read_text(encoding="utf-8"))
-    items = {it.item_id: it for it in read_jsonl(DATA / "items.jsonl", Item)}
+    items = {it.item_id: it for it in read_jsonl(data / "items.jsonl", Item)}
     variants: dict[str, list[RenderedItem]] = {}
     for v in read_jsonl(v_path, RenderedItem):
         variants.setdefault(v.item_id, []).append(v)
-    for iid in assessment.item_ids:  # held-out guard: never run OSMI or held-out-split items
+    for iid in assessment.item_ids:
         it = items[iid]
-        if it.source == HELDOUT_SOURCE or it.split != "train":
+        if heldout:  # the held-out bank holds the held-out survey and nothing else
+            if it.source != HELDOUT_SOURCE:
+                raise SystemExit(f"{iid}: {it.source} item in the held-out bank {bank}")
+        elif it.source == HELDOUT_SOURCE or it.split != "train":  # never OSMI in training banks
             raise SystemExit(f"{iid}: held-out item ({it.source}, {it.split}) in {bank}")
     if len(assessment.item_ids) != entry["n_items"] or sum(
             len(variants[i]) for i in assessment.item_ids) != entry["n_variants"]:
@@ -161,7 +181,7 @@ def mechanisms_for(bank: str, profile_path: Path = STYLE_PROFILE):
     return mechs
 
 
-def client_for(fake: bool):
+def client_for(fake: bool, model: str = MODEL):
     from adr.harness.llm_client import FakeProvider, LLMClient, ModelSpec
 
     if fake:
@@ -170,17 +190,18 @@ def client_for(fake: bool):
                 return "\n".join(f"Q{n}: 1" for n in range(1, 60))
             text = messages[-1]["content"]
             return "1" if "number" in text else "I think it's fine overall, with some issues."
-        return LLMClient(models={MODEL: ModelSpec(MODEL, "fake", "fake-v1", 0.0, 0.0)},
-                         cache_dir="cache/llm-fake", providers={MODEL: FakeProvider(reply)})
+        spec = ModelSpec(model, "fake", "fake-v1", 0.0, 0.0, heldout=model == "claude-haiku")
+        return LLMClient(models={model: spec}, cache_dir="cache/llm-fake",
+                         providers={model: FakeProvider(reply)})
     client = LLMClient.from_config("configs/models.yaml")
-    if client.spec(MODEL).heldout:
+    if model == MODEL and client.spec(MODEL).heldout:  # the default training model, as before
         raise SystemExit(f"{MODEL} is marked held out")
-    return client
+    return client  # any other model goes through check_final in cmd_run
 
 
 # ---------------------------------------------------------------- check / estimate / run
 def cmd_check(_a) -> None:
-    for bank in BANKS:
+    for bank in TRAINING_BANKS:
         a, items, v = load(bank)
         mechanisms_for(bank)
         kinds = sorted({x.mechanism or "plain" for i in a.item_ids for x in v[i]})
@@ -196,7 +217,8 @@ def cmd_estimate(_a) -> None:
     pin, pout = spec["price_in_per_mtok"] / 1e6, spec["price_out_per_mtok"] / 1e6
     total = 0.0
     print(f"{'run_id':42s} {'calls':>6s} {'in tok':>8s} {'out tok':>8s} {'max $':>7s}")
-    for bank, (_, cp_max, q, du_max) in BANKS.items():
+    for bank in TRAINING_BANKS:
+        _, cp_max, q, du_max = BANKS[bank]
         a, items, v = load(bank)
         calls = tin = 0
         for iid in a.item_ids:
@@ -223,21 +245,31 @@ def cmd_estimate(_a) -> None:
 def cmd_run(a) -> None:
     import yaml
 
-    assessment, items, variants = load(a.bank)
+    from adr.harness.final_guard import check_final
+
+    model = a.model
+    # The default gpt-mini training run keeps its original calls (and guards: load() admits only
+    # training items, client_for() refuses a held-out gpt-mini); --final or another model also
+    # goes through check_final below.
+    assessment, items, variants = load(a.bank, final=True) if a.final else load(a.bank)
     mechs = mechanisms_for(a.bank)
-    client = client_for(a.fake)
+    client = client_for(a.fake) if model == MODEL else client_for(a.fake, model)
     _, cp_max, q, du_max = BANKS[a.bank]
     settings = level_settings(a.level, a.system_variant, a.mode)
-    if (a.level != "L0" or a.system_variant) and not a.run_id:
-        raise SystemExit("give --run-id for an L2 run (the default ids are the L0 runs')")
+    if (a.level != "L0" or a.system_variant or a.final) and not a.run_id:
+        raise SystemExit("give --run-id for an L2 or --final run (the default ids are the L0 runs')")
     rid = (a.run_id or run_id(a.bank, a.mode)) + ("-fake" if a.fake else "")
+    if a.final or model != MODEL:
+        check_final(client, [model], items, assessment.item_ids, a.final, rid)
     results = "results-fake" if a.fake else "results"
     label = a.system_variant or a.level
-    note = f"{label} gpt-mini on archana-survey-written-v1 (handoff 2026-11-17)"
+    source = HELDOUT_DATA.name if a.bank == HELDOUT_BANK else DATA.name
+    note = f"{label} {model} on {source}" + (" (FINAL evaluation)" if a.final else
+                                             " (handoff 2026-11-17)")
     if a.mode == "cp":
         from adr.harness.copy_paste import CopyPasteConfig, run_copy_paste
 
-        cfg = CopyPasteConfig(run_id=rid, models=[MODEL], **settings,
+        cfg = CopyPasteConfig(run_id=rid, models=[model], **settings,
                               n_samples=CP_SAMPLES if a.samples is None else a.samples,
                               first_sample=a.first_sample,
                               temperature=CP_TEMP if a.temperature is None else a.temperature,
@@ -248,7 +280,7 @@ def cmd_run(a) -> None:
 
         if a.first_sample:
             raise SystemExit("--first-sample is copy-paste only")
-        cfg = DocUploadConfig(run_id=rid, models=[MODEL], **settings,
+        cfg = DocUploadConfig(run_id=rid, models=[model], **settings,
                               n_samples=DU_SAMPLES if a.samples is None else a.samples,
                               temperature=DU_TEMP if a.temperature is None else a.temperature,
                               max_tokens=du_max, questions_per_doc=q, results_dir=results,
@@ -322,11 +354,13 @@ def cmd_rescore(a) -> None:
             bank, _, rid = spec.partition("=")
             if bank not in BANKS or not rid:
                 raise SystemExit(f"--runs takes BANK=RUN_ID with BANK in {list(BANKS)}: {spec!r}")
+            if (bank == HELDOUT_BANK or "final" in rid) and not a.final:
+                raise SystemExit(f"{spec}: rescoring a final / held-out run needs --final")
             todo.setdefault(bank, []).append(rid)
     else:
-        todo = {bank: [run_id(bank, m) for m in ("cp", "du")] for bank in BANKS}
+        todo = {bank: [run_id(bank, m) for m in ("cp", "du")] for bank in TRAINING_BANKS}
     for bank, rids in todo.items():
-        assessment, items, variants = load(bank)
+        assessment, items, variants = load(bank, final=True) if a.final else load(bank)
         for rid in rids:
             run_dir = Path("results/runs") / rid
             current = Path("results/outcomes") / f"{rid}.parquet"
@@ -385,10 +419,17 @@ def main() -> None:
     r.add_argument("--level", choices=["L0", "L2"], default="L0")
     r.add_argument("--system-variant", choices=sorted(SYSTEM_VARIANTS),
                    help="e.g. L2-generic (with --level L2): the L2 role, naming no check")
+    r.add_argument("--model", choices=MODELS, default=MODEL,
+                   help="claude-haiku is the held-out model: only with --final")
+    r.add_argument("--final", action="store_true",
+                   help="the final evaluation: allows the held-out model and the held-out OSMI "
+                   "bank; the run id must contain 'final'")
     rs = sub.add_parser("rescore")
     rs.add_argument("--style-profile", type=Path, default=STYLE_PROFILE)
     rs.add_argument("--runs", nargs="+", metavar="BANK=RUN_ID",
                     help="rescore only these runs (default: the six standard runs)")
+    rs.add_argument("--final", action="store_true",
+                    help="allow final runs and the held-out OSMI bank")
     a = ap.parse_args()
     {"check": cmd_check, "estimate": cmd_estimate, "run": cmd_run,
      "rescore": cmd_rescore}[a.cmd](a)
