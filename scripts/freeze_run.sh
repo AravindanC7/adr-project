@@ -11,13 +11,24 @@
 #       ADR_JOB_SPEND_CAP_USD (default 10).
 #   (b) scripts/run_real_router.py --final with the frozen config (configs/data_decisions.json
 #       router_calibration = the script's defaults), floor750 pilot, all 44 honest sessions and
-#       without the 4 low-effort ones, --jobs 8 --resume.
-#   (c) the bootstrap CIs come with (b) (n_boot 200, as in the calibration runs).
+#       without the 4 low-effort ones, --jobs 8 --resume. Two separate evaluations, each on the
+#       training outcome files plus:
+#         unseen-model   claude-haiku's runs on the training banks
+#         unseen-survey  gpt-mini's and claude-haiku's runs on the held-out OSMI bank
+#   (c) the bootstrap CIs come with (b) (n_boot 200, as in the calibration runs), then
+#       scripts/freeze_report.py writes $OUT/README.md (FPR rule, the two reports with TPR at
+#       A_0.05 and A_0.01 per level and mode) and FAILS LOUDLY if a claude-haiku group has
+#       synthetic or fallback outcomes > 0, or a threshold differs from #51's.
+#
+# FPR rule: False-flag rates come only from the 44 pilot honest sessions, with the same folds and
+# calibrated thresholds as #51; the held-out OSMI bank has no human side, so no FPR is reported
+# on it.
 #
 # Run from the root of a checkout at the tag, with data/ and cache/ pointing at the shared ones:
 #   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-22/driver.log 2>&1 &
 # DRY_RUN=1 prints every command and runs nothing (no preflight, no API calls).
-# A restart resumes: finished attacker runs are skipped, router steps resume from steps/*.json.
+# A restart resumes: finished attacker runs are skipped (their outputs still go to the router),
+# router steps resume from steps/*.json.
 set -euo pipefail
 
 FREEZE=freeze-2026-11-22
@@ -26,6 +37,7 @@ MANIFEST=$OUT/freeze_manifest.json
 LOGS=$OUT/logs
 HELDOUT_BANK_DIR=data/processed/osmi-heldout-final
 PY=${PY:-python}
+REF_DIR=${REF_DIR:-results/real-router}  # #51's runs: rq2-l012-floor750-reopen-{all,no-low-effort}
 JOBS=${JOBS:-8}
 CAP=${ADR_JOB_SPEND_CAP_USD:-10}
 DRY_RUN=${DRY_RUN:-0}
@@ -50,6 +62,10 @@ if [ "$DRY_RUN" != 1 ]; then
   grep -q "job_spend_cap_usd" adr/harness/llm_client.py \
     || fail "this checkout has no per-job spend cap (#50): not starting"
   [ -f "$MANIFEST" ] || fail "no $MANIFEST (scripts/freeze_manifest.py prep)"
+  for who in all no-low-effort; do
+    [ -f "$REF_DIR/rq2-l012-floor750-reopen-$who/metrics.json" ] \
+      || fail "no #51 reference run $REF_DIR/rq2-l012-floor750-reopen-$who (set REF_DIR)"
+  done
 fi
 mkdir -p "$LOGS"
 log "preflight: rebuild the held-out bank (#55) and check every input against $MANIFEST"
@@ -87,10 +103,11 @@ done_already() {  # restart: skip a run that finished cleanly
   [ -f "results/outcomes/$1.parquet" ] && check_run "$1" >/dev/null 2>&1
 }
 
-attack() {  # attack MODEL MODE(cp|du) LEVEL(L0|L2|L2g) BANK
+attack() {  # attack MODEL MODE(cp|du) LEVEL(L0|L2|L2g) BANK; sets RID
   local model=$1 mode=$2 level=$3 bank=$4
   local tag=$level; [ "$level" = L2g ] && tag=L2-generic
   local rid="v1-final-$mode-$tag-$bank-$model-s$SAMPLES"
+  RID=$rid
   if done_already "$rid"; then log "skip $rid (finished)"; return; fi
   log "run $rid"
   local flags; flags=$(level_flags "$level")
@@ -118,10 +135,11 @@ attack() {  # attack MODEL MODE(cp|du) LEVEL(L0|L2|L2g) BANK
         --runs "$bank=$rid" ;;
   esac
   check_run "$rid" || fail "$rid did not finish cleanly (see $LOGS/$rid.log)"
-  FINAL_RUNS+=("results/outcomes/$rid.parquet")
 }
 
-FINAL_RUNS=()
+# outputs, also of runs skipped on a restart: unseen-model and unseen-survey inputs
+HAIKU_TRAIN_RUNS=()
+OSMI_RUNS=()
 TRAIN_BANKS="quiz-mmlu-200 quiz-arc-200 survey-ipip survey-gss assignment-asurre-train"
 HELDOUT_BANK=assignment-asurre-osmi-heldout
 
@@ -134,13 +152,16 @@ for model in claude-haiku gpt-mini; do
     for level in L0 L2 L2g; do
       for mode in cp du; do
         attack "$model" "$mode" "$level" "$bank"
+        if [ "$bank" = "$HELDOUT_BANK" ]; then OSMI_RUNS+=("results/outcomes/$RID.parquet")
+        else HAIKU_TRAIN_RUNS+=("results/outcomes/$RID.parquet"); fi
       done
     done
   done
 done
 unset ADR_JOB_ID ADR_JOB_SPEND_CAP_USD
 
-# ------------------------------------------------------------------ (b) + (c) the final router run
+# ------------------------------------------------------------------ (b) + (c) the final router runs
+FINAL_RUNS=("${HAIKU_TRAIN_RUNS[@]}" "${OSMI_RUNS[@]}")
 log "record the ${#FINAL_RUNS[@]} final outcome files in $MANIFEST"
 run "$PY" scripts/freeze_manifest.py add-final --manifest "$MANIFEST" --files "${FINAL_RUNS[@]}"
 run "$PY" scripts/freeze_manifest.py verify --manifest "$MANIFEST" --heldout-bank "$HELDOUT_BANK_DIR"
@@ -157,17 +178,30 @@ else
   LOW=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['low_effort_ids']['path'])" "$MANIFEST")
 fi
 
-ROUTER=(--final --ai-outcomes "${TRAINING[@]}" "${FINAL_RUNS[@]}" --pilot-outcomes "$PILOT"
-        --bank server/pilot_items.json --low-effort "$LOW"
+ROUTER=(--final --pilot-outcomes "$PILOT" --bank server/pilot_items.json --low-effort "$LOW"
         --cap-variant per_mech passive_group open_text_group no_cap
         --drop-mechanisms canary,decoy,opinion_trap,style --jobs "$JOBS" --resume
         --results-dir results)
-for who in all no-low-effort; do
-  rid="$FREEZE-final-router-$who"
-  EX=(); [ "$who" = no-low-effort ] && EX=(--exclude-sessions "$LOW")
-  mkdir -p "results/real-router/$rid"
-  log "router $rid"
-  runlog "results/real-router/$rid/run.log" "$PY" -u scripts/run_real_router.py "${ROUTER[@]}" \
-    ${EX[@]+"${EX[@]}"} --run-id "$rid"
+UNSEEN_MODEL=()
+UNSEEN_SURVEY=()
+for report in unseen-model unseen-survey; do
+  if [ "$report" = unseen-model ]; then AI=("${HAIKU_TRAIN_RUNS[@]}"); else AI=("${OSMI_RUNS[@]}"); fi
+  for who in all no-low-effort; do
+    rid="$FREEZE-$report-$who"
+    EX=(); [ "$who" = no-low-effort ] && EX=(--exclude-sessions "$LOW")
+    mkdir -p "results/real-router/$rid"
+    log "router $rid (${#AI[@]} final outcome files)"
+    runlog "results/real-router/$rid/run.log" "$PY" -u scripts/run_real_router.py "${ROUTER[@]}" \
+      --ai-outcomes "${TRAINING[@]}" "${AI[@]}" ${EX[@]+"${EX[@]}"} --run-id "$rid"
+    if [ "$report" = unseen-model ]; then UNSEEN_MODEL+=("results/real-router/$rid")
+    else UNSEEN_SURVEY+=("results/real-router/$rid"); fi
+  done
 done
-log "done: attacker runs in results/outcomes, router runs in results/real-router/$FREEZE-final-router-*"
+
+log "reports and post-run checks -> $OUT/README.md"
+run "$PY" scripts/freeze_report.py --out "$OUT/README.md" \
+  --unseen-model "${UNSEEN_MODEL[@]}" --unseen-survey "${UNSEEN_SURVEY[@]}" \
+  --reference-all "$REF_DIR/rq2-l012-floor750-reopen-all" \
+  --reference-no-low-effort "$REF_DIR/rq2-l012-floor750-reopen-no-low-effort" \
+  || fail "POST-RUN CHECK FAILED (see $OUT/README.md): do not report these numbers"
+log "done: attacker runs in results/outcomes, router runs in results/real-router/$FREEZE-unseen-*"

@@ -1,4 +1,5 @@
-"""scripts/freeze_manifest.py and scripts/freeze_run.sh (dry run only: nothing is run)."""
+"""scripts/freeze_manifest.py, scripts/freeze_report.py and scripts/freeze_run.sh (dry run only:
+nothing is run)."""
 
 import json
 import os
@@ -13,6 +14,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import freeze_manifest as fm
+import freeze_report as fr
 
 
 def _bank(root: Path, newline: str = "\n") -> Path:
@@ -91,7 +93,7 @@ def test_prep_refuses_a_bank_that_differs_from_the_handoff(tmp_path, monkeypatch
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="bash driver")
-def test_freeze_driver_dry_run_plans_42_attacker_runs_and_2_router_runs(tmp_path):
+def test_freeze_driver_dry_run_plans_42_attacker_runs_and_4_router_runs(tmp_path):
     env = {**os.environ, "DRY_RUN": "1", "PY": "python"}
     proc = subprocess.run(["bash", str(ROOT / "scripts" / "freeze_run.sh")], cwd=tmp_path, env=env,
                           capture_output=True, text=True, encoding="utf-8", check=False)
@@ -102,7 +104,18 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_2_router_runs(tmp_path
     assert sum("claude-haiku" in i for i in ids) == 36
     gpt = {i for i in ids if "gpt-mini" in i}
     assert len(gpt) == 6 and all("osmi-heldout" in i for i in gpt)  # gpt-mini: held-out bank only
-    assert out.count("run_real_router.py --final") == 2
+    assert out.count("run_real_router.py --final") == 4
+    routers = [ln for ln in out.splitlines() if "run_real_router.py --final" in ln]
+    for ln in routers:
+        finals = set(re.findall(r"results/outcomes/(v1-final-\S+)\.parquet", ln))
+        if "unseen-model" in ln:  # claude-haiku on the training banks only
+            assert len(finals) == 30
+            assert all("claude-haiku" in f and "osmi" not in f for f in finals)
+        else:  # both models on the held-out OSMI bank only
+            assert "unseen-survey" in ln and len(finals) == 12
+            assert all("osmi-heldout" in f for f in finals)
+    assert "freeze_report.py --out results/freeze-2026-11-22/README.md" in out
+    assert "--reference-no-low-effort results/real-router/rq2-l012-floor750-reopen-no-low-effort" in out
     assert "--jobs 8 --resume" in out and "--exclude-sessions" in out
     assert out.count("rescore --final") == 30  # every survey / written-answer run is re-scored
     assert "freeze-2026-11-22-claude-haiku (cap $10)" in out
@@ -110,3 +123,80 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_2_router_runs(tmp_path
     for line in out.splitlines():  # every attacker call is a --final call at temperature 0.7
         if "--run-id v1-final" in line:
             assert "--final" in line and "--temperature 0.7" in line and "--samples 20" in line
+
+
+# ------------------------------------------------------------------ freeze_report.py
+def _router(thr=(0.008, 0.951), haiku_src=None, n=44):
+    src = {"sessions": 20, "checks": 4.0, "same_type": 4.0, "fallback": 0.0, "synthetic": 0.0,
+           "missing": 0.0}
+    groups = {"claude-haiku:copy_paste:L0": {**src, **(haiku_src or {})},
+              "gpt-mini:copy_paste:L0": {**src, "fallback": 2.0, "synthetic": 1.0}}
+    res = {t: {"honest_pause_rate": 1 / n, **{f"tpr[{g}]": 0.5 for g in groups}}
+           for t in fr.THRESHOLDS}
+    ci = {t: {f"tpr[{g}]": [0.3, 0.7] for g in groups} for t in fr.THRESHOLDS}
+    return {"thresholds": dict(zip(fr.THRESHOLDS, thr, strict=True)), "results": res, "ci95": ci,
+            "n_sessions": n, "ai_sources_by_group": groups,
+            "n_ai_sessions_by_group": {g: 20 for g in groups}}
+
+
+def _write(run_dir: Path, router: dict) -> Path:
+    run_dir.mkdir(parents=True)
+    (run_dir / "metrics.json").write_text(json.dumps({"results": {"router": router}}))
+    return run_dir
+
+
+@pytest.mark.parametrize("bad", [{"synthetic": 0.5}, {"fallback": 1.0}])
+def test_source_check_flags_claude_haiku_borrowed_outcomes_only(bad):
+    assert fr.source_problems(_router()) == []  # gpt-mini's fallback/synthetic are not checked
+    problems = fr.source_problems(_router(haiku_src=bad))
+    assert len(problems) == 1 and problems[0].startswith("claude-haiku:copy_paste:L0")
+
+
+def test_threshold_check_against_51():
+    assert fr.threshold_problems(_router(), _router()) == []
+    assert len(fr.threshold_problems(_router(thr=(0.008, 0.9)), _router())) == 1
+
+
+def test_reference_is_picked_by_honest_sessions(tmp_path):
+    ref_all, ref_no = tmp_path / "all", tmp_path / "no"
+    assert fr.reference_for(Path("x-unseen-model-all"), ref_all, ref_no) == ref_all
+    assert fr.reference_for(Path("x-unseen-model-no-low-effort"), ref_all, ref_no) == ref_no
+
+
+def _report(tmp_path, haiku_src=None, thr=(0.008, 0.951)):
+    runs = {name: _write(tmp_path / name, _router(thr, haiku_src)) for name in
+            ("unseen-model-all", "unseen-model-no-low-effort", "unseen-survey-all",
+             "unseen-survey-no-low-effort")}
+    ref_all = _write(tmp_path / "ref-all", _router())
+    ref_no = _write(tmp_path / "ref-no", _router())
+    out = tmp_path / "README.md"
+    cmd = [sys.executable, str(ROOT / "scripts" / "freeze_report.py"), "--out", str(out),
+           "--unseen-model", str(runs["unseen-model-all"]), str(runs["unseen-model-no-low-effort"]),
+           "--unseen-survey", str(runs["unseen-survey-all"]),
+           str(runs["unseen-survey-no-low-effort"]),
+           "--reference-all", str(ref_all), "--reference-no-low-effort", str(ref_no)]
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=False)
+    return proc, out.read_text(encoding="utf-8")
+
+
+def test_report_writes_the_fpr_rule_and_both_reports(tmp_path):
+    proc, readme = _report(tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert fr.FPR_RULE in readme
+    assert "## Unseen model" in readme and "## Unseen survey" in readme
+    model_part, survey_part = readme.split("## Unseen survey")
+    assert "gpt-mini" not in model_part.split("## Unseen model")[1]  # claude-haiku only
+    assert "| gpt-mini | L0 | copy-paste | 20 | 0.50 [0.30, 0.70] | 0.50 [0.30, 0.70]" in survey_part
+    assert "FAILED" not in readme
+
+
+def test_report_fails_loudly_on_borrowed_claude_haiku_outcomes(tmp_path):
+    proc, readme = _report(tmp_path, haiku_src={"fallback": 0.25})
+    assert proc.returncode == 1
+    assert "POST-RUN CHECK FAILED" in proc.stderr and "claude-haiku:copy_paste:L0" in proc.stderr
+    assert "- FAILED: unseen-model-all: claude-haiku:copy_paste:L0" in readme
+
+
+def test_report_fails_when_a_threshold_differs_from_51(tmp_path):
+    proc, _ = _report(tmp_path, thr=(0.01, 0.951))
+    assert proc.returncode == 1 and "threshold differs from #51" in proc.stderr
