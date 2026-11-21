@@ -7,8 +7,10 @@ from adr.contracts import HumanDistribution, Item, RenderedItem
 from adr.contracts.io import read_jsonl, variants_path
 from adr.mechanisms.opinion_trap import OpinionTrapMechanism
 from scripts.build_runs_v1 import (
+    HELDOUT_ASURRE_BANK,
     LOCKED_HELDOUT_ASURRE_SOURCE,
     balanced_slice,
+    make_asurre_banks,
     make_bank,
     parser,
     stable_sample,
@@ -139,6 +141,95 @@ def test_parser_uses_locked_asurre_holdout_by_default():
     assert args.heldout_asurre_source == LOCKED_HELDOUT_ASURRE_SOURCE
     assert args.ipip_limit is None
     assert args.gss_limit is None
+    assert args.include_heldout_asurre_bank is False
+    assert args.heldout_asurre_only is False
+
+
+def test_heldout_asurre_bank_uses_all_osmi_items_without_training_leakage():
+    def open_item(item_id: str, source: str) -> Item:
+        return Item(
+            item_id=item_id,
+            source=source,
+            assessment_type="survey",
+            item_type="open_text",
+            stem=f"Question {item_id}?",
+            eligible_mechanisms=["canary", "style"],
+        )
+
+    items = [
+        open_item("asurre_nature_phd_2019:q1", "asurre_nature_phd_2019"),
+        open_item("asurre_osmi_2017_18:q1", "asurre_osmi_2017_18"),
+        open_item("asurre_osmi_2017_18:q2", "asurre_osmi_2017_18"),
+    ]
+    banks = make_asurre_banks(
+        items,
+        heldout_source=LOCKED_HELDOUT_ASURRE_SOURCE,
+        seed=29,
+        train_limit=1,
+        include_heldout=True,
+    )
+
+    heldout = next(bank for bank in banks if bank.assessment.assessment_id == HELDOUT_ASURRE_BANK)
+    assert len(heldout.items) == 2
+    assert {item.source for item in heldout.items} == {LOCKED_HELDOUT_ASURRE_SOURCE}
+    assert {item.split for item in heldout.items} == {"heldout_survey"}
+    assert {item.assessment_type for item in heldout.items} == {"assignment"}
+    assert [variant.mechanism for variant in heldout.variants] == [
+        None,
+        "canary",
+        None,
+        "canary",
+    ]
+
+
+def test_heldout_asurre_bank_refuses_an_audit_override():
+    item = Item(
+        item_id="asurre_nature_phd_2019:q1",
+        source="asurre_nature_phd_2019",
+        assessment_type="survey",
+        item_type="open_text",
+        stem="Question?",
+        eligible_mechanisms=["canary", "style"],
+    )
+    with pytest.raises(ValueError, match="locked OSMI"):
+        make_asurre_banks(
+            [item],
+            heldout_source="asurre_nature_phd_2019",
+            seed=29,
+            train_limit=1,
+            include_heldout=True,
+        )
+
+
+def test_heldout_asurre_only_omits_training_items():
+    items = [
+        Item(
+            item_id="asurre_nature_phd_2019:q1",
+            source="asurre_nature_phd_2019",
+            assessment_type="survey",
+            item_type="open_text",
+            stem="Training question?",
+            eligible_mechanisms=["canary", "style"],
+        ),
+        Item(
+            item_id="asurre_osmi_2017_18:q1",
+            source="asurre_osmi_2017_18",
+            assessment_type="survey",
+            item_type="open_text",
+            stem="Held-out question?",
+            eligible_mechanisms=["canary", "style"],
+        ),
+    ]
+    banks = make_asurre_banks(
+        items,
+        heldout_source=LOCKED_HELDOUT_ASURRE_SOURCE,
+        seed=29,
+        train_limit=1,
+        include_heldout=True,
+        include_train=False,
+    )
+
+    assert [bank.assessment.assessment_id for bank in banks] == [HELDOUT_ASURRE_BANK]
 
 
 def test_parser_accepts_survey_smoke_limits():

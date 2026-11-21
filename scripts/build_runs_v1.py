@@ -41,6 +41,7 @@ ASURRE_SOURCES = (
     "asurre_osmi_2017_18",
 )
 LOCKED_HELDOUT_ASURRE_SOURCE = "asurre_osmi_2017_18"
+HELDOUT_ASURRE_BANK = "assignment-asurre-osmi-heldout"
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,58 @@ def make_bank(
     return Bank(assessment, tuple(items), tuple(variants))
 
 
+def make_asurre_banks(
+    items: list[Item],
+    *,
+    heldout_source: str,
+    seed: int,
+    train_limit: int,
+    include_heldout: bool,
+    include_train: bool = True,
+) -> list[Bank]:
+    """Build the training bank and, when requested, the untouched final OSMI bank."""
+
+    if include_heldout and heldout_source != LOCKED_HELDOUT_ASURRE_SOURCE:
+        raise ValueError(
+            "the final held-out bank must use the locked OSMI source; "
+            f"got {heldout_source!r}"
+        )
+    split_items = assign_heldout_survey(items, heldout_source)
+    banks: list[Bank] = []
+    if include_train:
+        train = [
+            item.model_copy(update={"assessment_type": "assignment"})
+            for item in split_items
+            if item.split == "train"
+        ]
+        train = stable_sample(train, train_limit, seed)
+        banks.append(
+            make_bank(
+                "assignment-asurre-train",
+                "ASURRE writing assignment (train surveys only)",
+                "assignment",
+                train,
+                seed=seed,
+            )
+        )
+    if include_heldout:
+        heldout = [
+            item.model_copy(update={"assessment_type": "assignment"})
+            for item in split_items
+            if item.split == "heldout_survey"
+        ]
+        banks.append(
+            make_bank(
+                HELDOUT_ASURRE_BANK,
+                "ASURRE writing assignment (held-out OSMI survey)",
+                "assignment",
+                heldout,
+                seed=seed,
+            )
+        )
+    return banks
+
+
 def write_bundle(
     output: Path,
     banks: list[Bank],
@@ -191,6 +244,8 @@ def write_bundle(
 
 def build(args: argparse.Namespace) -> dict[str, object]:
     selected = set(args.datasets)
+    if args.heldout_asurre_only and selected != {"asurre"}:
+        raise ValueError("--heldout-asurre-only requires --datasets asurre")
     banks: list[Bank] = []
     distributions: list[HumanDistribution] = []
 
@@ -281,22 +336,16 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             asurre_items.extend(load_asurre_items(config))
         if not asurre_items:
             raise ValueError(f"no ASURRE configs found in {args.asurre_config_dir}")
-        asurre_items = assign_heldout_survey(asurre_items, args.heldout_asurre_source)
-        # Task #29 uses only train-split ASURRE prompts for the assignment bank. Preserve the
-        # held-out source outside this bank so it cannot accidentally enter fitting or the run.
-        asurre_train = [
-            item.model_copy(update={"assessment_type": "assignment"})
-            for item in asurre_items
-            if item.split == "train"
-        ]
-        asurre_train = stable_sample(asurre_train, args.asurre_limit, args.seed)
-        banks.append(
-            make_bank(
-                "assignment-asurre-train",
-                "ASURRE writing assignment (train surveys only)",
-                "assignment",
-                asurre_train,
+        banks.extend(
+            make_asurre_banks(
+                asurre_items,
+                heldout_source=args.heldout_asurre_source,
                 seed=args.seed,
+                train_limit=args.asurre_limit,
+                include_heldout=(
+                    args.include_heldout_asurre_bank or args.heldout_asurre_only
+                ),
+                include_train=not args.heldout_asurre_only,
             )
         )
     requested_sizes = {
@@ -306,6 +355,7 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         "survey-ipip": args.ipip_limit,
         "survey-gss": args.gss_limit,
         "assignment-asurre-train": args.asurre_limit,
+        HELDOUT_ASURRE_BANK: None,
     }
     return write_bundle(
         args.output,
@@ -355,6 +405,22 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--gss-limit", type=int)
     ap.add_argument("--asurre-config-dir", type=Path, default=Path("data/raw/asurre/configs"))
     ap.add_argument("--asurre-limit", type=int, default=100)
+    ap.add_argument(
+        "--include-heldout-asurre-bank",
+        action="store_true",
+        help=(
+            "also write the locked OSMI held-out bank for the one-time final evaluation; "
+            "uses question metadata only and includes every held-out item"
+        ),
+    )
+    ap.add_argument(
+        "--heldout-asurre-only",
+        action="store_true",
+        help=(
+            "write only the locked OSMI held-out bank for handoff; requires "
+            "--datasets asurre and includes every held-out item"
+        ),
+    )
     ap.add_argument(
         "--heldout-asurre-source",
         choices=ASURRE_SOURCES,
