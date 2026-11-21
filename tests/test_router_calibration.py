@@ -53,7 +53,8 @@ def test_evidence_bounds_follow_from_the_recorded_fractions():
     router = SPRTRouter({}, {}, None, RouterConfig())  # type: ignore[arg-type]
     assert router.mech_cap == pytest.approx(CAL["mech_cap_frac"] * CAL["wald"]["A"], abs=1e-3)
     assert router.mech_floor == pytest.approx(CAL["neg_floor_frac"] * CAL["wald"]["B"], abs=1e-3)
-    assert router.mech_cap < router.A  # one check alone cannot pause
+    assert router.mech_cap < router.A  # one check alone cannot reach the NOMINAL A (it can reach
+    # a calibrated threshold below the cap, e.g. A_0.01 ~ 0.95: see rq2_calibration.md)
     assert router.mech_floor <= router.B  # one check alone can clear
 
 

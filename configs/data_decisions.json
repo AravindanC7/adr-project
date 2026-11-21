@@ -75,7 +75,7 @@
     "mech_cap_frac": 0.65,
     "clear_policy": "reopen",
     "neg_floor_frac": 1.0,
-    "evidence_bounds": "each mechanism's running total is bounded to [neg_floor_frac * B, mech_cap_frac * A]: one check alone cannot pause a session; it can clear one (cleared = no evidence of AI found)",
+    "evidence_bounds": "each mechanism's running total is bounded to [neg_floor_frac * B, mech_cap_frac * A_nominal] = [-2.986, 2.960]. The cap keeps one check from reaching the nominal A (4.554), but the calibrated thresholds sit below the cap (A_0.01 ~ 0.95, A_0.05 ~ 0.01 in the RQ2 runs), so at the calibrated thresholds one check can still pause a session. One check alone can clear a session (cleared = no evidence of AI found).",
     "wald": {
       "alpha": 0.01,
       "beta": 0.05,

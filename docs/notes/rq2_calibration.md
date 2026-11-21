@@ -1,10 +1,10 @@
 # Router calibration (step #42)
 
-**Decision (Nov 20):** the router runs with a **per-mechanism cap** (each check adds at most 0.65 A), **clear_policy reopen** and **neg_floor_frac 1.0** (each check's negative evidence stops at B). The review threshold is the cross-fitted **A_0.05 (headline)**, with **A_0.01** as the secondary threshold. **no_cap** (one check may pause a session) and **twocheck** (neg_floor_frac 0.65: no single check may clear a session) are reported as ablations only.
+**Decision (Nov 20):** the router runs with a **per-mechanism cap** (each check adds at most 0.65 × the nominal A), **clear_policy reopen** and **neg_floor_frac 1.0** (each check's negative evidence stops at B). The review threshold is the cross-fitted **A_0.05 (headline)**, with **A_0.01** as the secondary threshold. **no_cap** (no cap on any check's evidence) and **twocheck** (neg_floor_frac 0.65: no single check may clear a session) are reported as ablations only.
 
 The decision is recorded in `configs/data_decisions.json` under `router_calibration`. `tests/test_router_calibration.py` checks that `scripts/run_real_router.py` and `RouterConfig` run it by default.
 
-- **Wald thresholds:** α = 0.01 and β = 0.05, so A = ln((1 − β) / α) = 4.554 and B = ln(β / (1 − α)) = −2.986. Each check's running total is bounded to [B, 0.65 A] = [−2.986, 2.960]: one check alone can never pause a session, but it can clear one.
+- **Wald thresholds:** α = 0.01 and β = 0.05, so A = ln((1 − β) / α) = 4.554 and B = ln(β / (1 − α)) = −2.986. Each check's running total is bounded to [B, 0.65 · A_nominal] = [−2.986, 2.960]. That keeps one check from reaching the *nominal* A (4.554), but **at the calibrated thresholds one check can still pause**: A_0.01 ≈ 0.95 and A_0.05 ≈ 0.01 sit far below the cap (the cap is held at 0.65 × nominal A when the threshold is calibrated), so a single capped canary hit (+2.96) pauses a session on its own. One check alone can also clear a session.
 - **Cleared means "no evidence of AI found":** the session gets no more checks and carries on. It is not a verdict that the person is human.
 - **Threshold rule:** every honest pilot session is scored by session-level cross-fitting, with a failure map that never saw it (`adr/replay/crossfit.py`; the 4 folds come from `adr/replay/folds.py`). Resampled honest sessions are drawn per fold. A_0.05 and A_0.01 are the smallest thresholds that pause at most 5% and 1% of them. 95% CIs bootstrap over sessions.
 
@@ -18,7 +18,7 @@ These are the final numbers, from the floor750 runs:
 
 ## Reopen vs twocheck vs no_cap, all 44 honest sessions
 
-TPR per AI group (20 sessions each) at the 5% and 1% thresholds:
+TPR per AI group (20 sessions each) at the A_0.05 and A_0.01 thresholds. These are the thresholds calibrated for 5% / 1% of resampled honest sessions; the real honest pause rates they give are in the honest-side table below (2 of 44 at A_0.01):
 
 | design | threshold | A | L0 cp | L0 upload | L2 cp | L2 upload | L2g cp | L2g upload | pooled [95% CI] |
 |---|---|---|---|---|---|---|---|---|---|
@@ -29,6 +29,17 @@ TPR per AI group (20 sessions each) at the 5% and 1% thresholds:
 | no_cap *(ablation)* | A_0.05 | 0.003 | 1.00 | 1.00 | 0.28 | 0.66 | 0.95 | 1.00 | 0.81 [0.75, 0.85] |
 | no_cap *(ablation)* | A_0.01 | 1.288 | 1.00 | 1.00 | 0.20 | 0.55 | 0.95 | 1.00 | 0.78 [0.74, 0.84] |
 
+Per-group 95% CIs (bootstrap over sessions, n = 20 per group). The L0 groups and L2g upload are 1.00 [1.00, 1.00] for every row, and L2g copy-paste is 0.95 [0.85, 1.00] for every row:
+
+| design | threshold | L2 cp | L2 upload |
+|---|---|---|---|
+| **reopen** | A_0.05 | 0.24 [0.09, 0.43] | 0.56 [0.35, 0.76] |
+| **reopen** | A_0.01 | 0.23 [0.09, 0.40] | 0.55 [0.35, 0.76] |
+| twocheck | A_0.05 | 0.31 [0.10, 0.49] | 0.69 [0.36, 0.88] |
+| twocheck | A_0.01 | 0.23 [0.09, 0.40] | 0.55 [0.35, 0.78] |
+| no_cap | A_0.05 | 0.28 [0.10, 0.45] | 0.66 [0.45, 0.83] |
+| no_cap | A_0.01 | 0.20 [0.05, 0.40] | 0.55 [0.35, 0.76] |
+
 AI sessions wrongly cleared (cleared = no evidence of AI found), per group. "Ever cleared" and "cleared at the end" are equal for every design here, so one number is shown:
 
 | design | L0 cp | L0 upload | L2 cp | L2 upload | L2g cp | L2g upload |
@@ -37,42 +48,43 @@ AI sessions wrongly cleared (cleared = no evidence of AI found), per group. "Eve
 | twocheck | 0% | 0% | 51% | 19% | 5% | 0% |
 | no_cap | 0% | 0% | 60% | 25% | 5% | 0% |
 
-Honest side:
+Honest side. The real honest pause rate is shown with its exact (Clopper–Pearson) 95% interval:
 
 | design | threshold | nominal FPR | real honest pause rate | checks per honest session | honest cleared |
 |---|---|---|---|---|---|
-| **reopen** | A_0.05 | 5% | 3 of 44 = 6.8% | 6.41 | 82% |
-| **reopen** | A_0.01 | 1% | 2 of 44 = 4.5% | 6.57 | 82% |
-| twocheck | A_0.05 | 5% | 5 of 44 = 11.4% | 6.57 | 77% |
-| twocheck | A_0.01 | 1% | 2 of 44 = 4.5% | 6.77 | 77% |
-| no_cap | A_0.05 | 5% | 5 of 44 = 11.4% | 6.41 | 82% |
-| no_cap | A_0.01 | 1% | 1 of 44 = 2.3% | 6.70 | 82% |
+| **reopen** | A_0.05 | 5% | 3 of 44 = 6.8% [1.4, 18.7] | 6.41 | 82% |
+| **reopen** | A_0.01 | 1% | 2 of 44 = 4.5% [0.6, 15.5] | 6.57 | 82% |
+| twocheck | A_0.05 | 5% | 5 of 44 = 11.4% [3.8, 24.6] | 6.57 | 77% |
+| twocheck | A_0.01 | 1% | 2 of 44 = 4.5% [0.6, 15.5] | 6.77 | 77% |
+| no_cap | A_0.05 | 5% | 5 of 44 = 11.4% [3.8, 24.6] | 6.41 | 82% |
+| no_cap | A_0.01 | 1% | 1 of 44 = 2.3% [0.1, 12.0] | 6.70 | 82% |
 
 ## Without the 4 low-effort sessions (40 honest sessions)
 
 | design | threshold | A | L2 cp | L2 upload | L2g cp | pooled | AI cleared (L2 cp / L2 upload / L2g cp) | real honest pause rate | checks per honest session |
 |---|---|---|---|---|---|---|---|---|---|
-| **reopen** | A_0.05 | 0.017 | 0.24 | 0.55 | 0.95 | 0.79 | 64% / 30% / 5% | 3 of 40 | 5.80 |
-| **reopen** | A_0.01 | 0.541 | 0.23 | 0.55 | 0.95 | 0.79 | 64% / 30% / 5% | 2 of 40 | 5.92 |
-| twocheck | A_0.05 | 0.488 | 0.28 | 0.62 | 0.95 | 0.81 | 51% / 20% / 5% | 5 of 40 | 7.05 |
-| twocheck | A_0.01 | 1.234 | 0.23 | 0.55 | 0.95 | 0.79 | 51% / 20% / 5% | 2 of 40 | 7.28 |
-| no_cap | A_0.05 | 0.017 | 0.24 | 0.59 | 0.95 | 0.80 | 64% / 30% / 5% | 4 of 40 | 5.80 |
-| no_cap | A_0.01 | 0.740 | 0.21 | 0.55 | 0.95 | 0.79 | 64% / 30% / 5% | 2 of 40 | 5.97 |
+| **reopen** | A_0.05 | 0.017 | 0.24 | 0.55 | 0.95 | 0.79 | 64% / 30% / 5% | 3 of 40 [1.6, 20.4] | 5.80 |
+| **reopen** | A_0.01 | 0.541 | 0.23 | 0.55 | 0.95 | 0.79 | 64% / 30% / 5% | 2 of 40 [0.6, 16.9] | 5.92 |
+| twocheck | A_0.05 | 0.488 | 0.28 | 0.62 | 0.95 | 0.81 | 51% / 20% / 5% | 5 of 40 [4.2, 26.8] | 7.05 |
+| twocheck | A_0.01 | 1.234 | 0.23 | 0.55 | 0.95 | 0.79 | 51% / 20% / 5% | 2 of 40 [0.6, 16.9] | 7.28 |
+| no_cap | A_0.05 | 0.017 | 0.24 | 0.59 | 0.95 | 0.80 | 64% / 30% / 5% | 4 of 40 [2.8, 23.7] | 5.80 |
+| no_cap | A_0.01 | 0.740 | 0.21 | 0.55 | 0.95 | 0.79 | 64% / 30% / 5% | 2 of 40 [0.6, 16.9] | 5.97 |
 
 The groups not shown (L0 copy-paste, L0 upload and L2g upload) are at TPR 1.00 for every design and threshold here, and none of their AI sessions is wrongly cleared.
 
 ## Why these settings
 
 - **Two-check clearing buys nothing at the 1% threshold.** At A_0.01 its TPR is identical to reopen in every group, with and without the low-effort sessions. It costs more checks per honest session (6.77 vs 6.57; 7.28 vs 5.92 without the low-effort sessions) and clears fewer honest sessions (77% vs 82%). At A_0.05 it catches a few more L2 sessions (0.82 vs 0.79 pooled), but it pauses 5 honest sessions instead of 3.
-- **Letting one check pause (no_cap) also changes nothing beyond noise.** At A_0.01 it pauses 1 honest session instead of 2 and catches one fewer L2 copy-paste session (0.20 vs 0.23). At A_0.05 it pauses 5 instead of 3. Its wrongly cleared rates are identical to reopen.
+- **Removing the cap (no_cap) also changes nothing beyond noise.** At A_0.01 it pauses 1 honest session instead of 2 and catches one fewer L2 copy-paste session (0.20 vs 0.23). At A_0.05 it pauses 5 instead of 3. Its wrongly cleared rates are identical to reopen. The likely reason it is so close: at the calibrated thresholds the cap (2.96) is already above A, so it rarely binds on the way to a pause.
+- **At A_0.05 = 0.008, any net AI-leaning evidence pauses a session.** The threshold is that low because more than 95% of resampled honest sessions never score above 0. A_0.01 (0.951) is the threshold to read when a pause should take more than one weak signal.
 - **Ever cleared equals cleared at the end in every group,** so clear_policy sticky could not change any number here. It was not run.
 
 ## Clearing costs one AI session
 
 Wrongly cleared AI sessions are, with one exception, sessions the router would not have paused anyway:
 
-- **router_noclear** is the same router with clearing switched off, so it keeps checking every session. Its pooled TPR is 0.80, against the router's 0.79, in both runs and at both thresholds. It asks 13.8 checks per honest session instead of 6.6.
-- **Session by session** (replay of the 120 AI sessions under each of the 4 fold maps, at each policy's own calibrated threshold; all 44 sessions, reopen):
+- **router_noclear** is the same router with clearing switched off, so it keeps checking every session. Its pooled TPR is 0.80, against the router's 0.79, in both runs and at both thresholds. At A_0.01, over all 44 honest sessions (reopen run), it asks 13.8 checks per honest session against the router's 6.6.
+- **Session by session** (replay of the 120 AI sessions under each of the 4 fold maps, at each policy's own calibrated threshold; all 44 sessions, reopen). Command: `python scripts/compare_clearing.py --run results/real-router/rq2-l012-floor750-reopen-all` (the same for the other three runs):
   - The router clears 72 of the 480 session × fold-map pairs. router_noclear does not pause 68 of those either.
   - The other 4 are **one L2g copy-paste session**, cleared by the router under all 4 fold maps and paused by router_noclear. That is the whole 0.95 vs 1.00 gap in that group, and 0.79 vs 0.80 pooled.
   - The router never pauses a session that router_noclear misses.
@@ -114,9 +126,9 @@ It pauses at 0.96–1.22, just over its A_0.01 of 0.951. Totals at the pause:
 - **This is the router's clearing decision working as designed.** Two different checks agreed the first open-text answer looked human: the hidden instruction was ignored, and the style score was in the human-leaning bucket. So two-check clearing (twocheck) loses this session too.
 - **The attacker followed the hidden instruction on only half of its answers.** Whether the router catches it depends on which item comes first.
 - **The pause margin is thin.** router_noclear pauses it only just above its threshold (0.96 against 0.951 on map 1).
-- **Style "high" counts as human-leaning evidence in these maps.** Its log-likelihood ratio is negative because the AI sessions rarely land in the high bucket. Worth checking against the style classifier's orientation (Archana).
+- **Style "high" counts as human-leaning evidence in these maps, and that is the data, not a reversed label.** Archana confirmed on #51 that the bucket code is not reversed: `high` is a distance at or above the 95th percentile of the training-human profile, and the evidence direction is learned from the map. In map v2's pooled counts `high` is 7/156 for AI vs 4/88 for humans (add-one 5.03% vs 5.49%), so it is slightly human-leaning, while `mid` (89/156 vs 11/88) is strongly AI-leaning. The labels stay as the data shows them.
 
 ## Caveats
 
-- **The real honest pause rate is above nominal at the 1% threshold:** 2 of 44 (4.5%), 2 of 40 without the low-effort sessions. Fewer than 3 real honest sessions reach each threshold, so the 1% tail is extrapolated from 44 sessions.
+- **The real honest pause rate is above nominal at the 1% threshold:** 2 of 44 = 4.5% [0.6, 15.5], and 2 of 40 [0.6, 16.9] without the low-effort sessions. The intervals include 1%, but 44 sessions cannot pin it down. The thresholds are set on resampled honest sessions: only 2 real sessions reach A_0.01 and 3 reach A_0.05, so the 1% tail is extrapolated from 44 sessions.
 - **One model:** all AI sessions are gpt-mini. The held-out model (claude-haiku) is used only in the final `--final` evaluation.
