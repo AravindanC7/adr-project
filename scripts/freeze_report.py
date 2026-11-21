@@ -12,6 +12,15 @@ A_0.05 and A_0.01 thresholds per attacker level and mode (95% bootstrap CIs over
   unseen survey  gpt-mini and claude-haiku on the held-out OSMI bank
 
 Checks, each failing loudly (exit 1) after writing what it found:
+  * every run has exactly the expected AI groups (model:mode:level), each with exactly 20 sessions
+    (samples 0-19); a missing, short, over-full or unexpected group fails, naming the run, the
+    group and the count found. Expected groups:
+      unseen model   claude-haiku x {L0, L2, L2g} x {copy_paste, doc_upload}  (6 groups)
+      unseen survey  claude-haiku and gpt-mini x the same levels and modes   (12 groups)
+    gpt-mini has no unseen-model groups by design: --final evaluates held-out rows only (the
+    held-out model's, and training models' on the held-out survey), and gpt-mini's training-bank
+    rows are train split, so they fit the map and are never evaluated there. A gpt-mini group in
+    an unseen-model run is unexpected and fails;
   * no claude-haiku group has synthetic or fallback outcomes > 0 in the per-group source table:
     that would mean its checks were answered from other sessions or from the failure map, which
     is fitted on gpt-mini rows, rather than from claude-haiku's own rows;
@@ -37,6 +46,17 @@ FPR_RULE = (
 THRESHOLDS = ("A_0.05", "A_0.01")
 LEVELS = ("L0", "L2", "L2g")
 MODES = ("copy_paste", "doc_upload")
+SESSIONS_PER_GROUP = 20  # samples 0-19
+
+
+def groups(models: tuple[str, ...]) -> frozenset[str]:
+    return frozenset(f"{m}:{mode}:{lv}" for m in models for mode in MODES for lv in LEVELS)
+
+
+UNSEEN_MODEL_MODELS = ("claude-haiku",)
+UNSEEN_SURVEY_MODELS = ("gpt-mini", "claude-haiku")
+EXPECTED_GROUPS = {"unseen-model": groups(UNSEEN_MODEL_MODELS),
+                   "unseen-survey": groups(UNSEEN_SURVEY_MODELS)}
 
 
 def load(run_dir: Path) -> dict:
@@ -49,6 +69,21 @@ def source_problems(router: dict) -> list[str]:
     for group, src in (router.get("ai_sources_by_group") or {}).items():
         if group.startswith("claude-haiku:") and (src["synthetic"] > 0 or src["fallback"] > 0):
             bad.append(f"{group}: synthetic {src['synthetic']}, fallback {src['fallback']} per session")
+    return bad
+
+
+def group_problems(router: dict, expected: frozenset[str],
+                   n: int = SESSIONS_PER_GROUP) -> list[str]:
+    """Missing, short, over-full or unexpected AI groups (empty = exactly the expected matrix)."""
+    found = dict(router.get("n_ai_sessions_by_group") or {})
+    for g, src in (router.get("ai_sources_by_group") or {}).items():
+        found.setdefault(g, src.get("sessions", 0))
+    bad = [f"missing group {g} (0 sessions, expected {n})" for g in sorted(expected - set(found))]
+    for g in sorted(found):
+        if g not in expected:
+            bad.append(f"unexpected group {g} ({found[g]} sessions)")
+        elif found[g] != n:
+            bad.append(f"group {g} has {found[g]} sessions, expected exactly {n}")
     return bad
 
 
@@ -133,19 +168,22 @@ def main() -> int:
         "Unseen model",
         "claude-haiku (the held-out model) composite sessions on the training banks (quiz MMLU/ARC,"
         " survey IPIP/GSS, assignment-asurre-train).",
-        a.unseen_model, ("claude-haiku",),
+        a.unseen_model, UNSEEN_MODEL_MODELS,
     )
     lines += report(
         "Unseen survey",
         "gpt-mini and claude-haiku on the held-out OSMI bank (written answers only). Only the "
         "pilot's open-text checks (canary, style) have rows here; its other checks have none, so "
         "they show as missing and give no evidence.",
-        a.unseen_survey, ("gpt-mini", "claude-haiku"),
+        a.unseen_survey, UNSEEN_SURVEY_MODELS,
     )
 
     problems = []
-    for run in [*a.unseen_model, *a.unseen_survey]:
+    runs = [("unseen-model", r) for r in a.unseen_model] + [("unseen-survey", r)
+                                                           for r in a.unseen_survey]
+    for kind, run in runs:
         router = load(run)
+        problems += [f"{run.name}: {p}" for p in group_problems(router, EXPECTED_GROUPS[kind])]
         problems += [f"{run.name}: {p}" for p in source_problems(router)]
         ref = reference_for(run, a.reference_all, a.reference_no_low_effort)
         if ref is None:
@@ -157,6 +195,8 @@ def main() -> int:
     lines += [f"- FAILED: {p}" for p in problems] or [
         ("- claude-haiku groups: every check answered from claude-haiku's own rows "
          "(synthetic 0, fallback 0)."),
+        (f"- AI groups: exactly the expected matrix, {SESSIONS_PER_GROUP} sessions in each "
+         "(unseen model: claude-haiku, 6 groups; unseen survey: both models, 12 groups)."),
         "- thresholds: equal to #51's runs with the same honest sessions.",
     ]
     a.out.parent.mkdir(parents=True, exist_ok=True)

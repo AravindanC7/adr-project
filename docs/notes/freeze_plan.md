@@ -44,10 +44,20 @@ Each report gives TPR at the A_0.05 (headline) and A_0.01 thresholds, with 95% b
 
 ## (c) Post-run checks (`scripts/freeze_report.py`, exit 1 = the driver stops with "POST-RUN CHECK FAILED")
 
-1. **claude-haiku answered from its own rows.** In every claude-haiku group of the per-group
+1. **Exactly the expected AI groups, 20 sessions each.** Each run must have exactly the
+   expected groups (model:mode:level), with exactly 20 sessions (samples 0–19) in each. A group that is missing, short,
+   over 20 or unexpected fails; the error names the run, the group and the count found.
+   - Unseen model: claude-haiku × {L0, L2, L2g} × {copy-paste, upload}, 6 groups.
+   - Unseen survey: claude-haiku and gpt-mini × the same levels and modes, 12 groups.
+
+   gpt-mini has no unseen-model groups by design. `--final` evaluates only held-out rows: the
+   held-out model's rows, and training models' rows on the held-out survey. All 115,767 AI rows in
+   the 35 training files are gpt-mini, train split, so they fit the map and are never evaluated
+   in that run. A gpt-mini group there is unexpected and fails.
+2. **claude-haiku answered from its own rows.** In every claude-haiku group of the per-group
    source table (`ai_sources_by_group`), synthetic and fallback outcomes must be 0. A value above
    0 means some of its checks fell back to gpt-mini's map or to other sessions.
-2. **The honest side is #51's.** Each run's A_0.05 and A_0.01 must equal those of #51's run with
+3. **The honest side is #51's.** Each run's A_0.05 and A_0.01 must equal those of #51's run with
    the same honest sessions:
    - `rq2-l012-floor750-reopen-all` for the all-44 runs;
    - `rq2-l012-floor750-reopen-no-low-effort` for the runs without the low-effort sessions.

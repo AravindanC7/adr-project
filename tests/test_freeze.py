@@ -126,17 +126,28 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_4_router_runs(tmp_path
 
 
 # ------------------------------------------------------------------ freeze_report.py
-def _router(thr=(0.008, 0.951), haiku_src=None, n=44):
-    src = {"sessions": 20, "checks": 4.0, "same_type": 4.0, "fallback": 0.0, "synthetic": 0.0,
-           "missing": 0.0}
-    groups = {"claude-haiku:copy_paste:L0": {**src, **(haiku_src or {})},
-              "gpt-mini:copy_paste:L0": {**src, "fallback": 2.0, "synthetic": 1.0}}
+SRC = {"checks": 4.0, "same_type": 4.0, "fallback": 0.0, "synthetic": 0.0, "missing": 0.0}
+
+
+def _router(kind="unseen-survey", thr=(0.008, 0.951), haiku_src=None, sessions=None, n=44):
+    """A metrics.json router block with the complete expected group matrix for `kind`;
+    `sessions` overrides per-group session counts (None = drop the group)."""
+    counts = {g: 20 for g in fr.EXPECTED_GROUPS[kind]}
+    for g, c in (sessions or {}).items():
+        if c is None:
+            counts.pop(g, None)
+        else:
+            counts[g] = c
+    groups = {g: {**SRC, "sessions": c, **(haiku_src if g.startswith("claude-haiku:") and haiku_src
+                                           else {})}
+              for g, c in counts.items()}
+    if "gpt-mini:copy_paste:L0" in groups:  # gpt-mini's fallback/synthetic are not checked
+        groups["gpt-mini:copy_paste:L0"].update(fallback=2.0, synthetic=1.0)
     res = {t: {"honest_pause_rate": 1 / n, **{f"tpr[{g}]": 0.5 for g in groups}}
            for t in fr.THRESHOLDS}
     ci = {t: {f"tpr[{g}]": [0.3, 0.7] for g in groups} for t in fr.THRESHOLDS}
     return {"thresholds": dict(zip(fr.THRESHOLDS, thr, strict=True)), "results": res, "ci95": ci,
-            "n_sessions": n, "ai_sources_by_group": groups,
-            "n_ai_sessions_by_group": {g: 20 for g in groups}}
+            "n_sessions": n, "ai_sources_by_group": groups, "n_ai_sessions_by_group": counts}
 
 
 def _write(run_dir: Path, router: dict) -> Path:
@@ -145,11 +156,43 @@ def _write(run_dir: Path, router: dict) -> Path:
     return run_dir
 
 
+def test_expected_group_matrix():
+    assert len(fr.EXPECTED_GROUPS["unseen-model"]) == 6  # claude-haiku only, by design
+    assert all(g.startswith("claude-haiku:") for g in fr.EXPECTED_GROUPS["unseen-model"])
+    assert len(fr.EXPECTED_GROUPS["unseen-survey"]) == 12
+    assert {g.split(":")[0] for g in fr.EXPECTED_GROUPS["unseen-survey"]} == {"gpt-mini",
+                                                                               "claude-haiku"}
+
+
+@pytest.mark.parametrize("kind", ["unseen-model", "unseen-survey"])
+def test_complete_group_matrix_passes(kind):
+    assert fr.group_problems(_router(kind), fr.EXPECTED_GROUPS[kind]) == []
+
+
+@pytest.mark.parametrize(
+    "kind, sessions, message",
+    [
+        ("unseen-survey", {"gpt-mini:doc_upload:L2g": None},
+         "missing group gpt-mini:doc_upload:L2g (0 sessions, expected 20)"),
+        ("unseen-model", {"claude-haiku:copy_paste:L2": 19},
+         "group claude-haiku:copy_paste:L2 has 19 sessions, expected exactly 20"),
+        ("unseen-survey", {"claude-haiku:doc_upload:L0": 21},
+         "group claude-haiku:doc_upload:L0 has 21 sessions, expected exactly 20"),
+        ("unseen-model", {"gpt-mini:copy_paste:L0": 20},  # gpt-mini is not evaluated here
+         "unexpected group gpt-mini:copy_paste:L0 (20 sessions)"),
+        ("unseen-survey", {"claude-haiku:copy_paste:L1": 20},
+         "unexpected group claude-haiku:copy_paste:L1 (20 sessions)"),
+    ],
+)
+def test_missing_short_overfull_or_unexpected_group_fails(kind, sessions, message):
+    assert fr.group_problems(_router(kind, sessions=sessions), fr.EXPECTED_GROUPS[kind]) == [message]
+
+
 @pytest.mark.parametrize("bad", [{"synthetic": 0.5}, {"fallback": 1.0}])
 def test_source_check_flags_claude_haiku_borrowed_outcomes_only(bad):
     assert fr.source_problems(_router()) == []  # gpt-mini's fallback/synthetic are not checked
     problems = fr.source_problems(_router(haiku_src=bad))
-    assert len(problems) == 1 and problems[0].startswith("claude-haiku:copy_paste:L0")
+    assert len(problems) == 6 and all(p.startswith("claude-haiku:") for p in problems)
 
 
 def test_threshold_check_against_51():
@@ -163,10 +206,13 @@ def test_reference_is_picked_by_honest_sessions(tmp_path):
     assert fr.reference_for(Path("x-unseen-model-no-low-effort"), ref_all, ref_no) == ref_no
 
 
-def _report(tmp_path, haiku_src=None, thr=(0.008, 0.951)):
-    runs = {name: _write(tmp_path / name, _router(thr, haiku_src)) for name in
-            ("unseen-model-all", "unseen-model-no-low-effort", "unseen-survey-all",
-             "unseen-survey-no-low-effort")}
+def _report(tmp_path, haiku_src=None, thr=(0.008, 0.951), survey_sessions=None):
+    runs = {}
+    for kind in ("unseen-model", "unseen-survey"):
+        for who in ("all", "no-low-effort"):
+            sessions = survey_sessions if kind == "unseen-survey" else None
+            runs[f"{kind}-{who}"] = _write(tmp_path / f"{kind}-{who}",
+                                           _router(kind, thr, haiku_src, sessions))
     ref_all = _write(tmp_path / "ref-all", _router())
     ref_no = _write(tmp_path / "ref-no", _router())
     out = tmp_path / "README.md"
@@ -195,6 +241,15 @@ def test_report_fails_loudly_on_borrowed_claude_haiku_outcomes(tmp_path):
     assert proc.returncode == 1
     assert "POST-RUN CHECK FAILED" in proc.stderr and "claude-haiku:copy_paste:L0" in proc.stderr
     assert "- FAILED: unseen-model-all: claude-haiku:copy_paste:L0" in readme
+
+
+def test_report_fails_loudly_on_a_short_group_naming_run_group_and_count(tmp_path):
+    proc, readme = _report(tmp_path, survey_sessions={"gpt-mini:doc_upload:L2": 19})
+    assert proc.returncode == 1
+    msg = ("unseen-survey-no-low-effort: group gpt-mini:doc_upload:L2 has 19 sessions, "
+           "expected exactly 20")
+    assert f"POST-RUN CHECK FAILED: {msg}" in proc.stderr
+    assert f"- FAILED: {msg}" in readme
 
 
 def test_report_fails_when_a_threshold_differs_from_51(tmp_path):
