@@ -18,6 +18,9 @@ cache/llm-fake/
 results/outcomes/*
 results/runs/*
 results/calibration/*
+# Router run folders and error-analysis outputs: their config.yaml / metrics store full pilot
+# session IDs (the fold assignment), so they are never committed. Share them via the Drive.
+results/real-router/
 # router error analysis (scripts/error_analysis.py): per-step traces of pilot sessions
 results/error_analysis/
 # real pilot answers: never in git (docs/pilot/README.md)

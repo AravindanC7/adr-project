@@ -5,6 +5,7 @@ All data is SYNTHETIC, pilot-shaped rows built here (not the dry-run data: the b
 data_origin "dry_run"). No model calls.
 """
 
+import hashlib
 import json
 import random
 import subprocess
@@ -718,6 +719,8 @@ def test_rates_report_tpr_per_ai_group():
     r = cf.rates([_gt("h", 0.0)], ai, [0.0], {"A": 2.0})["A"]
     assert r["tpr"] == pytest.approx(2 / 3)
     assert r["tpr[m:copy_paste:L0]"] == 0.5 and r["tpr[m:doc_upload:L3]"] == 1.0
+    for g in ("m:copy_paste:L0", "m:doc_upload:L3"):  # per-group AI cleared rates too
+        assert r[f"ai_ever_cleared_rate[{g}]"] == 0.0 and r[f"ai_cleared_rate[{g}]"] == 0.0
     one = cf.rates([_gt("h", 0.0)], ai[:2], [0.0], {"A": 2.0})["A"]
     assert not any(k.startswith("tpr[") for k in one)  # one group: pooled TPR only
 
@@ -850,3 +853,129 @@ def test_run_real_router_clear_policy_and_ever_cleared_columns(tmp_path):
     # ever cleared >= cleared at the end, for every policy and threshold
     assert (comp.honest_ever_cleared_rate >= comp.honest_cleared_rate - 1e-12).all()
     assert (comp.ai_ever_cleared_rate >= comp.ai_cleared_rate - 1e-12).all()
+
+
+# ---------------------------------------------------------------- --jobs and --resume
+def _two_mechanism_files(tmp_path):
+    """The pilot fixture plus passive style rows, so there are leave-one-check-out tasks too."""
+    _files(tmp_path)
+
+    def style(r: OutcomeRow, outcome: str) -> OutcomeRow:
+        return r.model_copy(
+            update={
+                "mechanism": "style",
+                "variant_id": make_variant_id(r.item_id, "style", 0),
+                "outcome": outcome,
+            }
+        )
+
+    ai = [OutcomeRow(**r) for r in ai_frame().to_dict("records")]
+    human = [OutcomeRow(**r) for r in human_frame().to_dict("records")]
+    ai += [style(r, "high" if i % 3 else "mid") for i, r in enumerate(ai)]
+    human += [style(r, "low" if i % 5 else "mid") for i, r in enumerate(human)]
+    write_outcomes(ai, tmp_path / "ai.parquet")
+    write_outcomes(human, tmp_path / "pilot.parquet")
+
+
+TASK_ARGS = ("--cap-variant", "per_mech", "no_cap", "--drop-mechanisms", "style,decoy")
+TABLES = ("comparison.csv", "comparison.md", "thresholds.csv", "leave_one_out.csv",
+          "budget_curve.csv")
+
+
+def _run(tmp_path, run_id, *extra):
+    cmd = [a if a != "r" else run_id for a in _cmd(tmp_path, *TASK_ARGS, *extra)]
+    proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+                          check=False)
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    return tmp_path / "real-router" / run_id, proc
+
+
+@pytest.mark.skipif(
+    not run_real_router.fork_available(),
+    reason="--jobs > 1 needs fork (not on Windows): it falls back to one task at a time",
+)
+def test_jobs_gives_identical_outputs(tmp_path):
+    _two_mechanism_files(tmp_path)
+    serial, _ = _run(tmp_path, "serial", "--jobs", "1")
+    par, _ = _run(tmp_path, "parallel", "--jobs", "4")
+    for name in TABLES:  # same numbers, same row order
+        assert (serial / name).read_bytes() == (par / name).read_bytes(), name
+    m1 = json.loads((serial / "metrics.json").read_text())
+    m4 = json.loads((par / "metrics.json").read_text())
+    assert m1["results"] == m4["results"]
+    steps1 = sorted(p.name for p in (serial / "steps").glob("*.json"))
+    assert steps1 == sorted(p.name for p in (par / "steps").glob("*.json"))
+    assert len(steps1) == 6 + 1 + (3 + 1) + 2  # policies, no_cap, loo (style: 3, decoy: 1), betas
+    for name in steps1:  # same summary and the same bootstrap seed per task
+        a = json.loads((serial / "steps" / name).read_text())
+        b = json.loads((par / "steps" / name).read_text())
+        assert a["summary"] == b["summary"] and a["seed"] == b["seed"] == 0, name
+        assert a["fingerprint"] == b["fingerprint"]  # --jobs is not a setting
+    inputs = (par / "inputs.txt").read_text()
+    assert "ai_outcomes:" in inputs
+    digest = hashlib.sha256((tmp_path / "pilot.parquet").read_bytes()).hexdigest()
+    assert f"pilot.parquet  sha256 {digest}" in inputs  # the pilot file's hash is recorded
+
+
+def test_resume_reruns_only_missing_steps_and_refuses_other_settings(tmp_path):
+    _two_mechanism_files(tmp_path)
+    out, _ = _run(tmp_path, "r", "--jobs", "2")
+    first = {name: (out / name).read_bytes() for name in TABLES}
+    steps = out / "steps"
+    lost = steps / "loo-style-router.json"
+    lost.unlink()  # as if the run crashed during this step
+    mtimes = {p.name: p.stat().st_mtime_ns for p in steps.glob("*.json")}
+    out, proc = _run(tmp_path, "r", "--resume")
+    assert lost.exists()
+    assert "resume: policy-router loaded" in proc.stdout
+    assert "step done: loo-style-router" in proc.stdout
+    for p in steps.glob("*.json"):  # nothing else was recomputed
+        if p.name != lost.name:
+            assert p.stat().st_mtime_ns == mtimes[p.name], p.name
+    for name in TABLES:
+        assert (out / name).read_bytes() == first[name], name
+    # a step made with other settings is never reused
+    cmd = [a if a != "0.05,0.2" else "0.05" for a in _cmd(tmp_path, *TASK_ARGS, "--resume")]
+    proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+                          check=False)
+    assert proc.returncode != 0 and "other settings or inputs" in proc.stderr
+
+
+def test_run_real_router_neg_floor_frac_reaches_every_router_row(tmp_path):
+    _files(tmp_path)
+    proc = subprocess.run(
+        _cmd(tmp_path, "--neg-floor-frac", "0.65", "--cap-variant", "per_mech", "no_cap"),
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    cfg = yaml.safe_load((tmp_path / "real-router" / "r" / "config.yaml").read_text())
+    assert cfg["router_config"]["neg_floor_frac"] == 0.65
+
+
+def test_run_real_router_config_records_the_git_state_after_build_parser(tmp_path):
+    """After the build_parser() refactor the run config still records the code that ran, as main
+    does: git_state() (HEAD + tracked-files dirty flag) read when the run starts."""
+    from adr.harness.provenance import git_state
+
+    _files(tmp_path)
+    proc = subprocess.run(
+        _cmd(tmp_path), cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=False
+    )
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    cfg = yaml.safe_load((tmp_path / "real-router" / "r" / "config.yaml").read_text())
+    assert {"git_commit", "git_dirty"} <= set(cfg)
+    expected = git_state(ROOT)
+    assert cfg["git_commit"] == expected["git_commit"]
+    assert cfg["git_dirty"] == expected["git_dirty"]
+    assert isinstance(cfg["git_dirty"], bool)
+
+
+def test_jobs_falls_back_to_one_at_a_time_without_fork(tmp_path, monkeypatch, capsys):
+    """Windows has no fork: --jobs > 1 must not crash, it runs the tasks serially."""
+    monkeypatch.setattr(run_real_router.multiprocessing, "get_all_start_methods", lambda: ["spawn"])
+    assert not run_real_router.fork_available()
+    tasks = {f"t{i}": (lambda i=i: {"value": i}) for i in range(3)}
+    done = run_real_router.run_tasks(tasks, tmp_path, jobs=4, resume=False, seed=0)
+    assert done == {f"t{i}": {"value": i} for i in range(3)}
+    assert "needs the 'fork' start method" in capsys.readouterr().out
+    assert sorted(p.name for p in tmp_path.glob("*.json")) == ["t0.json", "t1.json", "t2.json"]
