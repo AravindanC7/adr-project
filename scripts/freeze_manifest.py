@@ -5,6 +5,7 @@
         --training-files LIST [--expected-bank-zip ZIP]
     python scripts/freeze_manifest.py add-final --manifest M --files F [F ...]
     python scripts/freeze_manifest.py verify --manifest M
+    python scripts/freeze_manifest.py budget [--config configs/models.yaml]
 
 The held-out bank (scripts/build_runs_v1.py --heldout-asurre-only, #55) is compared by CONTENT:
 each file's sha256 after normalising line endings (CRLF -> LF), because a bank built on Windows
@@ -36,8 +37,36 @@ BANK_FILES = (  # content-checked files of the held-out bank, relative to its fo
     "human_distributions.jsonl",
 )
 CONFIGS = ("configs/data_decisions.json", "configs/models.yaml")
+DECISIONS = Path("configs/data_decisions.json")
 # Per-job spend caps (ADR_JOB_SPEND_CAP_USD), approved Nov 21; scripts/freeze_run.sh must match.
 SPEND_CAPS_USD = {"claude-haiku": 12.0, "gpt-mini": 10.0}
+# Reply limits of the final attacker runs (decided Nov 21); scripts/freeze_run.sh must match.
+HAIKU_CP_MAX_TOKENS = 1024
+MAX_TOKENS = {
+    "claude-haiku": {
+        "copy_paste": HAIKU_CP_MAX_TOKENS,
+        "doc_upload": "unchanged: the training runs' limits (3000; 6000 for written answers)",
+    },
+    "gpt-mini": "unchanged: the training runs' limits",
+    "reason": "claude-haiku is billed about 190 output tokens per call that are not in the reply "
+              "text (smoke call, Nov 21: 271 output tokens for a 46-word reply), which would "
+              "truncate replies at the 300-token copy-paste limit; 1024 for claude-haiku only.",
+    "truncation": "fatal: any truncated reply stops the driver (check_run)",
+}
+# Files the final run reads besides the outcome files (paths relative to the checkout root).
+STYLE_PROFILE = "data/processed/runs_v1/style_profile.json"
+STYLE_PROFILE_SHA12 = "6b43d6ed5372"  # configs/data_decisions.json style_profile.profile_sha256
+PILOT_BANK = "server/pilot_items.json"  # gitignored: its sha here is the only record
+TRAINING_BANK_FILES = (
+    "data/processed/runs_v1/items.jsonl",
+    *(f"data/processed/runs_v1/{kind}/{bank}.{ext}"
+      for bank in ("quiz-mmlu-200", "quiz-arc-200")
+      for kind, ext in (("assessments", "json"), ("variants", "jsonl"))),
+    "data/processed/archana-survey-written-v1/items.jsonl",
+    *(f"data/processed/archana-survey-written-v1/{kind}/{bank}.{ext}"
+      for bank in ("survey-ipip", "survey-gss", "assignment-asurre-train")
+      for kind, ext in (("assessments", "json"), ("variants", "jsonl"))),
+)
 
 
 def sha256(data: bytes) -> str:
@@ -79,6 +108,27 @@ def compare_bank(built: dict, expected: dict) -> list[str]:
             if built["files"][r]["content_sha256"] != expected["files"][r]["content_sha256"]]
 
 
+def profile_sha(path: Path) -> str:
+    """The style profile's object sha256 (as configs/data_decisions.json records it): the
+    canonical JSON of its "profile" object, so formatting and line endings do not matter."""
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    blob = json.dumps(doc.get("profile", doc), sort_keys=True, separators=(",", ":")).encode()
+    return sha256(blob)
+
+
+def style_entry(path: Path) -> dict:
+    locked = json.loads(DECISIONS.read_text(encoding="utf-8"))["style_profile"]["profile_sha256"]
+    actual = profile_sha(path)
+    if actual != locked or not actual.startswith(STYLE_PROFILE_SHA12):
+        raise SystemExit(f"{path}: style profile sha256 {actual[:12]} is not the locked "
+                         f"{STYLE_PROFILE_SHA12} (configs/data_decisions.json {locked[:12]})")
+    return {**file_entry(path), "profile_sha256": actual}
+
+
+def head_commit() -> str | None:
+    return git_state().get("git_commit")
+
+
 def cmd_check_heldout(a) -> int:
     built, expected = bank_entry(a.bank), zip_bank_entry(a.against)
     for rel in BANK_FILES:
@@ -102,7 +152,11 @@ def cmd_prep(a) -> int:
         "pilot": file_entry(a.pilot),
         "low_effort_ids": file_entry(a.low_effort),  # sha only: the ids stay in that file
         "configs": {c: file_entry(Path(c)) for c in CONFIGS},
+        "style_profile": style_entry(a.root / STYLE_PROFILE),
+        "pilot_bank": file_entry(a.root / PILOT_BANK),
+        "training_banks": [file_entry(a.root / f) for f in TRAINING_BANK_FILES],
         "spend_caps_usd": dict(SPEND_CAPS_USD),
+        "max_tokens": MAX_TOKENS,
         "training_outcomes": [file_entry(p) for p in training],
         "final_outcomes": [],
     }
@@ -136,12 +190,16 @@ def cmd_add_final(a) -> int:
 def cmd_verify(a) -> int:
     m = json.loads(a.manifest.read_text(encoding="utf-8"))
     bad = []
-    entries = [m["pilot"], m["low_effort_ids"], *m["configs"].values(), *m["training_outcomes"],
+    entries = [m["pilot"], m["low_effort_ids"], *m["configs"].values(), m["style_profile"],
+               m["pilot_bank"], *m["training_banks"], *m["training_outcomes"],
                *m["final_outcomes"]]
     for e in entries:
         p = Path(e["path"])
         if not p.exists() or sha256(p.read_bytes()) != e["sha256"]:
             bad.append(e["path"])
+    head = head_commit()
+    if head != m["git"]["git_commit"]:
+        bad.append(f"git commit: manifest {m['git']['git_commit']}, HEAD {head}")
     bank_dir = a.heldout_bank or Path(m["heldout_bank"]["dir"])  # e.g. the bank rebuilt for the run
     if bank_entry(bank_dir)["content_sha256"] != m["heldout_bank"]["content_sha256"]:
         bad.append(f"held-out bank {bank_dir}")
@@ -150,6 +208,33 @@ def cmd_verify(a) -> int:
     for b in bad:
         print(f"  changed or missing: {b}", file=sys.stderr)
     return 1 if bad else 0
+
+
+def budget_check(client, need: float, now: str | None = None) -> int:
+    """Refuse (1) if this ISO week's remaining weekly budget is below `need`, the sum of the two
+    jobs' caps. The client counts the week in UTC from its spend ledger; no API calls."""
+    stamp = now or datetime.now(timezone.utc).isoformat()
+    year, week, _ = datetime.fromisoformat(stamp).isocalendar()
+    spent, cap = client.week_spend_usd(stamp), client.weekly_spend_cap_usd
+    if cap is None:
+        print(f"ISO week {year}-W{week:02d} (UTC): ledger spend ${spent:.2f}; no weekly cap")
+        return 0
+    left = cap - spent
+    print(f"ISO week {year}-W{week:02d} (UTC): ledger spend ${spent:.2f} of the ${cap:.2f} weekly "
+          f"cap, ${left:.2f} left; the two freeze jobs may spend up to ${need:.2f}")
+    if left < need:
+        print(f"NOT STARTING: ${left:.2f} left this week is below the ${need:.2f} the two jobs' "
+              "caps allow. Start after 17:00 Arizona time on Sunday (00:00 UTC Monday), when a "
+              "new ISO week begins with the full weekly cap; configs/models.yaml stays as it is.",
+              file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_budget(a) -> int:
+    from adr.harness.llm_client import LLMClient
+
+    return budget_check(LLMClient.from_config(a.config), sum(SPEND_CAPS_USD.values()))
 
 
 def main() -> None:
@@ -166,15 +251,19 @@ def main() -> None:
     p.add_argument("--low-effort", type=Path, required=True, help="pilot_data/low_effort_ids.txt")
     p.add_argument("--training-files", type=Path, required=True, help="one path per line")
     p.add_argument("--expected-bank-zip", type=Path)
+    p.add_argument("--root", type=Path, default=Path("."),
+                   help="checkout holding data/ and server/pilot_items.json (default: here)")
     f = sub.add_parser("add-final")
     f.add_argument("--manifest", type=Path, required=True)
     f.add_argument("--files", nargs="+", required=True)
     v = sub.add_parser("verify")
     v.add_argument("--manifest", type=Path, required=True)
     v.add_argument("--heldout-bank", type=Path, help="check this bank folder's content instead")
+    b = sub.add_parser("budget", help="this week's ledger spend vs the two jobs' caps")
+    b.add_argument("--config", default="configs/models.yaml")
     a = ap.parse_args()
     sys.exit({"check-heldout": cmd_check_heldout, "prep": cmd_prep, "add-final": cmd_add_final,
-              "verify": cmd_verify}[a.cmd](a))
+              "verify": cmd_verify, "budget": cmd_budget}[a.cmd](a))
 
 
 if __name__ == "__main__":

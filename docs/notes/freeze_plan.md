@@ -13,6 +13,22 @@ it.**
 The same sentence is written at the top of the run's `results/freeze-2026-11-22/README.md` by
 `scripts/freeze_report.py`.
 
+## Start time and preflight
+
+**Start after 17:00 Arizona time on Sun Nov 22, which is 00:00 UTC Mon Nov 23.** The team's weekly cap ($25, `configs/models.yaml`, unchanged) is counted per ISO week in UTC.
+- Before that moment it is still ISO week 47, which already has $14.89 of spend in the `adr-project` ledger (as of Nov 21), leaving $10.11.
+- From 00:00 UTC Monday, week 48 starts with the full $25.
+
+Before any paid call, the driver's preflight (`scripts/freeze_run.sh`) checks:
+- HEAD is exactly the tag `freeze-2026-11-22`;
+- the tag is on main (`git merge-base --is-ancestor HEAD origin/main`);
+- tracked files are clean;
+- #50's per-job spend cap is present;
+- the manifest exists, and its spend caps and claude-haiku `max_tokens` equal the driver's;
+- #51's two reference runs exist.
+
+It then prints this week's ledger spend and **refuses to start if the remaining weekly budget is below $22**, the sum of the two job caps (`scripts/freeze_manifest.py budget`). Finally it rebuilds the held-out bank and verifies every input against the manifest, including that the manifest's commit is HEAD.
+
 ## (a) Attacker runs: 42 runs, samples 0–19, run ids `v1-final-<mode>-<level>-<bank>-<model>-s20`
 
 | model | banks | levels | modes | runs |
@@ -28,7 +44,14 @@ The same sentence is written at the top of the run's `results/freeze-2026-11-22/
   - gpt-mini: **$10**.
 
   The caps are fixed in `scripts/freeze_run.sh` and recorded in the manifest (`spend_caps_usd`). The driver refuses to start if the two differ.
-- The team's weekly cap ($25, `configs/models.yaml`) applies on top of these. It is counted per ISO week in UTC, and Sun Nov 22 is in the same week as Nov 16–21.
+- The team's weekly cap ($25) applies on top of these; see "Start time and preflight".
+- **Reply limits (decided Nov 21):**
+  - claude-haiku copy-paste: `max_tokens` **1,024**. The training runs used 300 for quiz, IPIP and GSS, and 1,000 for written answers.
+  - Why: claude-haiku is billed about 190 output tokens per call that are not in the reply text. The smoke call billed 271 output tokens for a 46-word reply, so a 300 limit would cut replies off.
+  - claude-haiku document upload keeps the training limits (3,000; 6,000 for written answers), which are already above 1,024.
+  - gpt-mini is unchanged.
+  - **Truncation stays fatal:** any truncated reply stops the driver (`check_run`).
+  - The limits are recorded in the manifest (`max_tokens`) with this reason.
 
 ## (b) Router runs: two separate reports
 
@@ -45,23 +68,30 @@ Every run uses `run_real_router.py --final` with #51's frozen config (per_mech c
 
 Each report gives TPR at the A_0.05 (headline) and A_0.01 thresholds, with 95% bootstrap CIs.
 - It is broken down by model, level (L0, L2, L2g) and mode.
-- The OSMI bank has written answers only. In the unseen-survey report, the pilot's other checks have no rows, so they show as missing (no evidence). The report lists missing checks per session.
+- **"Unseen model" means an unseen model, not unseen items.** These are the same banks the map was fitted on, answered by a model that never contributed to the map, thresholds or any tuning.
+- **Unseen-survey TPR comes from canary and style only and is not comparable to the headline.** The OSMI bank has written answers only, so the pilot's other checks have no rows there; they show as missing (no evidence). The report lists missing checks per session.
 
 ## (c) Post-run checks (`scripts/freeze_report.py`, exit 1 = the driver stops with "POST-RUN CHECK FAILED")
 
-1. **Exactly the expected AI groups, 20 sessions each.** Each run must have exactly the
-   expected groups (model:mode:level), with exactly 20 sessions (samples 0–19) in each. A group that is missing, short,
-   over 20 or unexpected fails; the error names the run, the group and the count found.
+1. **Exactly the expected AI groups, 20 sessions each, in both session tables.**
+   - Every expected group (model:mode:level) must be in both `n_ai_sessions_by_group` and `ai_sources_by_group`.
+   - Each table's count must independently be exactly 20 (samples 0–19), so the run fails if the two tables disagree.
+   - It also fails on no groups at all, or a missing, short or over-full group, or a group or model outside the matrix. The error names the run, the group, the table and the count.
+
+   Expected groups:
    - Unseen model: claude-haiku × {L0, L2, L2g} × {copy-paste, upload}, 6 groups.
    - Unseen survey: claude-haiku and gpt-mini × the same levels and modes, 12 groups.
 
    gpt-mini has no unseen-model groups by design. `--final` evaluates only held-out rows: the
    held-out model's rows, and training models' rows on the held-out survey. All 115,767 AI rows in
    the 35 training files are gpt-mini, train split, so they fit the map and are never evaluated
-   in that run. A gpt-mini group there is unexpected and fails.
-2. **claude-haiku answered from its own rows.** In every claude-haiku group of the per-group
-   source table (`ai_sources_by_group`), synthetic and fallback outcomes must be 0. A value above
-   0 means some of its checks fell back to gpt-mini's map or to other sessions.
+   in that run. A gpt-mini group there is an unexpected model and fails.
+2. **Every check answered from the session's own rows.** In the per-group source table
+   (`ai_sources_by_group`), synthetic = fallback = 0 for every group, gpt-mini's OSMI groups included.
+   Unseen-model groups must also have missing = 0.
+   - AI donors are built from the held-out rows with no failure map (`adr/replay/crossfit.py`), so a value above 0 means something is wrong with the inputs.
+   - Unseen-survey groups are allowed missing checks: they are the pilot checks with no OSMI rows.
+   - Style is passive (scored on every written answer), so it is not in the source table; the README says so.
 3. **The honest side is #51's.** Each run's A_0.05 and A_0.01 must equal those of #51's run with
    the same honest sessions:
    - `rq2-l012-floor750-reopen-all` for the all-44 runs;
@@ -79,7 +109,11 @@ for:
 - the floor750 pilot parquet;
 - `configs/data_decisions.json` and `configs/models.yaml`;
 - the 35 training outcome files. 15 are in `adr-project/results/outcomes`; **20 are in the `adr-rq2-l2` worktree** (`adr-rq2-l2/results/outcomes`). Keep that worktree until the final run and its write-up are done: the manifest and the router read those files by path;
-- the per-job spend caps (`spend_caps_usd`);
+- the style profile `data/processed/runs_v1/style_profile.json`. Its profile sha256 must be the locked `6b43d6ed5372…` from `configs/data_decisions.json`, or `prep` refuses;
+- the training banks' items, assessment and variants files: 12 files under `data/processed/runs_v1` and `data/processed/archana-survey-written-v1`;
+- `server/pilot_items.json`, the pilot bank the router replays. It is gitignored, so this sha is the only record of the version used;
+- the per-job spend caps (`spend_caps_usd`) and reply limits (`max_tokens`, with the reason);
+- the commit it was written at. `verify` fails unless that commit is HEAD;
 - every final outcome file, added after (a).
 
 `verify` runs before (a) and again before (b).
@@ -90,7 +124,7 @@ for:
 - **Content: MATCH.** Combined content sha256 `02cc0b2a588e3f91…`; 10 items, 20 variants.
 - **Bytes differ, content does not.** Her files have Windows line endings, so the comparison normalises CRLF to LF.
 - **Not compared:** the bank's own manifest.json, which records the builder's output paths.
-- **Rerun planned:** after #50 and #51 merge.
+- **Rerun, Nov 21, after #50 and #51 merged (main afe8509, branch f5a1001): MATCH again,** 5 of 5 files, content sha256 `02cc0b2a588e3f91…`. The provisional manifest's bank entry also matches.
 
 ## Cost estimate per provider
 
@@ -122,8 +156,19 @@ Most of the cost (85%) is the hidden output on the 48,000 short quiz copy-paste 
 - **If the hidden output instead scales with reply length:** the estimate would be $5.6.
 - **Conservative bound:** taking the higher of the two cases for each bank gives $9.6.
 
+**Effect of the 1,024 copy-paste limit.** The best estimate is unchanged: billing is per token used, and the limit only stops replies being cut off.
+- It raises the most a single claude-haiku copy-paste call can cost, from 300 to 1,024 output tokens.
+- If all 54,240 copy-paste calls hit 1,024, that would be about $28. The $12 job cap stops the job well before that.
+
 If claude-haiku hits the cap, the cap stops its calls and the driver fails on that run (`check_run`) instead of going on. A restart with a higher cap resumes; finished runs are skipped.
 
 **Smoke calls, Nov 21.** One call per model on the training item `asurre_nature_phd_2019`; never the held-out bank.
 - claude-haiku: 43 input, 271 output tokens, $0.00014.
 - gpt-mini: 31 input, 28 output tokens, $0.00015.
+
+## Follow-up: final tables
+
+`results/freeze-2026-11-22/README.md` is gitignored (results/ stays out of the repo). After the run, a follow-up docs PR will copy the final tables into `docs/notes/` with aggregates only, like the RQ2 calibration notes:
+- the two reports;
+- the post-run check results;
+- the manifest's commit and the run's spend.

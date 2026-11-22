@@ -48,49 +48,128 @@ def test_check_heldout_matches_a_windows_build_and_catches_a_real_change(tmp_pat
     assert fm.cmd_check_heldout(args) == 1
 
 
-def test_prep_verify_and_add_final(tmp_path, monkeypatch):
+def _run_root(root: Path) -> Path:
+    """A checkout-like root with the files prep hashes besides the outcome files."""
+    for rel in (fm.PILOT_BANK, *fm.TRAINING_BANK_FILES):
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(f'{{"file": "{rel}"}}\n')
+    prof = root / fm.STYLE_PROFILE
+    prof.parent.mkdir(parents=True, exist_ok=True)
+    prof.write_text(json.dumps({"profile": {"means": [1, 2]}, "note": "x"}))
+    return root
+
+
+@pytest.fixture
+def locked_profile(tmp_path, monkeypatch):
+    """configs/data_decisions.json stand-in locking the synthetic profile's sha."""
     monkeypatch.chdir(ROOT)  # configs/ are read from the checkout
-    bank = _bank(tmp_path / "bank")
-    pilot = tmp_path / "pilot.parquet"
-    pilot.write_bytes(b"pilot")
-    low = tmp_path / "low.txt"
-    low.write_text("id\n")
-    train = tmp_path / "t.parquet"
-    train.write_bytes(b"train")
-    listing = tmp_path / "train.txt"
-    listing.write_text(f"{train}\n")
-    out = tmp_path / "m.json"
-    prep = type("A", (), {"out": out, "heldout_bank": bank, "pilot": pilot, "low_effort": low,
-                          "training_files": listing, "expected_bank_zip": None})
+    root = _run_root(tmp_path / "root")
+    sha = fm.profile_sha(root / fm.STYLE_PROFILE)
+    dec = tmp_path / "decisions.json"
+    dec.write_text(json.dumps({"style_profile": {"profile_sha256": sha}}))
+    monkeypatch.setattr(fm, "DECISIONS", dec)
+    monkeypatch.setattr(fm, "STYLE_PROFILE_SHA12", sha[:12])
+    return root
+
+
+def _prep_args(tmp_path, root, **kw):
+    for name, data in (("pilot.parquet", b"pilot"), ("low.txt", b"id\n"), ("t.parquet", b"t")):
+        (tmp_path / name).write_bytes(data)
+    (tmp_path / "train.txt").write_text(f"{tmp_path / 't.parquet'}\n")
+    base = {"out": tmp_path / "m.json", "heldout_bank": _bank(tmp_path / "bank"),
+            "pilot": tmp_path / "pilot.parquet", "low_effort": tmp_path / "low.txt",
+            "training_files": tmp_path / "train.txt", "expected_bank_zip": None, "root": root}
+    return type("A", (), {**base, **kw})
+
+
+def test_prep_verify_and_add_final(tmp_path, locked_profile):
+    prep = _prep_args(tmp_path, locked_profile)
     assert fm.cmd_prep(prep) == 0
-    m = json.loads(out.read_text())
-    assert {e["path"] for e in m["training_outcomes"]} == {str(train.resolve())}
+    m = json.loads(prep.out.read_text())
+    assert {e["path"] for e in m["training_outcomes"]} == {str((tmp_path / "t.parquet").resolve())}
     assert set(m["configs"]) == set(fm.CONFIGS) and m["git"]["git_commit"]
     assert m["spend_caps_usd"] == {"claude-haiku": 12.0, "gpt-mini": 10.0}
-    verify = type("A", (), {"manifest": out, "heldout_bank": None})
+    assert m["max_tokens"]["claude-haiku"]["copy_paste"] == 1024 and m["max_tokens"]["reason"]
+    assert m["style_profile"]["profile_sha256"] == fm.STYLE_PROFILE_SHA12 + m["style_profile"][
+        "profile_sha256"][12:]
+    assert m["pilot_bank"]["path"].endswith("server/pilot_items.json")
+    assert len(m["training_banks"]) == len(fm.TRAINING_BANK_FILES) == 12  # 2 items files + 5 banks x (assessment, variants)
+    verify = type("A", (), {"manifest": prep.out, "heldout_bank": None})
     assert fm.cmd_verify(verify) == 0
     final = tmp_path / "final.parquet"
     final.write_bytes(b"final")
-    assert fm.cmd_add_final(type("A", (), {"manifest": out, "files": [str(final)]})) == 0
+    assert fm.cmd_add_final(type("A", (), {"manifest": prep.out, "files": [str(final)]})) == 0
     assert fm.cmd_verify(verify) == 0
     final.write_bytes(b"changed")  # an input changed after it was recorded
     assert fm.cmd_verify(verify) == 1
 
 
-def test_prep_refuses_a_bank_that_differs_from_the_handoff(tmp_path, monkeypatch):
-    monkeypatch.chdir(ROOT)
-    bank = _bank(tmp_path / "bank")
+@pytest.mark.parametrize("rel", ["server/pilot_items.json",
+                                 "data/processed/runs_v1/variants/quiz-arc-200.jsonl",
+                                 "data/processed/archana-survey-written-v1/assessments/survey-gss.json"])
+def test_verify_catches_a_changed_pilot_bank_or_training_bank_file(tmp_path, locked_profile, rel):
+    prep = _prep_args(tmp_path, locked_profile)
+    assert fm.cmd_prep(prep) == 0
+    (locked_profile / rel).write_text("changed\n")
+    assert fm.cmd_verify(type("A", (), {"manifest": prep.out, "heldout_bank": None})) == 1
+
+
+def test_verify_requires_the_manifest_commit_to_be_head(tmp_path, locked_profile, capsys):
+    prep = _prep_args(tmp_path, locked_profile)
+    assert fm.cmd_prep(prep) == 0
+    m = json.loads(prep.out.read_text())
+    m["git"]["git_commit"] = "0000000"
+    prep.out.write_text(json.dumps(m))
+    assert fm.cmd_verify(type("A", (), {"manifest": prep.out, "heldout_bank": None})) == 1
+    assert "git commit: manifest 0000000" in capsys.readouterr().err
+
+
+def test_prep_refuses_a_style_profile_that_is_not_the_locked_one(tmp_path, locked_profile):
+    (locked_profile / fm.STYLE_PROFILE).write_text(json.dumps({"profile": {"means": [9]}}))
+    with pytest.raises(SystemExit, match="is not the locked"):
+        fm.cmd_prep(_prep_args(tmp_path, locked_profile))
+
+
+def test_the_real_lock_is_6b43d6ed5372():
+    dec = json.loads((ROOT / "configs" / "data_decisions.json").read_text(encoding="utf-8"))
+    assert dec["style_profile"]["profile_sha256"].startswith("6b43d6ed5372")
+    assert fm.STYLE_PROFILE_SHA12 == "6b43d6ed5372"
+
+
+def test_prep_refuses_a_bank_that_differs_from_the_handoff(tmp_path, locked_profile):
     other = _bank(tmp_path / "other")
     (other / "items.jsonl").write_text('{"other": 1}\n')
-    for name, data in (("pilot", b"p"), ("low", b"l"), ("t", b"t")):
-        (tmp_path / name).write_bytes(data)
-    (tmp_path / "list.txt").write_text(f"{tmp_path / 't'}\n")
-    prep = type("A", (), {"out": tmp_path / "m.json", "heldout_bank": bank,
-                          "pilot": tmp_path / "pilot", "low_effort": tmp_path / "low",
-                          "training_files": tmp_path / "list.txt",
-                          "expected_bank_zip": _zip(other, tmp_path / "h.zip")})
+    prep = _prep_args(tmp_path, locked_profile, expected_bank_zip=_zip(other, tmp_path / "h.zip"))
     assert fm.cmd_prep(prep) == 1
-    assert not (tmp_path / "m.json").exists()
+    assert not prep.out.exists()
+
+
+# ------------------------------------------------------------------ weekly budget preflight
+def _client(tmp_path, spent_by_ts):
+    from adr.harness.llm_client import LLMClient
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "_spend_ledger.jsonl").write_text("".join(
+        json.dumps({"ts": ts, "model": "gpt-mini", "in": 1, "out": 1, "usd": usd}) + "\n"
+        for ts, usd in spent_by_ts))
+    return LLMClient(models={}, cache_dir=cache, weekly_spend_cap_usd=25.0)
+
+
+def test_budget_refuses_when_the_week_has_less_than_the_two_caps_left(tmp_path, capsys):
+    client = _client(tmp_path, [("2026-11-19T20:00:00+00:00", 8.57),
+                                ("2026-11-21T18:00:00+00:00", 6.32)])
+    need = sum(fm.SPEND_CAPS_USD.values())
+    assert need == 22.0
+    # Sun Nov 22 16:59 Arizona = 23:59 UTC: still ISO week 47, $14.89 spent, $10.11 left
+    assert fm.budget_check(client, need, "2026-11-22T23:59:00+00:00") == 1
+    out = capsys.readouterr()
+    assert "$14.89 of the $25.00 weekly cap, $10.11 left" in out.out
+    assert "NOT STARTING" in out.err and "17:00 Arizona time" in out.err
+    # Sun Nov 22 17:00 Arizona = 00:00 UTC Monday: a new ISO week with the full $25
+    assert fm.budget_check(client, need, "2026-11-23T00:00:00+00:00") == 0
+    assert "2026-W48 (UTC): ledger spend $0.00" in capsys.readouterr().out
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="bash driver")
@@ -121,6 +200,14 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_4_router_runs(tmp_path
     assert out.count("rescore --final") == 30  # every survey / written-answer run is re-scored
     assert "freeze-2026-11-22-claude-haiku (cap $12)" in out
     assert "freeze-2026-11-22-gpt-mini (cap $10)" in out
+    assert list(tmp_path.iterdir()) == []  # a dry run creates no folders
+    cp = [ln for ln in out.splitlines() if "--run-id v1-final-cp-" in ln and "DRY:" in ln]
+    du = [ln for ln in out.splitlines() if "--run-id v1-final-du-" in ln and "DRY:" in ln]
+    assert len(cp) == len(du) == 21
+    for ln in cp:  # copy-paste: 1024 for claude-haiku only; gpt-mini keeps the training limits
+        assert ("--max-tokens 1024" in ln) == ("claude-haiku" in ln)
+    for ln in du:  # document upload keeps the training limits for both models
+        assert "--max-tokens 1024" not in ln
     for line in out.splitlines():  # every attacker call is a --final call at temperature 0.7
         if "--run-id v1-final" in line:
             assert "--final" in line and "--temperature 0.7" in line and "--samples 20" in line
@@ -130,31 +217,42 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_4_router_runs(tmp_path
 SRC = {"checks": 4.0, "same_type": 4.0, "fallback": 0.0, "synthetic": 0.0, "missing": 0.0}
 
 
-def _router(kind="unseen-survey", thr=(0.008, 0.951), haiku_src=None, sessions=None, n=44):
-    """A metrics.json router block with the complete expected group matrix for `kind`;
-    `sessions` overrides per-group session counts (None = drop the group)."""
-    counts = {g: 20 for g in fr.EXPECTED_GROUPS[kind]}
-    for g, c in (sessions or {}).items():
+def _router(kind="unseen-survey", thr=(0.008, 0.951), n_by=None, src_by=None, n=44):
+    """A complete metrics.json router block for `kind`: every expected group in both session
+    tables with 20 sessions and clean sources. `n_by` / `src_by` override one table per group
+    (None drops the group from that table; a dict for src_by updates its source fields)."""
+    groups = sorted(fr.EXPECTED_GROUPS[kind])
+    n_tab = {g: 20 for g in groups}
+    src_tab = {g: {**SRC, "sessions": 20} for g in groups}
+    if kind == "unseen-survey":  # OSMI: only canary has rows, the other checks are missing
+        for g in groups:
+            src_tab[g].update(missing=3.0)
+    for g, c in (n_by or {}).items():
         if c is None:
-            counts.pop(g, None)
+            n_tab.pop(g, None)
         else:
-            counts[g] = c
-    groups = {g: {**SRC, "sessions": c, **(haiku_src if g.startswith("claude-haiku:") and haiku_src
-                                           else {})}
-              for g, c in counts.items()}
-    if "gpt-mini:copy_paste:L0" in groups:  # gpt-mini's fallback/synthetic are not checked
-        groups["gpt-mini:copy_paste:L0"].update(fallback=2.0, synthetic=1.0)
-    res = {t: {"honest_pause_rate": 1 / n, **{f"tpr[{g}]": 0.5 for g in groups}}
+            n_tab[g] = c
+    for g, v in (src_by or {}).items():
+        if v is None:
+            src_tab.pop(g, None)
+        else:
+            src_tab[g] = {**src_tab.get(g, {**SRC, "sessions": 20}), **v}
+    shown = set(n_tab) | set(src_tab)
+    res = {t: {"honest_pause_rate": 1 / n, **{f"tpr[{g}]": 0.5 for g in shown}}
            for t in fr.THRESHOLDS}
-    ci = {t: {f"tpr[{g}]": [0.3, 0.7] for g in groups} for t in fr.THRESHOLDS}
+    ci = {t: {f"tpr[{g}]": [0.3, 0.7] for g in shown} for t in fr.THRESHOLDS}
     return {"thresholds": dict(zip(fr.THRESHOLDS, thr, strict=True)), "results": res, "ci95": ci,
-            "n_sessions": n, "ai_sources_by_group": groups, "n_ai_sessions_by_group": counts}
+            "n_sessions": n, "ai_sources_by_group": src_tab, "n_ai_sessions_by_group": n_tab}
 
 
 def _write(run_dir: Path, router: dict) -> Path:
     run_dir.mkdir(parents=True)
     (run_dir / "metrics.json").write_text(json.dumps({"results": {"router": router}}))
     return run_dir
+
+
+def _groups(kind, router):
+    return fr.group_problems(router, fr.EXPECTED_GROUPS[kind])
 
 
 def test_expected_group_matrix():
@@ -166,34 +264,78 @@ def test_expected_group_matrix():
 
 
 @pytest.mark.parametrize("kind", ["unseen-model", "unseen-survey"])
-def test_complete_group_matrix_passes(kind):
-    assert fr.group_problems(_router(kind), fr.EXPECTED_GROUPS[kind]) == []
+def test_complete_matrix_passes_every_check(kind):
+    router = _router(kind)
+    assert _groups(kind, router) == []
+    assert fr.source_problems(router, kind) == []
+
+
+def test_no_groups_at_all_fails():
+    router = {**_router("unseen-model"), "n_ai_sessions_by_group": {}, "ai_sources_by_group": {}}
+    assert _groups("unseen-model", router) == [
+        "no AI groups at all (expected 6 groups of 20 sessions)"]
+
+
+G = "claude-haiku:doc_upload:L0"
 
 
 @pytest.mark.parametrize(
-    "kind, sessions, message",
+    "kind, n_by, src_by, message",
     [
-        ("unseen-survey", {"gpt-mini:doc_upload:L2g": None},
-         "missing group gpt-mini:doc_upload:L2g (0 sessions, expected 20)"),
-        ("unseen-model", {"claude-haiku:copy_paste:L2": 19},
-         "group claude-haiku:copy_paste:L2 has 19 sessions, expected exactly 20"),
-        ("unseen-survey", {"claude-haiku:doc_upload:L0": 21},
-         "group claude-haiku:doc_upload:L0 has 21 sessions, expected exactly 20"),
-        ("unseen-model", {"gpt-mini:copy_paste:L0": 20},  # gpt-mini is not evaluated here
-         "unexpected group gpt-mini:copy_paste:L0 (20 sessions)"),
-        ("unseen-survey", {"claude-haiku:copy_paste:L1": 20},
-         "unexpected group claude-haiku:copy_paste:L1 (20 sessions)"),
+        # missing from both tables / from one table only
+        ("unseen-survey", {"gpt-mini:doc_upload:L2g": None}, {"gpt-mini:doc_upload:L2g": None},
+         [("missing group gpt-mini:doc_upload:L2g: not in n_ai_sessions_by_group (expected 20 "
+          "sessions)"), ("missing group gpt-mini:doc_upload:L2g: not in ai_sources_by_group "
+          "(expected 20 sessions)")]),
+        ("unseen-model", None, {G: None},
+         [f"missing group {G}: not in ai_sources_by_group (expected 20 sessions)"]),
+        # short and over-full, in both tables
+        ("unseen-model", {"claude-haiku:copy_paste:L2": 19}, {"claude-haiku:copy_paste:L2":
+                                                             {"sessions": 19}},
+         [("group claude-haiku:copy_paste:L2 has 19 sessions in n_ai_sessions_by_group, expected "
+          "exactly 20"), ("group claude-haiku:copy_paste:L2 has 19 sessions in ai_sources_by_group, "
+          "expected exactly 20")]),
+        ("unseen-model", {"claude-haiku:copy_paste:L0": 7}, None,  # Harshini's n=7 case
+         [("group claude-haiku:copy_paste:L0 has 7 sessions in n_ai_sessions_by_group, expected "
+          "exactly 20")]),
+        ("unseen-survey", {G: 21}, {G: {"sessions": 21}},
+         [f"group {G} has 21 sessions in n_ai_sessions_by_group, expected exactly 20",
+          f"group {G} has 21 sessions in ai_sources_by_group, expected exactly 20"]),
+        # Archana's case: the two tables disagree (20 vs 19)
+        ("unseen-model", None, {G: {"sessions": 19}},
+         [f"group {G} has 19 sessions in ai_sources_by_group, expected exactly 20"]),
+        ("unseen-model", {G: 19}, None,
+         [f"group {G} has 19 sessions in n_ai_sessions_by_group, expected exactly 20"]),
+        # unexpected model / unexpected group
+        ("unseen-model", {"gpt-mini:copy_paste:L0": 20}, {"gpt-mini:copy_paste:L0": {}},
+         [("unexpected model gpt-mini: group gpt-mini:copy_paste:L0 (n_ai_sessions_by_group 20, "
+          "ai_sources_by_group 20 sessions) is not in this report's matrix")]),
+        ("unseen-survey", {"claude-haiku:copy_paste:L1": 20}, None,
+         [("unexpected group claude-haiku:copy_paste:L1 (n_ai_sessions_by_group 20 sessions) is "
+          "not in this report's matrix")]),
     ],
 )
-def test_missing_short_overfull_or_unexpected_group_fails(kind, sessions, message):
-    assert fr.group_problems(_router(kind, sessions=sessions), fr.EXPECTED_GROUPS[kind]) == [message]
+def test_missing_short_overfull_disagreeing_or_unexpected_groups_fail(kind, n_by, src_by, message):
+    assert _groups(kind, _router(kind, n_by=n_by, src_by=src_by)) == message
 
 
-@pytest.mark.parametrize("bad", [{"synthetic": 0.5}, {"fallback": 1.0}])
-def test_source_check_flags_claude_haiku_borrowed_outcomes_only(bad):
-    assert fr.source_problems(_router()) == []  # gpt-mini's fallback/synthetic are not checked
-    problems = fr.source_problems(_router(haiku_src=bad))
-    assert len(problems) == 6 and all(p.startswith("claude-haiku:") for p in problems)
+@pytest.mark.parametrize("field", ["synthetic", "fallback"])
+@pytest.mark.parametrize("kind, model", [("unseen-model", "claude-haiku"),
+                                         ("unseen-survey", "claude-haiku"),
+                                         ("unseen-survey", "gpt-mini")])  # gpt-mini OSMI too
+def test_synthetic_or_fallback_fails_for_every_group(kind, field, model):
+    g = f"{model}:copy_paste:L2g"
+    problems = fr.source_problems(_router(kind, src_by={g: {field: 0.5}}), kind)
+    assert len(problems) == 1 and problems[0].startswith(f"{g}: synthetic")
+
+
+def test_missing_checks_fail_in_unseen_model_only():
+    g = "claude-haiku:copy_paste:L0"
+    problems = fr.source_problems(_router("unseen-model", src_by={g: {"missing": 1.0}}),
+                                  "unseen-model")
+    assert problems == [(f"{g}: missing 1.0 checks per session (must be 0 in the unseen-model "
+                        "report)")]
+    assert fr.source_problems(_router("unseen-survey"), "unseen-survey") == []  # missing 3.0 ok
 
 
 def test_threshold_check_against_51():
@@ -207,13 +349,13 @@ def test_reference_is_picked_by_honest_sessions(tmp_path):
     assert fr.reference_for(Path("x-unseen-model-no-low-effort"), ref_all, ref_no) == ref_no
 
 
-def _report(tmp_path, haiku_src=None, thr=(0.008, 0.951), survey_sessions=None):
+def _report(tmp_path, thr=(0.008, 0.951), model_src=None, survey_n=None):
     runs = {}
     for kind in ("unseen-model", "unseen-survey"):
         for who in ("all", "no-low-effort"):
-            sessions = survey_sessions if kind == "unseen-survey" else None
-            runs[f"{kind}-{who}"] = _write(tmp_path / f"{kind}-{who}",
-                                           _router(kind, thr, haiku_src, sessions))
+            r = (_router(kind, thr, src_by=model_src) if kind == "unseen-model"
+                 else _router(kind, thr, n_by=survey_n))
+            runs[f"{kind}-{who}"] = _write(tmp_path / f"{kind}-{who}", r)
     ref_all = _write(tmp_path / "ref-all", _router())
     ref_no = _write(tmp_path / "ref-no", _router())
     out = tmp_path / "README.md"
@@ -226,29 +368,32 @@ def _report(tmp_path, haiku_src=None, thr=(0.008, 0.951), survey_sessions=None):
     return proc, out.read_text(encoding="utf-8")
 
 
-def test_report_writes_the_fpr_rule_and_both_reports(tmp_path):
+def test_report_writes_the_fpr_rule_both_reports_and_the_wording(tmp_path):
     proc, readme = _report(tmp_path)
     assert proc.returncode == 0, proc.stderr
     assert fr.FPR_RULE in readme
-    assert "## Unseen model" in readme and "## Unseen survey" in readme
     model_part, survey_part = readme.split("## Unseen survey")
-    assert "gpt-mini" not in model_part.split("## Unseen model")[1]  # claude-haiku only
+    model_part = model_part.split("## Unseen model")[1]
+    assert "gpt-mini |" not in model_part  # claude-haiku only
+    assert '"Unseen model" means an unseen model, not unseen items' in model_part
+    assert "canary and style only and is not comparable to the headline" in survey_part
+    assert "Style is passive" in readme and "not in the source table" in readme
     assert "| gpt-mini | L0 | copy-paste | 20 | 0.50 [0.30, 0.70] | 0.50 [0.30, 0.70]" in survey_part
     assert "FAILED" not in readme
 
 
-def test_report_fails_loudly_on_borrowed_claude_haiku_outcomes(tmp_path):
-    proc, readme = _report(tmp_path, haiku_src={"fallback": 0.25})
+def test_report_fails_loudly_on_borrowed_outcomes(tmp_path):
+    proc, readme = _report(tmp_path, model_src={"claude-haiku:copy_paste:L0": {"fallback": 0.25}})
     assert proc.returncode == 1
     assert "POST-RUN CHECK FAILED" in proc.stderr and "claude-haiku:copy_paste:L0" in proc.stderr
-    assert "- FAILED: unseen-model-all: claude-haiku:copy_paste:L0" in readme
+    assert "- FAILED: unseen-model-all: claude-haiku:copy_paste:L0: synthetic 0.0, fallback 0.25" in readme
 
 
 def test_report_fails_loudly_on_a_short_group_naming_run_group_and_count(tmp_path):
-    proc, readme = _report(tmp_path, survey_sessions={"gpt-mini:doc_upload:L2": 19})
+    proc, readme = _report(tmp_path, survey_n={"gpt-mini:doc_upload:L2": 19})
     assert proc.returncode == 1
-    msg = ("unseen-survey-no-low-effort: group gpt-mini:doc_upload:L2 has 19 sessions, "
-           "expected exactly 20")
+    msg = ("unseen-survey-no-low-effort: group gpt-mini:doc_upload:L2 has 19 sessions in "
+           "n_ai_sessions_by_group, expected exactly 20")
     assert f"POST-RUN CHECK FAILED: {msg}" in proc.stderr
     assert f"- FAILED: {msg}" in readme
 

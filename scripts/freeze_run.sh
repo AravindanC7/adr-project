@@ -18,8 +18,12 @@
 #         unseen-survey  gpt-mini's and claude-haiku's runs on the held-out OSMI bank
 #   (c) the bootstrap CIs come with (b) (n_boot 200, as in the calibration runs), then
 #       scripts/freeze_report.py writes $OUT/README.md (FPR rule, the two reports with TPR at
-#       A_0.05 and A_0.01 per level and mode) and FAILS LOUDLY if a claude-haiku group has
-#       synthetic or fallback outcomes > 0, or a threshold differs from #51's.
+#       A_0.05 and A_0.01 per level and mode) and FAILS LOUDLY if a group is missing, short,
+#       over-full or unexpected (in either session table), any group has synthetic or fallback
+#       outcomes > 0 (or missing > 0 in unseen-model), or a threshold differs from #51's.
+#
+# START after 17:00 Arizona time on Sun Nov 22 (00:00 UTC Mon Nov 23): a new ISO week, so the
+# full $25 weekly cap applies. Preflight refuses if the week has less than $22 (both job caps) left.
 #
 # FPR rule: False-flag rates come only from the 44 pilot honest sessions, with the same folds and
 # calibrated thresholds as #51; the held-out OSMI bank has no human side, so no FPR is reported
@@ -43,6 +47,11 @@ JOBS=${JOBS:-8}
 CAP_CLAUDE_HAIKU=12  # USD per job, approved Nov 21; must equal the manifest's spend_caps_usd
 CAP_GPT_MINI=10
 cap_for() { case "$1" in claude-haiku) echo "$CAP_CLAUDE_HAIKU" ;; gpt-mini) echo "$CAP_GPT_MINI" ;; esac; }
+# claude-haiku copy-paste reply limit (decided Nov 21; must equal the manifest's max_tokens): it is
+# billed ~190 output tokens per call beyond the reply text, so the training runs' 300 would cut
+# replies off. Document upload keeps the training limits; gpt-mini is unchanged. Truncation stays
+# fatal (check_run).
+HAIKU_CP_MAX_TOKENS=1024
 DRY_RUN=${DRY_RUN:-0}
 SAMPLES=20
 TEMP=0.7
@@ -58,9 +67,13 @@ runlog() {  # runlog LOGFILE CMD...: run CMD appending its output to LOGFILE (DR
 fail() { log "STOP: $*"; exit 1; }
 
 # ------------------------------------------------------------------ 0. preflight
+# START TIME: after 17:00 Arizona time on Sun Nov 22 (00:00 UTC Mon Nov 23), when a new ISO week
+# gives the full $25 weekly cap. The budget check below refuses to start otherwise.
 if [ "$DRY_RUN" != 1 ]; then
   [ "$(git describe --exact-match --tags HEAD 2>/dev/null || true)" = "$FREEZE" ] \
     || fail "HEAD is not the $FREEZE tag"
+  git fetch -q origin main || fail "git fetch origin main failed"
+  git merge-base --is-ancestor HEAD origin/main || fail "tag not on main: HEAD is not in origin/main"
   [ -z "$(git status --porcelain --untracked-files=no)" ] || fail "tracked files have changes"
   grep -q "job_spend_cap_usd" adr/harness/llm_client.py \
     || fail "this checkout has no per-job spend cap (#50): not starting"
@@ -69,12 +82,19 @@ if [ "$DRY_RUN" != 1 ]; then
 print(f\"{c['claude-haiku']:g} {c['gpt-mini']:g}\")" "$MANIFEST")
   [ "$caps" = "$CAP_CLAUDE_HAIKU $CAP_GPT_MINI" ] \
     || fail "spend caps differ: driver $CAP_CLAUDE_HAIKU/$CAP_GPT_MINI, manifest $caps"
+  maxtok=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['max_tokens']\
+['claude-haiku']['copy_paste'])" "$MANIFEST")
+  [ "$maxtok" = "$HAIKU_CP_MAX_TOKENS" ] \
+    || fail "claude-haiku copy-paste max_tokens differ: driver $HAIKU_CP_MAX_TOKENS, manifest $maxtok"
+  log "preflight: this week's spend against the weekly cap"
+  "$PY" scripts/freeze_manifest.py budget \
+    || fail "weekly budget below the two jobs' caps (\$$CAP_CLAUDE_HAIKU + \$$CAP_GPT_MINI): start after 17:00 Arizona time Sunday (00:00 UTC Monday)"
   for who in all no-low-effort; do
     [ -f "$REF_DIR/rq2-l012-floor750-reopen-$who/metrics.json" ] \
       || fail "no #51 reference run $REF_DIR/rq2-l012-floor750-reopen-$who (set REF_DIR)"
   done
 fi
-mkdir -p "$LOGS"
+[ "$DRY_RUN" = 1 ] || mkdir -p "$LOGS"  # a dry run creates no folders
 log "preflight: rebuild the held-out bank (#55) and check every input against $MANIFEST"
 run "$PY" scripts/build_runs_v1.py --datasets asurre --heldout-asurre-only --output "$HELDOUT_BANK_DIR"
 run "$PY" scripts/freeze_manifest.py verify --manifest "$MANIFEST" --heldout-bank "$HELDOUT_BANK_DIR"
@@ -105,6 +125,11 @@ print(f"{rid}: ok ({cfg.get('n_rows')} rows)")
 PYEOF
 }
 
+max_tokens_flag() {  # copy-paste only: claude-haiku's limit; gpt-mini keeps the training limits
+  [ "$1" = claude-haiku ] && echo "--max-tokens $HAIKU_CP_MAX_TOKENS"
+  return 0
+}
+
 done_already() {  # restart: skip a run that finished cleanly
   [ "$DRY_RUN" = 1 ] && return 1
   [ -f "results/outcomes/$1.parquet" ] && check_run "$1" >/dev/null 2>&1
@@ -127,7 +152,8 @@ attack() {  # attack MODEL MODE(cp|du) LEVEL(L0|L2|L2g) BANK; sets RID
                     --temperature "$TEMP" --run-id "$rid")
       if [ "$mode" = cp ]; then
         # shellcheck disable=SC2086
-        runlog "$LOGS/$rid.log" "$PY" scripts/run_copy_paste.py "${common[@]}" $flags
+        runlog "$LOGS/$rid.log" "$PY" scripts/run_copy_paste.py "${common[@]}" $flags \
+          $(max_tokens_flag "$model")
       else
         # shellcheck disable=SC2086
         runlog "$LOGS/$rid.log" "$PY" scripts/run_doc_upload.py "${common[@]}" $flags \
@@ -137,7 +163,7 @@ attack() {  # attack MODEL MODE(cp|du) LEVEL(L0|L2|L2g) BANK; sets RID
       # shellcheck disable=SC2086
       runlog "$LOGS/$rid.log" "$PY" scripts/run_survey_banks.py run --final --model "$model" \
         --bank "$bank" --mode "$mode" $flags --samples "$SAMPLES" --temperature "$TEMP" \
-        --run-id "$rid"
+        --run-id "$rid" $([ "$mode" = cp ] && max_tokens_flag "$model")
       runlog "$LOGS/$rid.log" "$PY" scripts/run_survey_banks.py rescore --final \
         --runs "$bank=$rid" ;;
   esac
@@ -196,7 +222,7 @@ for report in unseen-model unseen-survey; do
   for who in all no-low-effort; do
     rid="$FREEZE-$report-$who"
     EX=(); [ "$who" = no-low-effort ] && EX=(--exclude-sessions "$LOW")
-    mkdir -p "results/real-router/$rid"
+    [ "$DRY_RUN" = 1 ] || mkdir -p "results/real-router/$rid"
     log "router $rid (${#AI[@]} final outcome files)"
     runlog "results/real-router/$rid/run.log" "$PY" -u scripts/run_real_router.py "${ROUTER[@]}" \
       --ai-outcomes "${TRAINING[@]}" "${AI[@]}" ${EX[@]+"${EX[@]}"} --run-id "$rid"

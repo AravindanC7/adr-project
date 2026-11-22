@@ -273,7 +273,8 @@ def cmd_run(a) -> None:
                               n_samples=CP_SAMPLES if a.samples is None else a.samples,
                               first_sample=a.first_sample,
                               temperature=CP_TEMP if a.temperature is None else a.temperature,
-                              max_tokens=cp_max, results_dir=results, note=note)
+                              max_tokens=a.max_tokens or cp_max, results_dir=results,
+                              note=note)
         rows = run_copy_paste(client, assessment, items, variants, mechs, cfg)
     else:
         from adr.harness.doc_upload import DocUploadConfig, run_doc_upload
@@ -283,7 +284,8 @@ def cmd_run(a) -> None:
         cfg = DocUploadConfig(run_id=rid, models=[model], **settings,
                               n_samples=DU_SAMPLES if a.samples is None else a.samples,
                               temperature=DU_TEMP if a.temperature is None else a.temperature,
-                              max_tokens=du_max, questions_per_doc=q, results_dir=results,
+                              max_tokens=a.max_tokens or du_max, questions_per_doc=q,
+                              results_dir=results,
                               note=note)
         rows = run_doc_upload(client, assessment, items, variants, mechs, cfg)
     run_dir = Path(results) / "runs" / rid
@@ -416,6 +418,9 @@ def main() -> None:
     r.add_argument("--samples", type=_at_least(1), help=f"default cp {CP_SAMPLES}, du {DU_SAMPLES}")
     r.add_argument("--first-sample", type=_at_least(0), default=0, help="cp only: first sample index")
     r.add_argument("--temperature", type=float, help=f"default cp {CP_TEMP}, du {DU_TEMP}")
+    r.add_argument("--max-tokens", type=_at_least(1),
+                   help="override the bank's reply limit for this mode (the freeze: 1024 for "
+                   "claude-haiku copy-paste only)")
     r.add_argument("--level", choices=["L0", "L2"], default="L0")
     r.add_argument("--system-variant", choices=sorted(SYSTEM_VARIANTS),
                    help="e.g. L2-generic (with --level L2): the L2 role, naming no check")
