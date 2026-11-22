@@ -30,7 +30,13 @@ Checks, each failing loudly (exit 1) after writing what it found:
   * the honest side is the pilot's: each run's thresholds equal #51's run with the same honest
     sessions (all 44, or without the low-effort ones; picked by the run folder's name), because
     the folds, pilot and config are the same.
-Reads aggregates only (metrics.json); no session ids, no answer text.
+Pre-registered ablation (configs/data_decisions.json preregistered_ablations): each main run has
+a partner run `<run>-style-clear` with --clear-requires-style-human (no model calls). The partners
+get the same group-matrix and source checks; each run's config.yaml must have the flag off (main)
+or on (ablation). Each report shows the ablation beside the main policy: the primary outcome (L2
+wrongly cleared), the costs (honest sessions cleared, checks per honest person) and the guardrail
+(honest false pauses). The main policy (#51) stays the headline.
+Reads aggregates only (metrics.json, config.yaml); no session ids, no answer text.
 """
 
 from __future__ import annotations
@@ -40,6 +46,8 @@ import json
 import math
 import sys
 from pathlib import Path
+
+import yaml
 
 FPR_RULE = (
     "False-flag rates come only from the 44 pilot honest sessions, with the same folds and "
@@ -60,6 +68,10 @@ UNSEEN_MODEL_MODELS = ("claude-haiku",)
 UNSEEN_SURVEY_MODELS = ("gpt-mini", "claude-haiku")
 EXPECTED_GROUPS = {"unseen-model": groups(UNSEEN_MODEL_MODELS),
                    "unseen-survey": groups(UNSEEN_SURVEY_MODELS)}
+
+
+ABLATION_SUFFIX = "-style-clear"
+ABLATION_FLAG = "clear_requires_style_human"
 
 
 def load(run_dir: Path) -> dict:
@@ -172,13 +184,72 @@ def honest(router: dict) -> list[str]:
     return out
 
 
-def report(name: str, desc: str, runs: list[Path], models: tuple[str, ...]) -> list[str]:
+def flag_problems(run: Path, want: bool) -> list[str]:
+    """The run's config.yaml must record the ablation flag off (main) or on (ablation)."""
+    conf = run / "config.yaml"
+    if not conf.exists():
+        return [f"no config.yaml to check {ABLATION_FLAG}"]
+    got = bool((yaml.safe_load(conf.read_text(encoding="utf-8")).get("router_config") or {})
+               .get(ABLATION_FLAG, False))
+    return [] if got is want else [f"{ABLATION_FLAG} is {got}, expected {want}"]
+
+
+def pair_problems(runs: list[Path], ablations: list[Path]) -> list[str]:
+    want = [r.name + ABLATION_SUFFIX for r in runs]
+    got = [r.name for r in ablations]
+    return [] if got == want else [f"ablation runs {got} do not pair with {want}"]
+
+
+def _of(router: dict, t: str, key: str, n: int) -> str:
+    v = router["results"][t].get(key)
+    return "–" if v is None else f"{round(v * n)} of {n} ({v:.2f})"
+
+
+def ablation_table(main: dict, abl: dict, models: tuple[str, ...]) -> list[str]:
+    """The pre-registered measures, main policy (#51) beside the ablation, at both thresholds."""
+    lines = ["| measure | threshold | main policy (#51) | ablation (style must look human to clear) |",
+             "|---|---|---|---|"]
+    for t in THRESHOLDS:
+        n_h = main["n_sessions"]
+        thr = f"{t} ({main['thresholds'][t]:.3f} / {abl['thresholds'][t]:.3f})"
+        for model in models:
+            for mode in MODES:
+                g = f"{model}:{mode}:L2"
+                n = (main.get("n_ai_sessions_by_group") or {}).get(g, SESSIONS_PER_GROUP)
+                lines.append(f"| **primary:** L2 wrongly cleared, {model} {mode.replace('_', '-')} "
+                             f"| {thr} | {_of(main, t, f'ai_cleared_rate[{g}]', n)} | "
+                             f"{_of(abl, t, f'ai_cleared_rate[{g}]', n)} |")
+        lines += [
+            (f"| cost: honest sessions cleared | {thr} | "
+            f"{_of(main, t, 'honest_cleared_rate', n_h)} | {_of(abl, t, 'honest_cleared_rate', n_h)} |"),
+            (f"| cost: checks per honest person | {thr} | "
+            f"{main['results'][t]['checks_per_honest_session']:.2f} | "
+            f"{abl['results'][t]['checks_per_honest_session']:.2f} |"),
+            (f"| guardrail: honest false pauses | {thr} | "
+            f"{_of(main, t, 'honest_pause_rate', n_h)} | {_of(abl, t, 'honest_pause_rate', n_h)} |"),
+        ]
+    return lines
+
+
+def report(name: str, desc: str, runs: list[Path], models: tuple[str, ...],
+           ablations: list[Path] | None = None) -> list[str]:
     lines = [f"## {name}", "", desc, ""]
+    pairs = dict(zip(runs, ablations or [], strict=False))
     for run in runs:
         router = load(run)
         lines += [f"### {run.name} ({router['n_sessions']} honest sessions)", "",
                   *table(router, models), "",
                   "Honest side (the pilot's; see the FPR rule): " + "; ".join(honest(router)), ""]
+        if run in pairs:
+            abl = load(pairs[run])
+            lines += [f"#### Pre-registered ablation: {pairs[run].name}", "",
+                      ("A session may clear only if its running style total is below 0 when it "
+                      "would clear (configs/data_decisions.json preregistered_ablations). The main "
+                      "policy (#51) is unchanged and stays the headline. Thresholds are shown as "
+                      "main / ablation; each run calibrates them on the same 44-session pilot "
+                      "folds."), "",
+                      *ablation_table(router, abl, models), "",
+                      "Ablation TPR per group:", "", *table(abl, models), ""]
     return lines
 
 
@@ -188,6 +259,10 @@ def main() -> int:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--unseen-model", type=Path, nargs="+", required=True)
     ap.add_argument("--unseen-survey", type=Path, nargs="+", required=True)
+    ap.add_argument("--unseen-model-ablation", type=Path, nargs="+", required=True,
+                    help="the --clear-requires-style-human partner of each --unseen-model run")
+    ap.add_argument("--unseen-survey-ablation", type=Path, nargs="+", required=True,
+                    help="the --clear-requires-style-human partner of each --unseen-survey run")
     ap.add_argument("--reference-all", type=Path, help="#51's rq2-l012-floor750-reopen-all")
     ap.add_argument("--reference-no-low-effort", type=Path,
                     help="#51's rq2-l012-floor750-reopen-no-low-effort")
@@ -200,7 +275,7 @@ def main() -> int:
         " survey IPIP/GSS, assignment-asurre-train). \"Unseen model\" means an unseen model, not "
         "unseen items: these are the same banks the router's map was fitted on, answered by a "
         "model that never contributed to the map, thresholds or any tuning.",
-        a.unseen_model, UNSEEN_MODEL_MODELS,
+        a.unseen_model, UNSEEN_MODEL_MODELS, a.unseen_model_ablation,
     )
     lines += report(
         "Unseen survey",
@@ -208,16 +283,26 @@ def main() -> int:
         "comes from canary and style only and is not comparable to the headline: only the pilot's "
         "open-text checks (canary, style) have rows here; its other checks have none, so they show "
         "as missing and give no evidence.",
-        a.unseen_survey, UNSEEN_SURVEY_MODELS,
+        a.unseen_survey, UNSEEN_SURVEY_MODELS, a.unseen_survey_ablation,
     )
 
     problems = []
     runs = [("unseen-model", r) for r in a.unseen_model] + [("unseen-survey", r)
                                                            for r in a.unseen_survey]
+    problems += pair_problems(a.unseen_model, a.unseen_model_ablation)
+    problems += pair_problems(a.unseen_survey, a.unseen_survey_ablation)
+    ablation_runs = [("unseen-model", r) for r in a.unseen_model_ablation] + [
+        ("unseen-survey", r) for r in a.unseen_survey_ablation]
+    for kind, run in ablation_runs:  # same group-matrix and source checks as the main runs
+        router = load(run)
+        problems += [f"{run.name}: {p}" for p in group_problems(router, EXPECTED_GROUPS[kind])]
+        problems += [f"{run.name}: {p}" for p in source_problems(router, kind)]
+        problems += [f"{run.name}: {p}" for p in flag_problems(run, True)]
     for kind, run in runs:
         router = load(run)
         problems += [f"{run.name}: {p}" for p in group_problems(router, EXPECTED_GROUPS[kind])]
         problems += [f"{run.name}: {p}" for p in source_problems(router, kind)]
+        problems += [f"{run.name}: {p}" for p in flag_problems(run, False)]
         ref = reference_for(run, a.reference_all, a.reference_no_low_effort)
         if ref is None:
             problems.append(f"{run.name}: no #51 reference run to check its thresholds against")
@@ -233,6 +318,8 @@ def main() -> int:
         (f"- AI groups: exactly the expected matrix, {SESSIONS_PER_GROUP} sessions in each "
          "(unseen model: claude-haiku, 6 groups; unseen survey: both models, 12 groups)."),
         "- thresholds: equal to #51's runs with the same honest sessions.",
+        ("- pre-registered ablation: every main run has its -style-clear partner, with the same "
+         "group matrix and sources; the flag is off in the main runs and on in the partners."),
     ]
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -64,3 +64,18 @@ def test_ablations_are_recorded_and_runnable():
     assert "no_cap" in run_real_router.ABLATIONS
     # twocheck = --neg-floor-frac 0.65; the option itself is tested in tests/test_mech_floor.py
     assert "--neg-floor-frac" in run_real_router.build_parser().format_help()
+
+
+def test_preregistered_style_clearing_ablation_is_recorded_and_off_by_default():
+    """The pre-registered ablation is written down before the held-out run, and the frozen main
+    policy (#51) does not use it: off in RouterConfig and in the script's defaults."""
+    pre = json.loads((ROOT / "configs" / "data_decisions.json").read_text(encoding="utf-8"))[
+        "preregistered_ablations"
+    ]["clear_requires_style_human"]
+    for key in ("rule", "status", "primary_outcome", "costs", "guardrail", "chosen_by",
+                "registered", "offline_check"):
+        assert pre[key], key
+    assert "headline" in pre["status"] and "L2 wrongly cleared" in pre["primary_outcome"]
+    assert "Harshini" in pre["chosen_by"] and "first clean test" in pre["chosen_by"]
+    assert RouterConfig().clear_requires_style_human is False
+    assert _defaults().clear_requires_style_human is False

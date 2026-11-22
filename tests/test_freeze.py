@@ -173,7 +173,7 @@ def test_budget_refuses_when_the_week_has_less_than_the_two_caps_left(tmp_path, 
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="bash driver")
-def test_freeze_driver_dry_run_plans_42_attacker_runs_and_4_router_runs(tmp_path):
+def test_freeze_driver_dry_run_plans_42_attacker_runs_and_8_router_replays(tmp_path):
     env = {**os.environ, "DRY_RUN": "1", "PY": "python"}
     proc = subprocess.run(["bash", str(ROOT / "scripts" / "freeze_run.sh")], cwd=tmp_path, env=env,
                           capture_output=True, text=True, encoding="utf-8", check=False)
@@ -184,8 +184,13 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_4_router_runs(tmp_path
     assert sum("claude-haiku" in i for i in ids) == 36
     gpt = {i for i in ids if "gpt-mini" in i}
     assert len(gpt) == 6 and all("osmi-heldout" in i for i in gpt)  # gpt-mini: held-out bank only
-    assert out.count("run_real_router.py --final") == 4
+    assert out.count("run_real_router.py --final") == 8  # 4 main + 4 pre-registered ablations
     routers = [ln for ln in out.splitlines() if "run_real_router.py --final" in ln]
+    rids = [re.search(r"--run-id (\S+)", ln).group(1) for ln in routers]
+    abl = [ln for ln in routers if "--clear-requires-style-human" in ln]
+    assert len(abl) == 4 and all(re.search(r"--run-id \S+-style-clear\b", ln) for ln in abl)
+    assert {r + "-style-clear" for r in rids if not r.endswith("-style-clear")} == {
+        r for r in rids if r.endswith("-style-clear")}  # every main run has its partner
     for ln in routers:
         finals = set(re.findall(r"results/outcomes/(v1-final-\S+)\.parquet", ln))
         if "unseen-model" in ln:  # claude-haiku on the training banks only
@@ -195,6 +200,7 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_4_router_runs(tmp_path
             assert "unseen-survey" in ln and len(finals) == 12
             assert all("osmi-heldout" in f for f in finals)
     assert "freeze_report.py --out results/freeze-2026-11-22/README.md" in out
+    assert "--unseen-model-ablation results/real-router/freeze-2026-11-22-unseen-model-all-style-clear" in out
     assert "--reference-no-low-effort results/real-router/rq2-l012-floor750-reopen-no-low-effort" in out
     assert "--jobs 8 --resume" in out and "--exclude-sessions" in out
     assert out.count("rescore --final") == 30  # every survey / written-answer run is re-scored
@@ -238,16 +244,22 @@ def _router(kind="unseen-survey", thr=(0.008, 0.951), n_by=None, src_by=None, n=
         else:
             src_tab[g] = {**src_tab.get(g, {**SRC, "sessions": 20}), **v}
     shown = set(n_tab) | set(src_tab)
-    res = {t: {"honest_pause_rate": 1 / n, **{f"tpr[{g}]": 0.5 for g in shown}}
+    res = {t: {"honest_pause_rate": 1 / n, "honest_cleared_rate": 36 / n,
+               "checks_per_honest_session": 6.4,
+               **{f"tpr[{g}]": 0.5 for g in shown},
+               **{f"ai_cleared_rate[{g}]": 0.6 for g in shown}}
            for t in fr.THRESHOLDS}
     ci = {t: {f"tpr[{g}]": [0.3, 0.7] for g in shown} for t in fr.THRESHOLDS}
     return {"thresholds": dict(zip(fr.THRESHOLDS, thr, strict=True)), "results": res, "ci95": ci,
             "n_sessions": n, "ai_sources_by_group": src_tab, "n_ai_sessions_by_group": n_tab}
 
 
-def _write(run_dir: Path, router: dict) -> Path:
+def _write(run_dir: Path, router: dict, ablation: bool | None = None) -> Path:
     run_dir.mkdir(parents=True)
     (run_dir / "metrics.json").write_text(json.dumps({"results": {"router": router}}))
+    flag = run_dir.name.endswith(fr.ABLATION_SUFFIX) if ablation is None else ablation
+    (run_dir / "config.yaml").write_text(
+        f"router_config:\n  clear_requires_style_human: {str(flag).lower()}\n")
     return run_dir
 
 
@@ -349,20 +361,31 @@ def test_reference_is_picked_by_honest_sessions(tmp_path):
     assert fr.reference_for(Path("x-unseen-model-no-low-effort"), ref_all, ref_no) == ref_no
 
 
-def _report(tmp_path, thr=(0.008, 0.951), model_src=None, survey_n=None):
-    runs = {}
+def _report(tmp_path, thr=(0.008, 0.951), model_src=None, survey_n=None, abl_n=None,
+            abl_flag=None, abl_names=None):
+    """The 4 main runs and their 4 -style-clear partners; abl_n overrides the unseen-model
+    ablation partners' n_ai_sessions_by_group; abl_flag their recorded flag."""
+    runs, abls = {}, {}
     for kind in ("unseen-model", "unseen-survey"):
         for who in ("all", "no-low-effort"):
+            name = f"{kind}-{who}"
             r = (_router(kind, thr, src_by=model_src) if kind == "unseen-model"
                  else _router(kind, thr, n_by=survey_n))
-            runs[f"{kind}-{who}"] = _write(tmp_path / f"{kind}-{who}", r)
+            runs[name] = _write(tmp_path / name, r)
+            ra = _router(kind, thr, n_by=abl_n if kind == "unseen-model" else None)
+            ra["results"]["A_0.05"]["ai_cleared_rate[claude-haiku:copy_paste:L2]"] = 0.35
+            abl_name = (abl_names or {}).get(name, name + fr.ABLATION_SUFFIX)
+            abls[name] = _write(tmp_path / abl_name, ra, abl_flag)
     ref_all = _write(tmp_path / "ref-all", _router())
     ref_no = _write(tmp_path / "ref-no", _router())
     out = tmp_path / "README.md"
+    m, s_ = ("unseen-model-all", "unseen-model-no-low-effort"), ("unseen-survey-all",
+                                                                 "unseen-survey-no-low-effort")
     cmd = [sys.executable, str(ROOT / "scripts" / "freeze_report.py"), "--out", str(out),
-           "--unseen-model", str(runs["unseen-model-all"]), str(runs["unseen-model-no-low-effort"]),
-           "--unseen-survey", str(runs["unseen-survey-all"]),
-           str(runs["unseen-survey-no-low-effort"]),
+           "--unseen-model", *(str(runs[k]) for k in m),
+           "--unseen-survey", *(str(runs[k]) for k in s_),
+           "--unseen-model-ablation", *(str(abls[k]) for k in m),
+           "--unseen-survey-ablation", *(str(abls[k]) for k in s_),
            "--reference-all", str(ref_all), "--reference-no-low-effort", str(ref_no)]
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=False)
     return proc, out.read_text(encoding="utf-8")
@@ -401,3 +424,40 @@ def test_report_fails_loudly_on_a_short_group_naming_run_group_and_count(tmp_pat
 def test_report_fails_when_a_threshold_differs_from_51(tmp_path):
     proc, _ = _report(tmp_path, thr=(0.01, 0.951))
     assert proc.returncode == 1 and "threshold differs from #51" in proc.stderr
+
+
+# ------------------------------------------------------------------ pre-registered ablation
+def test_report_shows_the_ablation_beside_the_main_policy(tmp_path):
+    proc, readme = _report(tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    model_part, survey_part = readme.split("## Unseen survey")
+    for part in (model_part, survey_part):
+        assert part.count("#### Pre-registered ablation:") == 2  # all and no-low-effort
+        assert "stays the headline" in part
+        assert "| **primary:** L2 wrongly cleared, claude-haiku copy-paste | A_0.05" in part
+        assert "| cost: honest sessions cleared |" in part
+        assert "| cost: checks per honest person |" in part
+        assert "| guardrail: honest false pauses |" in part
+    assert ("| **primary:** L2 wrongly cleared, claude-haiku copy-paste | A_0.05 (0.008 / 0.008) | "
+            "12 of 20 (0.60) | 7 of 20 (0.35) |") in model_part
+    assert "L2 wrongly cleared, gpt-mini" in survey_part  # both models on OSMI
+    assert "L2 wrongly cleared, gpt-mini" not in model_part  # claude-haiku only
+
+
+def test_ablation_partners_get_the_same_group_checks(tmp_path):
+    proc, readme = _report(tmp_path, abl_n={"claude-haiku:doc_upload:L2g": 19})
+    assert proc.returncode == 1
+    msg = ("unseen-model-all-style-clear: group claude-haiku:doc_upload:L2g has 19 sessions in "
+           "n_ai_sessions_by_group, expected exactly 20")
+    assert f"POST-RUN CHECK FAILED: {msg}" in proc.stderr and f"- FAILED: {msg}" in readme
+
+
+def test_ablation_partner_must_record_the_flag(tmp_path):
+    proc, _ = _report(tmp_path, abl_flag=False)
+    assert proc.returncode == 1
+    assert "-style-clear: clear_requires_style_human is False, expected True" in proc.stderr
+
+
+def test_ablation_partners_must_pair_with_the_main_runs(tmp_path):
+    proc, _ = _report(tmp_path, abl_names={"unseen-survey-all": "something-else"})
+    assert proc.returncode == 1 and "do not pair with" in proc.stderr

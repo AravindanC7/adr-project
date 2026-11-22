@@ -218,6 +218,13 @@ def build_parser() -> argparse.ArgumentParser:
         "(0.65 * A), so no single check can clear. Applies to every router row and cap variant",
     )
     ap.add_argument(
+        "--clear-requires-style-human",
+        action="store_true",
+        help="pre-registered ablation (default off): a session may clear only if its running "
+        "style total is below 0 when it would clear; otherwise it stays active and keeps getting "
+        "checks. Applies to every router row and cap variant",
+    )
+    ap.add_argument(
         "--fold-seed",
         default=DEFAULT_SEED,
         help="fold seed string; keep the recorded default for reported runs",
@@ -422,7 +429,10 @@ def main() -> None:
                     f"{present or 'none'} have both AI and human rows."
                 )
     base = replace(
-        RouterConfig(), clear_policy=args.clear_policy, neg_floor_frac=args.neg_floor_frac
+        RouterConfig(),
+        clear_policy=args.clear_policy,
+        neg_floor_frac=args.neg_floor_frac,
+        clear_requires_style_human=args.clear_requires_style_human,
     )
     cfg = replace(base, **CAP_VARIANTS[variants_cap[0]])
 

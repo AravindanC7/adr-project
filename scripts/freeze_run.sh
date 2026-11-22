@@ -16,6 +16,8 @@
 #       training outcome files plus:
 #         unseen-model   claude-haiku's runs on the training banks
 #         unseen-survey  gpt-mini's and claude-haiku's runs on the held-out OSMI bank
+#       Each of the 4 router runs is followed by its pre-registered ablation replay
+#       (<run>-style-clear, --clear-requires-style-human; no model calls): 8 router replays.
 #   (c) the bootstrap CIs come with (b) (n_boot 200, as in the calibration runs), then
 #       scripts/freeze_report.py writes $OUT/README.md (FPR rule, the two reports with TPR at
 #       A_0.05 and A_0.01 per level and mode) and FAILS LOUDLY if a group is missing, short,
@@ -215,25 +217,37 @@ ROUTER=(--final --pilot-outcomes "$PILOT" --bank server/pilot_items.json --low-e
         --cap-variant per_mech passive_group open_text_group no_cap
         --drop-mechanisms canary,decoy,opinion_trap,style --jobs "$JOBS" --resume
         --results-dir results)
-UNSEEN_MODEL=()
-UNSEEN_SURVEY=()
+# Each main run (#51's frozen config) is followed by its pre-registered ablation replay,
+# <run>-style-clear, with --clear-requires-style-human: same inputs, no model calls
+# (configs/data_decisions.json preregistered_ablations).
+UNSEEN_MODEL=(); UNSEEN_SURVEY=(); UNSEEN_MODEL_ABL=(); UNSEEN_SURVEY_ABL=()
 for report in unseen-model unseen-survey; do
   if [ "$report" = unseen-model ]; then AI=("${HAIKU_TRAIN_RUNS[@]}"); else AI=("${OSMI_RUNS[@]}"); fi
   for who in all no-low-effort; do
-    rid="$FREEZE-$report-$who"
     EX=(); [ "$who" = no-low-effort ] && EX=(--exclude-sessions "$LOW")
-    [ "$DRY_RUN" = 1 ] || mkdir -p "results/real-router/$rid"
-    log "router $rid (${#AI[@]} final outcome files)"
-    runlog "results/real-router/$rid/run.log" "$PY" -u scripts/run_real_router.py "${ROUTER[@]}" \
-      --ai-outcomes "${TRAINING[@]}" "${AI[@]}" ${EX[@]+"${EX[@]}"} --run-id "$rid"
-    if [ "$report" = unseen-model ]; then UNSEEN_MODEL+=("results/real-router/$rid")
-    else UNSEEN_SURVEY+=("results/real-router/$rid"); fi
+    for variant in main style-clear; do
+      rid="$FREEZE-$report-$who"; ABL=()
+      [ "$variant" = style-clear ] && { rid="$rid-style-clear"; ABL=(--clear-requires-style-human); }
+      [ "$DRY_RUN" = 1 ] || mkdir -p "results/real-router/$rid"
+      log "router $rid (${#AI[@]} final outcome files)"
+      runlog "results/real-router/$rid/run.log" "$PY" -u scripts/run_real_router.py "${ROUTER[@]}" \
+        --ai-outcomes "${TRAINING[@]}" "${AI[@]}" ${EX[@]+"${EX[@]}"} ${ABL[@]+"${ABL[@]}"} \
+        --run-id "$rid"
+      case "$report:$variant" in
+        unseen-model:main) UNSEEN_MODEL+=("results/real-router/$rid") ;;
+        unseen-survey:main) UNSEEN_SURVEY+=("results/real-router/$rid") ;;
+        unseen-model:style-clear) UNSEEN_MODEL_ABL+=("results/real-router/$rid") ;;
+        unseen-survey:style-clear) UNSEEN_SURVEY_ABL+=("results/real-router/$rid") ;;
+      esac
+    done
   done
 done
 
 log "reports and post-run checks -> $OUT/README.md"
 run "$PY" scripts/freeze_report.py --out "$OUT/README.md" \
   --unseen-model "${UNSEEN_MODEL[@]}" --unseen-survey "${UNSEEN_SURVEY[@]}" \
+  --unseen-model-ablation "${UNSEEN_MODEL_ABL[@]}" \
+  --unseen-survey-ablation "${UNSEEN_SURVEY_ABL[@]}" \
   --reference-all "$REF_DIR/rq2-l012-floor750-reopen-all" \
   --reference-no-low-effort "$REF_DIR/rq2-l012-floor750-reopen-no-low-effort" \
   || fail "POST-RUN CHECK FAILED (see $OUT/README.md): do not report these numbers"

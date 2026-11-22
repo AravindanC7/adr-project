@@ -952,6 +952,19 @@ def test_run_real_router_neg_floor_frac_reaches_every_router_row(tmp_path):
     assert cfg["router_config"]["neg_floor_frac"] == 0.65
 
 
+def test_run_real_router_clear_requires_style_human_is_off_unless_asked(tmp_path):
+    """The pre-registered ablation flag reaches every router row's config; off by default."""
+    _files(tmp_path)
+    for flag, rid in (((), "off"), (("--clear-requires-style-human",), "on")):
+        proc = subprocess.run(
+            _cmd(tmp_path, "--cap-variant", "per_mech", *flag, "--run-id", rid),  # last id wins
+            cwd=ROOT, capture_output=True, text=True, encoding="utf-8", check=False,
+        )
+        assert proc.returncode == 0, proc.stderr[-3000:]
+        cfg = yaml.safe_load((tmp_path / "real-router" / rid / "config.yaml").read_text())
+        assert cfg["router_config"]["clear_requires_style_human"] is bool(flag)
+
+
 def test_run_real_router_config_records_the_git_state_after_build_parser(tmp_path):
     """After the build_parser() refactor the run config still records the code that ran, as main
     does: git_state() (HEAD + tracked-files dirty flag) read when the run starts."""
