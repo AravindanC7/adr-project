@@ -36,6 +36,8 @@ BANK_FILES = (  # content-checked files of the held-out bank, relative to its fo
     "human_distributions.jsonl",
 )
 CONFIGS = ("configs/data_decisions.json", "configs/models.yaml")
+# Per-job spend caps (ADR_JOB_SPEND_CAP_USD), approved Nov 21; scripts/freeze_run.sh must match.
+SPEND_CAPS_USD = {"claude-haiku": 12.0, "gpt-mini": 10.0}
 
 
 def sha256(data: bytes) -> str:
@@ -100,6 +102,7 @@ def cmd_prep(a) -> int:
         "pilot": file_entry(a.pilot),
         "low_effort_ids": file_entry(a.low_effort),  # sha only: the ids stay in that file
         "configs": {c: file_entry(Path(c)) for c in CONFIGS},
+        "spend_caps_usd": dict(SPEND_CAPS_USD),
         "training_outcomes": [file_entry(p) for p in training],
         "final_outcomes": [],
     }

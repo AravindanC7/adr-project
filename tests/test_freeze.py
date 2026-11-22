@@ -66,6 +66,7 @@ def test_prep_verify_and_add_final(tmp_path, monkeypatch):
     m = json.loads(out.read_text())
     assert {e["path"] for e in m["training_outcomes"]} == {str(train.resolve())}
     assert set(m["configs"]) == set(fm.CONFIGS) and m["git"]["git_commit"]
+    assert m["spend_caps_usd"] == {"claude-haiku": 12.0, "gpt-mini": 10.0}
     verify = type("A", (), {"manifest": out, "heldout_bank": None})
     assert fm.cmd_verify(verify) == 0
     final = tmp_path / "final.parquet"
@@ -118,7 +119,7 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_4_router_runs(tmp_path
     assert "--reference-no-low-effort results/real-router/rq2-l012-floor750-reopen-no-low-effort" in out
     assert "--jobs 8 --resume" in out and "--exclude-sessions" in out
     assert out.count("rescore --final") == 30  # every survey / written-answer run is re-scored
-    assert "freeze-2026-11-22-claude-haiku (cap $10)" in out
+    assert "freeze-2026-11-22-claude-haiku (cap $12)" in out
     assert "freeze-2026-11-22-gpt-mini (cap $10)" in out
     for line in out.splitlines():  # every attacker call is a --final call at temperature 0.7
         if "--run-id v1-final" in line:

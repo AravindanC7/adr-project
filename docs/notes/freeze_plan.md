@@ -23,7 +23,12 @@ The same sentence is written at the top of the run's `results/freeze-2026-11-22/
 
 - Every call runs at temperature 0.7 with `--final`.
 - The drivers refuse claude-haiku, OSMI items and held-out-split items without `--final`; with `--final` they require "final" in the run id (`adr/harness/final_guard.py`).
-- Each provider is its own job: `ADR_JOB_ID=freeze-2026-11-22-<model>`, `ADR_JOB_SPEND_CAP_USD=10`.
+- Each provider is its own job, `ADR_JOB_ID=freeze-2026-11-22-<model>`, with its own spend cap (`ADR_JOB_SPEND_CAP_USD`), approved by Arav on Nov 21:
+  - claude-haiku: **$12**;
+  - gpt-mini: **$10**.
+
+  The caps are fixed in `scripts/freeze_run.sh` and recorded in the manifest (`spend_caps_usd`). The driver refuses to start if the two differ.
+- The team's weekly cap ($25, `configs/models.yaml`) applies on top of these. It is counted per ISO week in UTC, and Sun Nov 22 is in the same week as Nov 16–21.
 
 ## (b) Router runs: two separate reports
 
@@ -73,7 +78,8 @@ for:
 - the held-out bank;
 - the floor750 pilot parquet;
 - `configs/data_decisions.json` and `configs/models.yaml`;
-- the 35 training outcome files;
+- the 35 training outcome files. 15 are in `adr-project/results/outcomes`; **20 are in the `adr-rq2-l2` worktree** (`adr-rq2-l2/results/outcomes`). Keep that worktree until the final run and its write-up are done: the manifest and the router read those files by path;
+- the per-job spend caps (`spend_caps_usd`);
 - every final outcome file, added after (a).
 
 `verify` runs before (a) and again before (b).
@@ -97,7 +103,7 @@ The claude-haiku adjustments come from the two smoke calls on the same prompt:
 
 | job | calls | best estimate | cap |
 |---|---|---|---|
-| claude-haiku (36 runs) | 57,092 | **$8.0** | $10 |
+| claude-haiku (36 runs) | 57,092 | **$8.0** | $12 |
 | gpt-mini (6 OSMI runs) | 1,292 | **$0.55** | $10 |
 
 claude-haiku by bank (calls, best estimate):
@@ -112,7 +118,7 @@ claude-haiku by bank (calls, best estimate):
 | assignment-asurre-osmi-heldout | 1,200, $0.17 | 92, $0.04 |
 
 Most of the cost (85%) is the hidden output on the 48,000 short quiz copy-paste answers.
-- **Where the estimate is weakest:** it rests on one smoke call. If the hidden output is about 240 tokens per call instead of 191, claude-haiku reaches the $10 cap.
+- **Where the estimate is weakest:** it rests on one smoke call. If the hidden output is about 240 tokens per call instead of 191, claude-haiku would have passed $10. That margin is why its cap was raised to $12.
 - **If the hidden output instead scales with reply length:** the estimate would be $5.6.
 - **Conservative bound:** taking the higher of the two cases for each bank gives $9.6.
 

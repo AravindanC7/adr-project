@@ -8,7 +8,8 @@
 #       held-out OSMI bank; gpt-mini on the held-out OSMI bank only. Levels L0, L2, L2-generic;
 #       copy-paste and document upload, both at temperature 0.7 (the training runs' settings).
 #       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-22-<model>, with
-#       ADR_JOB_SPEND_CAP_USD (default 10).
+#       ADR_JOB_SPEND_CAP_USD = $12 for claude-haiku and $10 for gpt-mini (approved Nov 21).
+#       The caps are fixed here and recorded in the manifest; preflight stops if they differ.
 #   (b) scripts/run_real_router.py --final with the frozen config (configs/data_decisions.json
 #       router_calibration = the script's defaults), floor750 pilot, all 44 honest sessions and
 #       without the 4 low-effort ones, --jobs 8 --resume. Two separate evaluations, each on the
@@ -39,7 +40,9 @@ HELDOUT_BANK_DIR=data/processed/osmi-heldout-final
 PY=${PY:-python}
 REF_DIR=${REF_DIR:-results/real-router}  # #51's runs: rq2-l012-floor750-reopen-{all,no-low-effort}
 JOBS=${JOBS:-8}
-CAP=${ADR_JOB_SPEND_CAP_USD:-10}
+CAP_CLAUDE_HAIKU=12  # USD per job, approved Nov 21; must equal the manifest's spend_caps_usd
+CAP_GPT_MINI=10
+cap_for() { case "$1" in claude-haiku) echo "$CAP_CLAUDE_HAIKU" ;; gpt-mini) echo "$CAP_GPT_MINI" ;; esac; }
 DRY_RUN=${DRY_RUN:-0}
 SAMPLES=20
 TEMP=0.7
@@ -62,6 +65,10 @@ if [ "$DRY_RUN" != 1 ]; then
   grep -q "job_spend_cap_usd" adr/harness/llm_client.py \
     || fail "this checkout has no per-job spend cap (#50): not starting"
   [ -f "$MANIFEST" ] || fail "no $MANIFEST (scripts/freeze_manifest.py prep)"
+  caps=$("$PY" -c "import json,sys; c=json.load(open(sys.argv[1]))['spend_caps_usd']; \
+print(f\"{c['claude-haiku']:g} {c['gpt-mini']:g}\")" "$MANIFEST")
+  [ "$caps" = "$CAP_CLAUDE_HAIKU $CAP_GPT_MINI" ] \
+    || fail "spend caps differ: driver $CAP_CLAUDE_HAIKU/$CAP_GPT_MINI, manifest $caps"
   for who in all no-low-effort; do
     [ -f "$REF_DIR/rq2-l012-floor750-reopen-$who/metrics.json" ] \
       || fail "no #51 reference run $REF_DIR/rq2-l012-floor750-reopen-$who (set REF_DIR)"
@@ -144,10 +151,10 @@ TRAIN_BANKS="quiz-mmlu-200 quiz-arc-200 survey-ipip survey-gss assignment-asurre
 HELDOUT_BANK=assignment-asurre-osmi-heldout
 
 for model in claude-haiku gpt-mini; do
-  export ADR_JOB_ID="$FREEZE-$model" ADR_JOB_SPEND_CAP_USD="$CAP"
+  export ADR_JOB_ID="$FREEZE-$model" ADR_JOB_SPEND_CAP_USD="$(cap_for "$model")"
   banks="$HELDOUT_BANK"
   [ "$model" = claude-haiku ] && banks="$TRAIN_BANKS $HELDOUT_BANK"
-  log "job $ADR_JOB_ID (cap \$$CAP): banks $banks"
+  log "job $ADR_JOB_ID (cap \$$ADR_JOB_SPEND_CAP_USD): banks $banks"
   for bank in $banks; do
     for level in L0 L2 L2g; do
       for mode in cp du; do
