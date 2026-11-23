@@ -386,3 +386,19 @@ def test_a_session_blocked_from_clearing_keeps_getting_checks():
             choice = router.next(state)
         assert (state.status == "cleared") is not flag
         assert (choice.mechanism == "decoy") is expect_check  # cleared: plain items only
+
+
+def test_under_a_cap_group_the_rule_reads_the_groups_shared_total():
+    """passive_group: style shares the 'passive' total with behaviour, and the rule reads that
+    shared total (cap_key("style")), not style alone (docs/notes/freeze_plan.md (b2))."""
+    cfg = replace(RouterConfig(), clear_requires_style_human=True,
+                  mech_group_caps={"passive": ("behaviour", "style")})
+    router, assessment = _router(cfg)
+    assert router.cap_key("style") == "passive"
+    state = _feed(router, assessment, "decoy", "picked_correct", 12)  # score at B, blocked
+    state = router.update(state, make_variant_id("arc:f0", "behaviour"), "paste")
+    state = router.update(state, make_variant_id("arc:f1", "style"), "low")
+    # style alone is human-looking, but the shared passive total is not below 0: still blocked
+    assert state.contrib["passive"] >= 0 and state.status != "cleared"
+    state = router.update(state, make_variant_id("arc:f2", "style"), "low")
+    assert state.contrib["passive"] < 0 and state.status == "cleared"

@@ -78,15 +78,23 @@ Registered Nov 21, before the held-out run and the freeze tag; agreed by the tea
 - **Rule.** A session may clear only if its running per-mechanism style total is below 0 at the moment it would clear (score ≤ B). Otherwise it stays active and keeps getting checks. Everything else is #51's frozen config.
   - Router option: `RouterConfig.clear_requires_style_human`, used as `run_real_router.py --clear-requires-style-human`.
   - Default off.
+  - **Which total it reads.** The rule reads the running total under `cap_key("style")`, the key style's evidence is capped under:
+    - In the main design (`per_mech`) and in `no_cap`, that is style's own total.
+    - Under the `passive_group` cap variant, it is the shared `passive` total (behaviour + style).
+    - Under `open_text_group`, it is the shared `open_text` total (canary + style).
+
+    The flag applies to every router row of a partner run, so those cap-variant rows read the group's total, not style alone.
 - **It is an ablation.** The main policy (#51, `router_calibration`) is unchanged and remains the headline.
 - **Primary outcome: L2 wrongly cleared.** The share of L2 AI sessions that end cleared (`ai_cleared_rate[<model>:<mode>:L2]`), per model and mode, at A_0.05 (headline threshold) and A_0.01. L0 and L2-generic are reported, not primary.
+- **Secondary outcome:** per-group TPR (every model × level × mode in the report's matrix) at A_0.05 and A_0.01, with 95% bootstrap CIs, main policy beside the ablation.
 - **Costs:** the share of honest sessions cleared, and checks per honest person.
-- **Guardrail:** honest false pauses.
+- **Guardrail:** honest false pauses, as k of n with the exact (Clopper–Pearson) 95% interval, as in #51's notes.
+- **Unseen survey.** In the unseen-survey report, the evidence on the OSMI bank is canary + style only. The ablation's result there rests on that evidence alone and is not comparable to the headline; the report says so beside each ablation table.
 - **Provenance.** Chosen by Harshini on the pilot sessions and gpt-mini training data (Nov 21). The held-out run is therefore its first clean test.
 
 **How it runs.** Each of the 4 router runs in (b) is followed by its partner replay, `<run>-style-clear`. The partner has the same inputs plus `--clear-requires-style-human`, and makes no model calls, so there are 8 router replays in all. The partners get the same group-matrix and source checks as the main runs.
 - Each run's `config.yaml` must record the flag off (main) or on (partner).
-- Both reports show the ablation beside the main policy: the primary outcome, the costs and the guardrail, at both thresholds.
+- Both reports show the ablation beside the main policy, at both thresholds: the primary outcome, the costs, the guardrail with its exact interval, and the secondary per-group TPR.
 - Each run calibrates its thresholds on the same 44 pilot sessions and folds, and the report shows them side by side.
 
 **Offline check (Nov 21).** `rq2-l012-floor750-reopen-all` (#51), replayed at its own thresholds with and without the rule (no model calls). The replay without the rule matches the run's `metrics.json`. It reproduces Harshini's offline numbers exactly:

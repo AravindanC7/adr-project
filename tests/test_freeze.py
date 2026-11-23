@@ -93,7 +93,7 @@ def test_prep_verify_and_add_final(tmp_path, locked_profile):
     assert m["max_tokens"]["claude-haiku"]["copy_paste"] == 1024 and m["max_tokens"]["reason"]
     assert m["style_profile"]["profile_sha256"] == fm.STYLE_PROFILE_SHA12 + m["style_profile"][
         "profile_sha256"][12:]
-    assert m["pilot_bank"]["path"].endswith("server/pilot_items.json")
+    assert Path(m["pilot_bank"]["path"]).parts[-2:] == ("server", "pilot_items.json")
     assert len(m["training_banks"]) == len(fm.TRAINING_BANK_FILES) == 12  # 2 items files + 5 banks x (assessment, variants)
     verify = type("A", (), {"manifest": prep.out, "heldout_bank": None})
     assert fm.cmd_verify(verify) == 0
@@ -437,7 +437,7 @@ def test_report_shows_the_ablation_beside_the_main_policy(tmp_path):
         assert "| **primary:** L2 wrongly cleared, claude-haiku copy-paste | A_0.05" in part
         assert "| cost: honest sessions cleared |" in part
         assert "| cost: checks per honest person |" in part
-        assert "| guardrail: honest false pauses |" in part
+        assert "| guardrail: honest false pauses [exact 95% CI] |" in part
     assert ("| **primary:** L2 wrongly cleared, claude-haiku copy-paste | A_0.05 (0.008 / 0.008) | "
             "12 of 20 (0.60) | 7 of 20 (0.35) |") in model_part
     assert "L2 wrongly cleared, gpt-mini" in survey_part  # both models on OSMI
@@ -461,3 +461,25 @@ def test_ablation_partner_must_record_the_flag(tmp_path):
 def test_ablation_partners_must_pair_with_the_main_runs(tmp_path):
     proc, _ = _report(tmp_path, abl_names={"unseen-survey-all": "something-else"})
     assert proc.returncode == 1 and "do not pair with" in proc.stderr
+
+
+@pytest.mark.parametrize("k, lo, hi", [(3, 1.4, 18.7), (2, 0.6, 15.5), (5, 3.8, 24.6),
+                                       (0, 0.0, 8.0), (44, 92.0, 100.0)])
+def test_clopper_pearson_matches_the_published_51_intervals(k, lo, hi):
+    """The exact intervals docs/notes/rq2_calibration.md reports for 44 honest sessions."""
+    got = fr.clopper_pearson(k, 44)
+    assert (round(100 * got[0], 1), round(100 * got[1], 1)) == (lo, hi)
+
+
+def test_ablation_guardrail_has_exact_cis_and_secondary_tpr_is_side_by_side(tmp_path):
+    proc, readme = _report(tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    model_part, survey_part = readme.split("## Unseen survey")
+    # fixture: honest_pause_rate 1/44 in every run
+    assert ("| guardrail: honest false pauses [exact 95% CI] | A_0.05 (0.008 / 0.008) | "
+            "1 of 44 = 2.3% [0.1%, 12.0%] | 1 of 44 = 2.3% [0.1%, 12.0%] |") in model_part
+    assert model_part.count("Secondary outcome: per-group TPR") == 2
+    assert ("| claude-haiku | L2 | copy-paste | 0.50 [0.30, 0.70] / 0.50 [0.30, 0.70] | "
+            "0.50 [0.30, 0.70] / 0.50 [0.30, 0.70] |") in model_part
+    assert survey_part.count("canary + style evidence only") == 2  # beside each ablation
+    assert "canary + style evidence only" not in model_part

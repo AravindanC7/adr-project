@@ -200,6 +200,34 @@ def pair_problems(runs: list[Path], ablations: list[Path]) -> list[str]:
     return [] if got == want else [f"ablation runs {got} do not pair with {want}"]
 
 
+def _binom_cdf(k: int, n: int, p: float) -> float:
+    return sum(math.comb(n, i) * p**i * (1 - p) ** (n - i) for i in range(k + 1))
+
+
+def clopper_pearson(k: int, n: int, conf: float = 0.95) -> tuple[float, float]:
+    """Exact (Clopper-Pearson) interval for k of n, by bisection on the binomial CDF."""
+    a = (1 - conf) / 2
+
+    def solve(f) -> float:  # f increasing in p on [0, 1]: the p where f(p) = 0
+        lo, hi = 0.0, 1.0
+        for _ in range(100):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if f(mid) < 0 else (lo, mid)
+        return (lo + hi) / 2
+
+    lower = 0.0 if k == 0 else solve(lambda p: (1 - _binom_cdf(k - 1, n, p)) - a)
+    upper = 1.0 if k == n else solve(lambda p: a - _binom_cdf(k, n, p))
+    return lower, upper
+
+
+def _pauses(router: dict, t: str) -> str:
+    """Honest false pauses, k of n with the exact 95% interval (the pre-registered guardrail)."""
+    n = router["n_sessions"]
+    k = round(router["results"][t]["honest_pause_rate"] * n)
+    lo, hi = clopper_pearson(k, n)
+    return f"{k} of {n} = {k / n:.1%} [{lo:.1%}, {hi:.1%}]"
+
+
 def _of(router: dict, t: str, key: str, n: int) -> str:
     v = router["results"][t].get(key)
     return "–" if v is None else f"{round(v * n)} of {n} ({v:.2f})"
@@ -225,14 +253,31 @@ def ablation_table(main: dict, abl: dict, models: tuple[str, ...]) -> list[str]:
             (f"| cost: checks per honest person | {thr} | "
             f"{main['results'][t]['checks_per_honest_session']:.2f} | "
             f"{abl['results'][t]['checks_per_honest_session']:.2f} |"),
-            (f"| guardrail: honest false pauses | {thr} | "
-            f"{_of(main, t, 'honest_pause_rate', n_h)} | {_of(abl, t, 'honest_pause_rate', n_h)} |"),
+            (f"| guardrail: honest false pauses [exact 95% CI] | {thr} | "
+             f"{_pauses(main, t)} | {_pauses(abl, t)} |"),
         ]
     return lines
 
 
+def secondary_tpr_table(main: dict, abl: dict, models: tuple[str, ...]) -> list[str]:
+    """Secondary outcome: per-group TPR, main policy beside the ablation, at both thresholds."""
+    n_by = main.get("n_ai_sessions_by_group") or {}
+    lines = [("| model | level | mode | TPR at A_0.05: main / ablation | "
+              "TPR at A_0.01: main / ablation |"), "|---|---|---|---|---|"]
+    for model in models:
+        for level in LEVELS:
+            for mode in MODES:
+                g = f"{model}:{mode}:{level}"
+                if g not in n_by:
+                    continue
+                lines.append(f"| {model} | {level} | {mode.replace('_', '-')} | "
+                             f"{_cell(main, 'A_0.05', g)} / {_cell(abl, 'A_0.05', g)} | "
+                             f"{_cell(main, 'A_0.01', g)} / {_cell(abl, 'A_0.01', g)} |")
+    return lines
+
+
 def report(name: str, desc: str, runs: list[Path], models: tuple[str, ...],
-           ablations: list[Path] | None = None) -> list[str]:
+           ablations: list[Path] | None = None, ablation_note: str = "") -> list[str]:
     lines = [f"## {name}", "", desc, ""]
     pairs = dict(zip(runs, ablations or [], strict=False))
     for run in runs:
@@ -248,8 +293,10 @@ def report(name: str, desc: str, runs: list[Path], models: tuple[str, ...],
                       "policy (#51) is unchanged and stays the headline. Thresholds are shown as "
                       "main / ablation; each run calibrates them on the same 44-session pilot "
                       "folds."), "",
+                      *([ablation_note, ""] if ablation_note else []),
                       *ablation_table(router, abl, models), "",
-                      "Ablation TPR per group:", "", *table(abl, models), ""]
+                      "Secondary outcome: per-group TPR [95% CI], main policy / ablation:", "",
+                      *secondary_tpr_table(router, abl, models), ""]
     return lines
 
 
@@ -284,6 +331,9 @@ def main() -> int:
         "open-text checks (canary, style) have rows here; its other checks have none, so they show "
         "as missing and give no evidence.",
         a.unseen_survey, UNSEEN_SURVEY_MODELS, a.unseen_survey_ablation,
+        ablation_note=("On the OSMI bank the evidence is canary and style only, so this "
+                       "ablation's result here rests on canary + style evidence only and is not "
+                       "comparable to the headline."),
     )
 
     problems = []
