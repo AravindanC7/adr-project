@@ -67,7 +67,7 @@ def main() -> None:
                     help="index of the first sample (add samples to an earlier run)")
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--max-tokens", type=int, default=300,
-                    help="reply limit (default 300, the training runs'; the freeze uses 1024 for "
+                    help="reply limit (default 300, the training runs'; the freeze uses 4096 for "
                     "claude-haiku only)")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--run-id")

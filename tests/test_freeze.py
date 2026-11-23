@@ -90,7 +90,7 @@ def test_prep_verify_and_add_final(tmp_path, locked_profile):
     assert {e["path"] for e in m["training_outcomes"]} == {str((tmp_path / "t.parquet").resolve())}
     assert set(m["configs"]) == set(fm.CONFIGS) and m["git"]["git_commit"]
     assert m["spend_caps_usd"] == {"claude-haiku": 12.0, "gpt-mini": 10.0}
-    assert m["max_tokens"]["claude-haiku"]["copy_paste"] == 1024 and m["max_tokens"]["reason"]
+    assert m["max_tokens"]["claude-haiku"]["copy_paste"] == 4096 and m["max_tokens"]["reason"]
     assert m["style_profile"]["profile_sha256"] == fm.STYLE_PROFILE_SHA12 + m["style_profile"][
         "profile_sha256"][12:]
     assert Path(m["pilot_bank"]["path"]).parts[-2:] == ("server", "pilot_items.json")
@@ -199,21 +199,21 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_8_router_replays(tmp_p
         else:  # both models on the held-out OSMI bank only
             assert "unseen-survey" in ln and len(finals) == 12
             assert all("osmi-heldout" in f for f in finals)
-    assert "freeze_report.py --out results/freeze-2026-11-22/README.md" in out
-    assert "--unseen-model-ablation results/real-router/freeze-2026-11-22-unseen-model-all-style-clear" in out
+    assert "freeze_report.py --out results/freeze-2026-11-23/README.md" in out
+    assert "--unseen-model-ablation results/real-router/freeze-2026-11-23-unseen-model-all-style-clear" in out
     assert "--reference-no-low-effort results/real-router/rq2-l012-floor750-reopen-no-low-effort" in out
     assert "--jobs 8 --resume" in out and "--exclude-sessions" in out
     assert out.count("rescore --final") == 30  # every survey / written-answer run is re-scored
-    assert "freeze-2026-11-22-claude-haiku (cap $12)" in out
-    assert "freeze-2026-11-22-gpt-mini (cap $10)" in out
+    assert "freeze-2026-11-23-claude-haiku (cap $12)" in out
+    assert "freeze-2026-11-23-gpt-mini (cap $10)" in out
     assert list(tmp_path.iterdir()) == []  # a dry run creates no folders
     cp = [ln for ln in out.splitlines() if "--run-id v1-final-cp-" in ln and "DRY:" in ln]
     du = [ln for ln in out.splitlines() if "--run-id v1-final-du-" in ln and "DRY:" in ln]
     assert len(cp) == len(du) == 21
-    for ln in cp:  # copy-paste: 1024 for claude-haiku only; gpt-mini keeps the training limits
-        assert ("--max-tokens 1024" in ln) == ("claude-haiku" in ln)
+    for ln in cp:  # copy-paste: 4096 for claude-haiku only; gpt-mini keeps the training limits
+        assert ("--max-tokens 4096" in ln) == ("claude-haiku" in ln)
     for ln in du:  # document upload keeps the training limits for both models
-        assert "--max-tokens 1024" not in ln
+        assert "--max-tokens 4096" not in ln
     for line in out.splitlines():  # every attacker call is a --final call at temperature 0.7
         if "--run-id v1-final" in line:
             assert "--final" in line and "--temperature 0.7" in line and "--samples 20" in line

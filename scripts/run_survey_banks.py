@@ -419,7 +419,7 @@ def main() -> None:
     r.add_argument("--first-sample", type=_at_least(0), default=0, help="cp only: first sample index")
     r.add_argument("--temperature", type=float, help=f"default cp {CP_TEMP}, du {DU_TEMP}")
     r.add_argument("--max-tokens", type=_at_least(1),
-                   help="override the bank's reply limit for this mode (the freeze: 1024 for "
+                   help="override the bank's reply limit for this mode (the freeze: 4096 for "
                    "claude-haiku copy-paste only)")
     r.add_argument("--level", choices=["L0", "L2"], default="L0")
     r.add_argument("--system-variant", choices=sorted(SYSTEM_VARIANTS),

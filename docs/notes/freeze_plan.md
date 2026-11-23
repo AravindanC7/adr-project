@@ -1,8 +1,9 @@
 # Experiment freeze, Sun Nov 22: the final run (plan, not run)
 
 Driver: `scripts/freeze_run.sh`. It needs #50 (cache-key lock, per-job spend cap) and #51
-(calibration) merged, and a checkout at tag `freeze-2026-11-22`. Nothing in this note has been run
-except two smoke calls on a training item (below).
+(calibration) merged, and a checkout at tag `freeze-2026-11-23`. Apart from two smoke calls on a
+training item (below), the only paid run so far is the halted first launch from tag
+`freeze-2026-11-22` (see "Halted first launch, Nov 22–23").
 
 ## FPR rule
 
@@ -10,7 +11,7 @@ except two smoke calls on a training item (below).
 calibrated thresholds as #51; the held-out OSMI bank has no human side, so no FPR is reported on
 it.**
 
-The same sentence is written at the top of the run's `results/freeze-2026-11-22/README.md` by
+The same sentence is written at the top of the run's `results/freeze-2026-11-23/README.md` by
 `scripts/freeze_report.py`.
 
 ## Start time and preflight
@@ -20,7 +21,7 @@ The same sentence is written at the top of the run's `results/freeze-2026-11-22/
 - From 00:00 UTC Monday, week 48 starts with the full $25.
 
 Before any paid call, the driver's preflight (`scripts/freeze_run.sh`) checks:
-- HEAD is exactly the tag `freeze-2026-11-22`;
+- HEAD is exactly the tag `freeze-2026-11-23`;
 - the tag is on main (`git merge-base --is-ancestor HEAD origin/main`);
 - tracked files are clean;
 - #50's per-job spend cap is present;
@@ -39,16 +40,16 @@ It then prints this week's ledger spend and **refuses to start if the remaining 
 
 - Every call runs at temperature 0.7 with `--final`.
 - The drivers refuse claude-haiku, OSMI items and held-out-split items without `--final`; with `--final` they require "final" in the run id (`adr/harness/final_guard.py`).
-- Each provider is its own job, `ADR_JOB_ID=freeze-2026-11-22-<model>`, with its own spend cap (`ADR_JOB_SPEND_CAP_USD`), approved by Arav on Nov 21:
+- Each provider is its own job, `ADR_JOB_ID=freeze-2026-11-23-<model>`, with its own spend cap (`ADR_JOB_SPEND_CAP_USD`), approved by Arav on Nov 21:
   - claude-haiku: **$12**;
   - gpt-mini: **$10**.
 
   The caps are fixed in `scripts/freeze_run.sh` and recorded in the manifest (`spend_caps_usd`). The driver refuses to start if the two differ.
 - The team's weekly cap ($25) applies on top of these; see "Start time and preflight".
-- **Reply limits (decided Nov 21):**
-  - claude-haiku copy-paste: `max_tokens` **1,024**. The training runs used 300 for quiz, IPIP and GSS, and 1,000 for written answers.
+- **Reply limits (decided Nov 21; claude-haiku copy-paste raised Nov 23):**
+  - claude-haiku copy-paste: `max_tokens` **4,096** (1,024 until the halted first launch; see below). The training runs used 300 for quiz, IPIP and GSS, and 1,000 for written answers.
   - Why: claude-haiku is billed about 190 output tokens per call that are not in the reply text. The smoke call billed 271 output tokens for a 46-word reply, so a 300 limit would cut replies off.
-  - claude-haiku document upload keeps the training limits (3,000; 6,000 for written answers), which are already above 1,024.
+  - claude-haiku document upload keeps the training limits (3,000; 6,000 for written answers), which were above the old 1,024 limit; they are unchanged.
   - gpt-mini is unchanged.
   - **Truncation stays fatal:** any truncated reply stops the driver (`check_run`).
   - The limits are recorded in the manifest (`max_tokens`) with this reason.
@@ -63,8 +64,8 @@ Every run uses `run_real_router.py --final` with #51's frozen config (per_mech c
 
 | report | final outcome files | router run ids |
 |---|---|---|
-| **Unseen model** | claude-haiku composite sessions on the training banks (30 files) | `freeze-2026-11-22-unseen-model-{all,no-low-effort}` |
-| **Unseen survey** | gpt-mini and claude-haiku on the OSMI bank (12 files) | `freeze-2026-11-22-unseen-survey-{all,no-low-effort}` |
+| **Unseen model** | claude-haiku composite sessions on the training banks (30 files) | `freeze-2026-11-23-unseen-model-{all,no-low-effort}` |
+| **Unseen survey** | gpt-mini and claude-haiku on the OSMI bank (12 files) | `freeze-2026-11-23-unseen-survey-{all,no-low-effort}` |
 
 Each report gives TPR at the A_0.05 (headline) and A_0.01 thresholds, with 95% bootstrap CIs.
 - It is broken down by model, level (L0, L2, L2g) and mode.
@@ -140,7 +141,7 @@ Tests: `tests/test_freeze.py` and `tests/test_final_guard.py`.
 
 ## Inputs and the held-out bank check
 
-`results/freeze-2026-11-22/freeze_manifest.json` (`scripts/freeze_manifest.py`) records sha256
+`results/freeze-2026-11-23/freeze_manifest.json` (`scripts/freeze_manifest.py`) records sha256
 for:
 - the held-out bank;
 - the floor750 pilot parquet;
@@ -193,9 +194,10 @@ Most of the cost (85%) is the hidden output on the 48,000 short quiz copy-paste 
 - **If the hidden output instead scales with reply length:** the estimate would be $5.6.
 - **Conservative bound:** taking the higher of the two cases for each bank gives $9.6.
 
-**Effect of the 1,024 copy-paste limit.** The best estimate is unchanged: billing is per token used, and the limit only stops replies being cut off.
-- It raises the most a single claude-haiku copy-paste call can cost, from 300 to 1,024 output tokens.
-- If all 54,240 copy-paste calls hit 1,024, that would be about $28. The $12 job cap stops the job well before that.
+**Effect of the 4,096 copy-paste limit.** The best estimate is unchanged: billing is per token used, and the limit only stops replies being cut off.
+- It raises the most a single claude-haiku copy-paste call can cost, from 300 to 4,096 output tokens.
+- If every copy-paste call hit the limit, the cost would be far above the cap. The $12 job cap stops the job well before that.
+- **Measured on the halted first run:** $1.07 for 8,000 calls, about 9% above the estimate's per-call cost for that bank and mode. Scaled up, claude-haiku's best estimate is about $8.7, still under $12.
 
 If claude-haiku hits the cap, the cap stops its calls and the driver fails on that run (`check_run`) instead of going on. A restart with a higher cap resumes; finished runs are skipped.
 
@@ -203,9 +205,26 @@ If claude-haiku hits the cap, the cap stops its calls and the driver fails on th
 - claude-haiku: 43 input, 271 output tokens, $0.00014.
 - gpt-mini: 31 input, 28 output tokens, $0.00015.
 
+## Halted first launch, Nov 22–23
+
+- **Launch:** tag `freeze-2026-11-22` (main fb45265, the #56 merge), started Sun Nov 22 at 23:54 Arizona (06:54 UTC Mon Nov 23). The preflight passed: the tag was on main, week 48 had $25.00 left, the caps and `max_tokens` matched the manifest, and the held-out bank matched Archana's zip.
+- **The run:** `v1-final-cp-L0-quiz-mmlu-200-claude-haiku-s20`, the first of the 42. It finished with 8,000 outcome rows and 0 errors, and was not stopped by the cap.
+- **Why it halted:** **41 of 8,000 replies were cut off** at the 1,024-token copy-paste limit (`finish_reason` "length"). Truncation is fatal, so `check_run` stopped the driver. No other run started.
+  - 21 of the 41 came from one item: bank `quiz-mmlu-200`, type MCQ, 20 on its plain variant and 1 on its decoy variant.
+  - The other 20 were spread over 9 items.
+  - By variant, 24 of the 41 were plain and 17 decoy.
+- **Spent:** $1.07, under job `freeze-2026-11-22-claude-haiku`.
+- **Decision (Arav, Nov 23):** raise claude-haiku's copy-paste limit to **4,096**. Document upload and gpt-mini are unchanged, and truncation stays fatal.
+  - Why: a cut-off reply is not a valid observation. Dropping such replies would bias toward the items where the model writes most, so the limit is raised instead.
+  - The new limit is in `scripts/freeze_run.sh` and the manifest (`max_tokens`). The run restarts from a new tag, `freeze-2026-11-23`; the old tag stays as it was.
+- **Cost of the restart:** `max_tokens` is part of the LLM cache key, so none of the halted run's 8,000 calls are reused. Run 1 runs and bills again in full, about $1.1 and about an hour.
+  - The new job ids (`freeze-2026-11-23-<model>`) start their own $12 and $10 caps.
+  - The halted job's $1.07 still counts toward the weekly $25.
+- **The halted run's files:** the rerun overwrites them under the same run id. A copy is kept in the team's freeze folder outside the repo, as is the first launch's manifest and driver log.
+
 ## Follow-up: final tables
 
-`results/freeze-2026-11-22/README.md` is gitignored (results/ stays out of the repo). After the run, a follow-up docs PR will copy the final tables into `docs/notes/` with aggregates only, like the RQ2 calibration notes:
+`results/freeze-2026-11-23/README.md` is gitignored (results/ stays out of the repo). After the run, a follow-up docs PR will copy the final tables into `docs/notes/` with aggregates only, like the RQ2 calibration notes:
 - the two reports;
 - the post-run check results;
 - the manifest's commit and the run's spend.

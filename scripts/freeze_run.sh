@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Experiment freeze, Sun Nov 22: the ONE final run (AGENTS.md section 8). Do not start it without
 # the team's go. It needs #50 (cache-key lock, per-job spend cap) and #51 (calibration) merged and
-# the checkout at tag freeze-2026-11-22.
+# the checkout at tag freeze-2026-11-23.
 #
 #   (a) attacker runs, samples 0-19, run ids containing "final":
 #       claude-haiku (held-out model) on every bank the RQ2 composite sessions use plus the
 #       held-out OSMI bank; gpt-mini on the held-out OSMI bank only. Levels L0, L2, L2-generic;
 #       copy-paste and document upload, both at temperature 0.7 (the training runs' settings).
-#       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-22-<model>, with
+#       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-23-<model>, with
 #       ADR_JOB_SPEND_CAP_USD = $12 for claude-haiku and $10 for gpt-mini (approved Nov 21).
 #       The caps are fixed here and recorded in the manifest; preflight stops if they differ.
 #   (b) scripts/run_real_router.py --final with the frozen config (configs/data_decisions.json
@@ -32,13 +32,13 @@
 # on it.
 #
 # Run from the root of a checkout at the tag, with data/ and cache/ pointing at the shared ones:
-#   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-22/driver.log 2>&1 &
+#   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-23/driver.log 2>&1 &
 # DRY_RUN=1 prints every command and runs nothing (no preflight, no API calls).
 # A restart resumes: finished attacker runs are skipped (their outputs still go to the router),
 # router steps resume from steps/*.json.
 set -euo pipefail
 
-FREEZE=freeze-2026-11-22
+FREEZE=freeze-2026-11-23
 OUT=results/$FREEZE
 MANIFEST=$OUT/freeze_manifest.json
 LOGS=$OUT/logs
@@ -52,8 +52,9 @@ cap_for() { case "$1" in claude-haiku) echo "$CAP_CLAUDE_HAIKU" ;; gpt-mini) ech
 # claude-haiku copy-paste reply limit (decided Nov 21; must equal the manifest's max_tokens): it is
 # billed ~190 output tokens per call beyond the reply text, so the training runs' 300 would cut
 # replies off. Document upload keeps the training limits; gpt-mini is unchanged. Truncation stays
-# fatal (check_run).
-HAIKU_CP_MAX_TOKENS=1024
+# fatal (check_run). Raised from 1024 to 4096 on Nov 23: the first launch (tag freeze-2026-11-22)
+# halted with 41 of 8,000 replies cut off at 1024.
+HAIKU_CP_MAX_TOKENS=4096
 DRY_RUN=${DRY_RUN:-0}
 SAMPLES=20
 TEMP=0.7
