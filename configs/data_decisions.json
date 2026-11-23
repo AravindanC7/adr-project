@@ -98,5 +98,34 @@
       "ai_sessions": "120 composite gpt-mini sessions: L0, L2, L2g x copy_paste, doc_upload, 20 each"
     },
     "rule": "run_real_router.py's defaults must match this entry (tests/test_router_calibration.py). Change it only by a team decision, never per run."
+  },
+  "preregistered_ablations": {
+    "clear_requires_style_human": {
+      "registered": "2026-11-21",
+      "registered_before": "the held-out (--final) run and the freeze tag freeze-2026-11-22; agreed by the team",
+      "chosen_by": "Harshini, on the pilot sessions and gpt-mini training data (Nov 21), so the held-out run is its first clean test",
+      "router_option": "RouterConfig.clear_requires_style_human (scripts/run_real_router.py --clear-requires-style-human); default off",
+      "rule": "A session may clear only if its running per-mechanism style total is below 0 at the moment it would clear (score <= B). Otherwise it stays active and keeps getting checks. Everything else is #51's frozen config (router_calibration).",
+      "total_read": "the running total under cap_key(\"style\"): style's own total in per_mech (the main design) and no_cap; the shared 'passive' total (behaviour + style) under passive_group; the shared 'open_text' total (canary + style) under open_text_group",
+      "status": "ablation: the main policy (#51, router_calibration) is unchanged and remains the headline",
+      "primary_outcome": "L2 wrongly cleared: the share of L2 AI sessions that end cleared (ai_cleared_rate[<model>:<mode>:L2]), per model and mode, at A_0.05 (headline threshold) and A_0.01. Other levels (L0, L2-generic) are reported but are not the primary outcome.",
+      "secondary_outcome": "per-group TPR (every model x level x mode in the report's matrix) at A_0.05 and A_0.01, with 95% bootstrap CIs, main policy beside the ablation",
+      "costs": [
+        "the share of honest sessions cleared (honest_cleared_rate)",
+        "checks per honest person (checks_per_honest_session)"
+      ],
+      "guardrail": "honest false pauses (honest_pause_rate) must not rise; reported as k of n with the exact (Clopper-Pearson) 95% interval",
+      "evaluation": "scripts/freeze_run.sh: an extra router replay next to each of the 4 final router runs (no model calls), with the same group-matrix and source checks, reported beside the main policy in the unseen-model and unseen-survey reports",
+      "offline_check": {
+        "run": "rq2-l012-floor750-reopen-all (#51), replayed at its own thresholds with and without the rule",
+        "gpt_mini_copy_paste_L2_wrongly_cleared": "12 -> 7 of 20 (5 stopped), at A_0.05 and A_0.01",
+        "honest_cleared": "36 -> 30 of 44 (6 lost)",
+        "honest_false_pauses": "3 -> 3 (A_0.05), 2 -> 2 (A_0.01): unchanged",
+        "checks_per_honest_session": "6.41 -> 7.32 (A_0.05), 6.57 -> 7.48 (A_0.01)",
+        "other_groups": "unchanged; TPR unchanged (the 5 stopped sessions end undecided, not paused)",
+        "matches": "Harshini's offline numbers (5 of 12 L2 copy-paste wrong clears stopped, 6 of 36 honest clears lost, honest pauses unchanged)"
+      },
+      "unseen_survey": "on the OSMI bank the evidence is canary + style only, so the ablation's unseen-survey result rests on that evidence alone and is not comparable to the headline"
+    }
   }
 }

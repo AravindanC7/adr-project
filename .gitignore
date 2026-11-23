@@ -23,6 +23,8 @@ results/calibration/*
 results/real-router/
 # router error analysis (scripts/error_analysis.py): per-step traces of pilot sessions
 results/error_analysis/
+# freeze run logs and manifest (scripts/freeze_run.sh): absolute paths, run-time state
+results/freeze-*/
 # real pilot answers: never in git (docs/pilot/README.md)
 pilot_data/
 !**/.gitkeep

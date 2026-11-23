@@ -83,6 +83,11 @@ class RouterConfig:
     # clearing") gives the floor the same size as the positive cap (0.65 * A): one check alone
     # can neither clear nor reach the nominal A; clearing needs evidence from at least two checks.
     neg_floor_frac: float = 1.0
+    # Pre-registered ablation (configs/data_decisions.json preregistered_ablations, Nov 21;
+    # default off, so #51's frozen config is unchanged): a session may clear only if its running
+    # style total (contrib under cap_key("style")) is below 0 at the moment it would clear, i.e.
+    # its written answers so far look human. Otherwise it stays active and keeps getting checks.
+    clear_requires_style_human: bool = False
 
 
 def _cap_keys(groups: dict[str, tuple[str, ...]] | None) -> dict[str, str]:
@@ -233,11 +238,21 @@ class SPRTRouter:
         if self.cfg.clear_policy == "sticky" and state.status == "cleared":
             return "cleared"
         # Tolerance: a mechanism at its floor makes score == B up to float rounding of the deltas.
-        if self.cfg.clear and state.score <= self.B + _CLEAR_TOL:
+        if (
+            self.cfg.clear
+            and state.score <= self.B + _CLEAR_TOL
+            and self._style_allows_clear(state)
+        ):
             return "cleared"
         if state.score >= self.cfg.escalate_frac * self.A:
             return "escalated"
         return "active"
+
+    def _style_allows_clear(self, state: SessionState) -> bool:
+        """--clear-requires-style-human: clearing needs a style total below 0 (human-looking)."""
+        if not self.cfg.clear_requires_style_human:
+            return True
+        return state.contrib.get(self.cap_key("style"), 0.0) < 0
 
     def cap_key(self, mechanism: str) -> str:
         """The key in SessionState.contrib that `mechanism` counts toward: its group's name when

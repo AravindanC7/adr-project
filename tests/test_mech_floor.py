@@ -11,7 +11,7 @@ from dataclasses import replace
 import pytest
 
 from adr.baselines.policies import make_policy
-from adr.contracts import Assessment, FailureMap, Item, MapCell, make_variant_id
+from adr.contracts import Assessment, FailureMap, Item, MapCell, RenderedItem, make_variant_id
 from adr.router.core import RouterConfig, SPRTRouter
 from adr.router.sprt import capped_delta, wald_thresholds
 from adr.router.synthetic import sample_outcome, synthetic_bank, synthetic_failure_map
@@ -315,3 +315,90 @@ def test_two_check_clearing_applies_to_cap_groups_too():
 def test_neg_floor_frac_must_be_positive():
     with pytest.raises(ValueError, match="neg_floor_frac"):
         _router(replace(RouterConfig(), neg_floor_frac=0.0))
+
+
+# ---------------------------------------------------------------- pre-registered ablation:
+# --clear-requires-style-human (configs/data_decisions.json preregistered_ablations)
+def test_clear_requires_style_human_is_off_by_default_and_leaves_clearing_unchanged():
+    assert RouterConfig().clear_requires_style_human is False
+    seqs = [("decoy", "picked_correct")] * 12 + [("style", "high"), ("style", "low")]
+    for cfg in (RouterConfig(), replace(RouterConfig(), clear_requires_style_human=False)):
+        router, assessment = _router(cfg)
+        state, _ = router.start(assessment, "s", 0)
+        statuses = []
+        for i, (mech, outcome) in enumerate(seqs):
+            state = router.update(state, make_variant_id(f"arc:f{i % 12}", mech), outcome)
+            statuses.append(state.status)
+        assert statuses[1] == "cleared"  # decoy alone clears, with no style evidence (as #51)
+        assert "cleared" in statuses
+
+
+@pytest.mark.parametrize("style_first", [None, "high"])
+def test_clearing_is_blocked_while_the_style_total_is_not_below_zero(style_first):
+    router, assessment = _router(replace(RouterConfig(), clear_requires_style_human=True))
+    state, _ = router.start(assessment, "s", 0)
+    if style_first:  # style total > 0
+        state = router.update(state, make_variant_id("arc:f0", "style"), style_first)
+        assert state.contrib["style"] > 0
+    for i in range(12):  # human-looking decoy answers: the score reaches B
+        state = router.update(state, make_variant_id(f"arc:f{i}", "decoy"), "picked_correct")
+        assert state.status != "cleared"
+    assert state.contrib.get("style", 0.0) >= 0
+    if style_first is None:
+        assert state.score <= router.B + 1e-9  # would have cleared without the rule
+    assert state.status in ("active", "escalated")
+
+
+def test_clearing_is_allowed_once_the_style_total_is_below_zero():
+    router, assessment = _router(replace(RouterConfig(), clear_requires_style_human=True))
+    state = _feed(router, assessment, "decoy", "picked_correct", 12)
+    assert state.score <= router.B + 1e-9 and state.status == "active"  # blocked: no style yet
+    state = router.update(state, make_variant_id("arc:f0", "style"), "low")
+    assert state.contrib["style"] < 0
+    assert state.status == "cleared"
+
+
+def test_a_session_blocked_from_clearing_keeps_getting_checks():
+    """Blocked: the session is not cleared, so next() still offers checks, not only plain items."""
+    items = {
+        f"arc:f{i}": Item(
+            item_id=f"arc:f{i}", source="arc", assessment_type="quiz", item_type="mcq",
+            stem=f"q{i}", options=["a", "b", "c", "d"], correct_option=0,
+            eligible_mechanisms=["decoy"],
+        )
+        for i in range(12)
+    }
+    variants = {
+        i: [RenderedItem(item_id=i, mechanism="decoy", variant_id=make_variant_id(i, "decoy"),
+                         visible={"stem": "s"}, hidden={"decoy_option_index": 1})]
+        for i in items
+    }
+    fmap = FailureMap(version="t", cells=[_DECOY, *_PASSIVE])
+    assessment = Assessment(assessment_id="a", title="t", assessment_type="quiz",
+                            item_ids=list(items))
+    for flag, expect_check in ((False, False), (True, True)):
+        router = SPRTRouter(items, variants, fmap,
+                            replace(RouterConfig(), clear_requires_style_human=flag))
+        state, choice = router.start(assessment, "s", 0)
+        for _ in range(3):
+            outcome = "picked_correct" if choice.mechanism == "decoy" else "none"
+            state = router.update(state, choice.variant_id, outcome)
+            choice = router.next(state)
+        assert (state.status == "cleared") is not flag
+        assert (choice.mechanism == "decoy") is expect_check  # cleared: plain items only
+
+
+def test_under_a_cap_group_the_rule_reads_the_groups_shared_total():
+    """passive_group: style shares the 'passive' total with behaviour, and the rule reads that
+    shared total (cap_key("style")), not style alone (docs/notes/freeze_plan.md (b2))."""
+    cfg = replace(RouterConfig(), clear_requires_style_human=True,
+                  mech_group_caps={"passive": ("behaviour", "style")})
+    router, assessment = _router(cfg)
+    assert router.cap_key("style") == "passive"
+    state = _feed(router, assessment, "decoy", "picked_correct", 12)  # score at B, blocked
+    state = router.update(state, make_variant_id("arc:f0", "behaviour"), "paste")
+    state = router.update(state, make_variant_id("arc:f1", "style"), "low")
+    # style alone is human-looking, but the shared passive total is not below 0: still blocked
+    assert state.contrib["passive"] >= 0 and state.status != "cleared"
+    state = router.update(state, make_variant_id("arc:f2", "style"), "low")
+    assert state.contrib["passive"] < 0 and state.status == "cleared"
