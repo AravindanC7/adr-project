@@ -222,6 +222,24 @@ If claude-haiku hits the cap, the cap stops its calls and the driver fails on th
   - The halted job's $1.07 still counts toward the weekly $25.
 - **The halted run's files:** the rerun overwrites them under the same run id. A copy is kept in the team's freeze folder outside the repo, as is the first launch's manifest and driver log.
 
+### Restart, Nov 23: #57 merged with one approval
+
+- **#57** (the 4,096 limit and the new tag) **was merged with one approval, Harshini's**, given on its head fd60f1e.
+- **Why:** Archana had not reviewed it yet. Arav decided to go ahead on Harshini's approval alone rather than hold the restart. The change is the one he decided after the halt: one reply limit and the tag name, with the rule and the rest of the run plan unchanged.
+- Archana can still review #57 after the merge. Anything she raises is handled as a follow-up and does not change the tagged run.
+- **Restart:**
+  - Tag `freeze-2026-11-23` is on the #57 merge commit (main 8c0889a), and all 967 tests pass on it.
+  - The held-out bank was rebuilt and matches Archana's zip (content sha256 `02cc0b2a…`).
+  - The manifest was written at 8c0889a with a clean tree and verified: 53 files.
+  - Started at 18:21 Arizona on Mon Nov 23.
+- **Preflight passed:**
+  - the tag is on main;
+  - week 48 had $1.07 spent and $23.93 left, at least the $22 required;
+  - the caps ($12 and $10) and the claude-haiku copy-paste `max_tokens` of 4,096 matched the manifest;
+  - every input was verified.
+
+  The tag was pushed after the preflight passed.
+
 ## Follow-up: final tables
 
 `results/freeze-2026-11-23/README.md` is gitignored (results/ stays out of the repo). After the run, a follow-up docs PR will copy the final tables into `docs/notes/` with aggregates only, like the RQ2 calibration notes:
