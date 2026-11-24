@@ -40,8 +40,9 @@ CONFIGS = ("configs/data_decisions.json", "configs/models.yaml")
 DECISIONS = Path("configs/data_decisions.json")
 # Per-job spend caps (ADR_JOB_SPEND_CAP_USD), approved Nov 21; scripts/freeze_run.sh must match.
 SPEND_CAPS_USD = {"claude-haiku": 12.0, "gpt-mini": 10.0}
-# Reply limits of the final attacker runs (decided Nov 21); scripts/freeze_run.sh must match.
-HAIKU_CP_MAX_TOKENS = 1024
+# Reply limits of the final attacker runs (decided Nov 21; claude-haiku copy-paste raised to 4096
+# on Nov 23 after the halted first launch); scripts/freeze_run.sh must match.
+HAIKU_CP_MAX_TOKENS = 4096
 MAX_TOKENS = {
     "claude-haiku": {
         "copy_paste": HAIKU_CP_MAX_TOKENS,
@@ -50,7 +51,9 @@ MAX_TOKENS = {
     "gpt-mini": "unchanged: the training runs' limits",
     "reason": "claude-haiku is billed about 190 output tokens per call that are not in the reply "
               "text (smoke call, Nov 21: 271 output tokens for a 46-word reply), which would "
-              "truncate replies at the 300-token copy-paste limit; 1024 for claude-haiku only.",
+              "truncate replies at the 300-token copy-paste limit; 1024 for claude-haiku only. "
+              "Nov 23: the first launch (tag freeze-2026-11-22) halted with 41 of 8,000 "
+              "claude-haiku copy-paste replies cut off at 1024, so 4096.",
     "truncation": "fatal: any truncated reply stops the driver (check_run)",
 }
 # Files the final run reads besides the outcome files (paths relative to the checkout root).
@@ -145,7 +148,7 @@ def cmd_check_heldout(a) -> int:
 def cmd_prep(a) -> int:
     training = [Path(p) for p in a.training_files.read_text(encoding="utf-8").splitlines() if p]
     manifest = {
-        "freeze": "freeze-2026-11-22",
+        "freeze": "freeze-2026-11-23",
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "git": git_state(),
         "heldout_bank": bank_entry(a.heldout_bank),
