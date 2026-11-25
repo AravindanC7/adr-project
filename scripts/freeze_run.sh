@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Experiment freeze, Sun Nov 22: the ONE final run (AGENTS.md section 8). Do not start it without
 # the team's go. It needs #50 (cache-key lock, per-job spend cap) and #51 (calibration) merged and
-# the checkout at tag freeze-2026-11-23.
+# the checkout at tag freeze-2026-11-24.
 #
 #   (a) attacker runs, samples 0-19, run ids containing "final":
 #       claude-haiku (held-out model) on every bank the RQ2 composite sessions use plus the
 #       held-out OSMI bank; gpt-mini on the held-out OSMI bank only. Levels L0, L2, L2-generic;
 #       copy-paste and document upload, both at temperature 0.7 (the training runs' settings).
-#       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-23-<model>, with
+#       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-24-<model>, with
 #       ADR_JOB_SPEND_CAP_USD = $12 for claude-haiku and $10 for gpt-mini (approved Nov 21).
 #       The caps are fixed here and recorded in the manifest; preflight stops if they differ.
 #   (b) scripts/run_real_router.py --final with the frozen config (configs/data_decisions.json
@@ -32,13 +32,13 @@
 # on it.
 #
 # Run from the root of a checkout at the tag, with data/ and cache/ pointing at the shared ones:
-#   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-23/driver.log 2>&1 &
+#   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-24/driver.log 2>&1 &
 # DRY_RUN=1 prints every command and runs nothing (no preflight, no API calls).
 # A restart resumes: finished attacker runs are skipped (their outputs still go to the router),
 # router steps resume from steps/*.json.
 set -euo pipefail
 
-FREEZE=freeze-2026-11-23
+FREEZE=freeze-2026-11-24
 OUT=results/$FREEZE
 MANIFEST=$OUT/freeze_manifest.json
 LOGS=$OUT/logs
@@ -55,6 +55,13 @@ cap_for() { case "$1" in claude-haiku) echo "$CAP_CLAUDE_HAIKU" ;; gpt-mini) ech
 # fatal (check_run). Raised from 1024 to 4096 on Nov 23: the first launch (tag freeze-2026-11-22)
 # halted with 41 of 8,000 replies cut off at 1024.
 HAIKU_CP_MAX_TOKENS=4096
+# claude-haiku document-upload limit, all banks (decided Nov 24; must equal the manifest's
+# max_tokens, both entries): the second launch (tag freeze-2026-11-23) halted with 16 of 400
+# document replies cut off at 3000. Quiz and survey banks: the larger of 8192 and twice the largest
+# finished reply (2994), rounded up to a power of two, capped at the model's 128K. Written-answer
+# banks (asurre-train, held-out OSMI): the same 8192, one limit for all claude-haiku document
+# upload (gpt-mini's largest written-answer reply was 564). gpt-mini is unchanged.
+HAIKU_DU_MAX_TOKENS=8192
 DRY_RUN=${DRY_RUN:-0}
 SAMPLES=20
 TEMP=0.7
@@ -89,6 +96,14 @@ print(f\"{c['claude-haiku']:g} {c['gpt-mini']:g}\")" "$MANIFEST")
 ['claude-haiku']['copy_paste'])" "$MANIFEST")
   [ "$maxtok" = "$HAIKU_CP_MAX_TOKENS" ] \
     || fail "claude-haiku copy-paste max_tokens differ: driver $HAIKU_CP_MAX_TOKENS, manifest $maxtok"
+  dutok=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['max_tokens']\
+['claude-haiku']['doc_upload']['quiz_and_survey'])" "$MANIFEST")
+  [ "$dutok" = "$HAIKU_DU_MAX_TOKENS" ] \
+    || fail "claude-haiku document-upload max_tokens differ: driver $HAIKU_DU_MAX_TOKENS, manifest $dutok"
+  duwtok=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['max_tokens']\
+['claude-haiku']['doc_upload']['written_answers'])" "$MANIFEST")
+  [ "$duwtok" = "$HAIKU_DU_MAX_TOKENS" ] \
+    || fail "claude-haiku written-answer document-upload max_tokens differ: driver $HAIKU_DU_MAX_TOKENS, manifest $duwtok"
   log "preflight: this week's spend against the weekly cap"
   "$PY" scripts/freeze_manifest.py budget \
     || fail "weekly budget below the two jobs' caps (\$$CAP_CLAUDE_HAIKU + \$$CAP_GPT_MINI): start after 17:00 Arizona time Sunday (00:00 UTC Monday)"
@@ -133,6 +148,14 @@ max_tokens_flag() {  # copy-paste only: claude-haiku's limit; gpt-mini keeps the
   return 0
 }
 
+du_max_tokens() {  # document upload: claude-haiku's limit on every bank (passed explicitly), else the training's
+  case "$1:$2" in
+    claude-haiku:*) echo "--max-tokens $HAIKU_DU_MAX_TOKENS" ;;
+    *:quiz-*) echo "--max-tokens 3000" ;;
+  esac
+  return 0
+}
+
 done_already() {  # restart: skip a run that finished cleanly
   [ "$DRY_RUN" = 1 ] && return 1
   [ -f "results/outcomes/$1.parquet" ] && check_run "$1" >/dev/null 2>&1
@@ -160,13 +183,14 @@ attack() {  # attack MODEL MODE(cp|du) LEVEL(L0|L2|L2g) BANK; sets RID
       else
         # shellcheck disable=SC2086
         runlog "$LOGS/$rid.log" "$PY" scripts/run_doc_upload.py "${common[@]}" $flags \
-          --max-tokens 3000 --questions-per-doc 20
+          $(du_max_tokens "$model" "$bank") --questions-per-doc 20
       fi ;;
     *)  # survey and written-answer banks, incl. the held-out OSMI bank; then the shared re-score
       # shellcheck disable=SC2086
       runlog "$LOGS/$rid.log" "$PY" scripts/run_survey_banks.py run --final --model "$model" \
         --bank "$bank" --mode "$mode" $flags --samples "$SAMPLES" --temperature "$TEMP" \
-        --run-id "$rid" $([ "$mode" = cp ] && max_tokens_flag "$model")
+        --run-id "$rid" $([ "$mode" = cp ] && max_tokens_flag "$model") \
+        $([ "$mode" = du ] && du_max_tokens "$model" "$bank")
       runlog "$LOGS/$rid.log" "$PY" scripts/run_survey_banks.py rescore --final \
         --runs "$bank=$rid" ;;
   esac

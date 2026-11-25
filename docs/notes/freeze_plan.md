@@ -1,9 +1,10 @@
 # Experiment freeze, Sun Nov 22: the final run (plan, not run)
 
 Driver: `scripts/freeze_run.sh`. It needs #50 (cache-key lock, per-job spend cap) and #51
-(calibration) merged, and a checkout at tag `freeze-2026-11-23`. Apart from two smoke calls on a
-training item (below), the only paid run so far is the halted first launch from tag
-`freeze-2026-11-22` (see "Halted first launch, Nov 22–23").
+(calibration) merged, and a checkout at tag `freeze-2026-11-24`. Apart from two smoke calls on a
+training item (below), the only paid runs so far are two halted launches: tag
+`freeze-2026-11-22` (see "Halted first launch, Nov 22–23") and tag `freeze-2026-11-23` (see
+"Halted second launch, Nov 23–24").
 
 ## FPR rule
 
@@ -11,7 +12,7 @@ training item (below), the only paid run so far is the halted first launch from 
 calibrated thresholds as #51; the held-out OSMI bank has no human side, so no FPR is reported on
 it.**
 
-The same sentence is written at the top of the run's `results/freeze-2026-11-23/README.md` by
+The same sentence is written at the top of the run's `results/freeze-2026-11-24/README.md` by
 `scripts/freeze_report.py`.
 
 ## Start time and preflight
@@ -21,7 +22,7 @@ The same sentence is written at the top of the run's `results/freeze-2026-11-23/
 - From 00:00 UTC Monday, week 48 starts with the full $25.
 
 Before any paid call, the driver's preflight (`scripts/freeze_run.sh`) checks:
-- HEAD is exactly the tag `freeze-2026-11-23`;
+- HEAD is exactly the tag `freeze-2026-11-24`;
 - the tag is on main (`git merge-base --is-ancestor HEAD origin/main`);
 - tracked files are clean;
 - #50's per-job spend cap is present;
@@ -40,16 +41,16 @@ It then prints this week's ledger spend and **refuses to start if the remaining 
 
 - Every call runs at temperature 0.7 with `--final`.
 - The drivers refuse claude-haiku, OSMI items and held-out-split items without `--final`; with `--final` they require "final" in the run id (`adr/harness/final_guard.py`).
-- Each provider is its own job, `ADR_JOB_ID=freeze-2026-11-23-<model>`, with its own spend cap (`ADR_JOB_SPEND_CAP_USD`), approved by Arav on Nov 21:
+- Each provider is its own job, `ADR_JOB_ID=freeze-2026-11-24-<model>`, with its own spend cap (`ADR_JOB_SPEND_CAP_USD`), approved by Arav on Nov 21:
   - claude-haiku: **$12**;
   - gpt-mini: **$10**.
 
   The caps are fixed in `scripts/freeze_run.sh` and recorded in the manifest (`spend_caps_usd`). The driver refuses to start if the two differ.
 - The team's weekly cap ($25) applies on top of these; see "Start time and preflight".
-- **Reply limits (decided Nov 21; claude-haiku copy-paste raised Nov 23):**
+- **Reply limits (decided Nov 21; claude-haiku copy-paste raised Nov 23, document upload Nov 24):**
   - claude-haiku copy-paste: `max_tokens` **4,096** (1,024 until the halted first launch; see below). The training runs used 300 for quiz, IPIP and GSS, and 1,000 for written answers.
   - Why: claude-haiku is billed about 190 output tokens per call that are not in the reply text. The smoke call billed 271 output tokens for a 46-word reply, so a 300 limit would cut replies off.
-  - claude-haiku document upload keeps the training limits (3,000; 6,000 for written answers), which were above the old 1,024 limit; they are unchanged.
+  - claude-haiku document upload: **8,192** on the quiz and survey banks (3,000 until the halted second launch; see below). the same **8,192** on the written-answer banks (asurre-train and the held-out OSMI bank; 6,000 before; see below). One limit for all claude-haiku document upload.
   - gpt-mini is unchanged.
   - **Truncation stays fatal:** any truncated reply stops the driver (`check_run`).
   - The limits are recorded in the manifest (`max_tokens`) with this reason.
@@ -64,8 +65,8 @@ Every run uses `run_real_router.py --final` with #51's frozen config (per_mech c
 
 | report | final outcome files | router run ids |
 |---|---|---|
-| **Unseen model** | claude-haiku composite sessions on the training banks (30 files) | `freeze-2026-11-23-unseen-model-{all,no-low-effort}` |
-| **Unseen survey** | gpt-mini and claude-haiku on the OSMI bank (12 files) | `freeze-2026-11-23-unseen-survey-{all,no-low-effort}` |
+| **Unseen model** | claude-haiku composite sessions on the training banks (30 files) | `freeze-2026-11-24-unseen-model-{all,no-low-effort}` |
+| **Unseen survey** | gpt-mini and claude-haiku on the OSMI bank (12 files) | `freeze-2026-11-24-unseen-survey-{all,no-low-effort}` |
 
 Each report gives TPR at the A_0.05 (headline) and A_0.01 thresholds, with 95% bootstrap CIs.
 - It is broken down by model, level (L0, L2, L2g) and mode.
@@ -141,7 +142,7 @@ Tests: `tests/test_freeze.py` and `tests/test_final_guard.py`.
 
 ## Inputs and the held-out bank check
 
-`results/freeze-2026-11-23/freeze_manifest.json` (`scripts/freeze_manifest.py`) records sha256
+`results/freeze-2026-11-24/freeze_manifest.json` (`scripts/freeze_manifest.py`) records sha256
 for:
 - the held-out bank;
 - the floor750 pilot parquet;
@@ -240,9 +241,48 @@ If claude-haiku hits the cap, the cap stops its calls and the driver fails on th
 
   The tag was pushed after the preflight passed.
 
+## Halted second launch, Nov 23–24
+
+- **Launch:** tag `freeze-2026-11-23` (main 8c0889a, the #57 merge), started at 18:21 Arizona on Mon Nov 23.
+- **Run 1, `v1-final-cp-L0-quiz-mmlu-200-claude-haiku-s20`, passed** at the new copy-paste limit of 4,096: 8,000 rows, 0 cut off, 0 errors. It stays as it is, and the driver skips it on restart.
+- **Run 2, `v1-final-du-L0-quiz-mmlu-200-claude-haiku-s20` (document upload, 20 questions per document), halted the driver.** It finished without a cap stop.
+  - **16 of its 400 document replies were cut off** at the 3,000-token document-upload limit. That is 20 documents × 20 samples.
+  - They fall on **3 of the 20 documents**: 8, 7 and 1 cut-offs.
+  - Each cut-off reply loses the answers after the cut, which gave 225 skipped questions. The run has 7,775 rows instead of 8,000.
+  - Truncation is fatal, so `check_run` stopped the driver. No other run started.
+- **Spent:** $1.88 under job `freeze-2026-11-23-claude-haiku`, for runs 1 and 2.
+- **Measurement (Nov 24, no API calls).** These are claude-haiku's billed output tokens per document reply, hidden tokens included, taken from the LLM cache entries of run 2's 400 replies (the ledger's output-token count matches).
+
+  | replies | max | 95th pct | median |
+  |---|---|---|---|
+  | all 400 | 3,000 (cut off) | 2,921 | 1,836 |
+  | 384 finished | **2,994** | 2,769 | 1,829 |
+
+  Per document, the 95th percentile ranged from 1,493 to 2,828 on the 17 documents with no cut-offs. On the 3 documents with cut-offs it reached 2,821 and 3,000. The largest finished reply on each of the 20 documents ranged from 1,606 to 2,994.
+- **claude-haiku's maximum output** is 128K tokens per call (`claude-haiku-5-5`).
+- **Rule (Arav, Nov 24):**
+  - the document-upload limit for the quiz and survey banks is the larger of 8,192 and twice the largest finished reply in run 2, rounded up to a power of two and capped at the model's maximum;
+  - apply the same rule to the written-answer banks only if twice their largest observed reply would exceed 6,000;
+  - gpt-mini and claude-haiku copy-paste are unchanged;
+  - truncation stays fatal.
+- **Result:**
+  - **Quiz and survey banks: 8,192.** Twice 2,994 is 5,988, so the 8,192 floor applies. 8,192 is already a power of two and below 128K.
+  - **Written-answer banks:** by the rule they would have stayed at 6,000, since there is no claude-haiku document-upload reply on them yet (gpt-mini's largest in training was 564 tokens).
+- **Written-answer banks raised to 8,192 (Arav, Nov 24, on Archana's and Harshini's reviews of #59).** Harshini asked for 8,192 or 16,384, Archana for 8,192, since no claude-haiku written-answer run shows 6,000 is enough and truncation is fatal. Reasons for 8,192:
+  - the measured quiz maximum was 2,994;
+  - gpt-mini's largest written-answer document reply was 564;
+  - one limit for all claude-haiku document upload.
+
+  A higher limit costs nothing on replies that would finish anyway: the spend cap counts the tokens actually billed. None of these runs had happened yet, so no cached reply is lost.
+- The limit is in `scripts/freeze_run.sh` (`HAIKU_DU_MAX_TOKENS`), which now passes it explicitly on every claude-haiku document-upload run, written-answer banks included, instead of relying on the survey runner's default. The manifest records it under `max_tokens.claude-haiku.doc_upload` (`quiz_and_survey` and `written_answers`), with the rule. The preflight checks both entries against the driver.
+- The run restarts from a new tag, `freeze-2026-11-24`; the old tags stay as they were.
+- **Cost of the restart:** run 1 is skipped. Run 2 reruns in full, because the limit is part of the cache key: about $0.8 and about 15 minutes. The new job ids (`freeze-2026-11-24-<model>`) start their own $12 and $10 caps.
+- **No spare launch this week (Harshini, review of #59):** about $22.05 is left in week 48 ($25 − $1.07 − $1.88) against the $22 the preflight needs. The restart should pass, but only just. Another halt would push the restart to after the weekly reset (Sunday 17:00 Arizona time), just before the poster.
+- **The halted run's files:** a copy is kept in the team's freeze folder outside the repo (`halted-launch-2/`), with the second launch's manifest and logs.
+
 ## Follow-up: final tables
 
-`results/freeze-2026-11-23/README.md` is gitignored (results/ stays out of the repo). After the run, a follow-up docs PR will copy the final tables into `docs/notes/` with aggregates only, like the RQ2 calibration notes:
+`results/freeze-2026-11-24/README.md` is gitignored (results/ stays out of the repo). After the run, a follow-up docs PR will copy the final tables into `docs/notes/` with aggregates only, like the RQ2 calibration notes:
 - the two reports;
 - the post-run check results;
 - the manifest's commit and the run's spend.

@@ -1,6 +1,6 @@
 """Freeze reports and post-run checks for the final router runs (scripts/freeze_run.sh, step c).
 
-    python scripts/freeze_report.py --out results/freeze-2026-11-23/README.md \\
+    python scripts/freeze_report.py --out results/freeze-2026-11-24/README.md \\
         --unseen-model RUN_DIR [RUN_DIR] --unseen-survey RUN_DIR [RUN_DIR] \\
         [--reference-all results/real-router/rq2-l012-floor750-reopen-all] \\
         [--reference-no-low-effort results/real-router/rq2-l012-floor750-reopen-no-low-effort]
