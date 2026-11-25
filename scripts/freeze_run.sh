@@ -55,11 +55,12 @@ cap_for() { case "$1" in claude-haiku) echo "$CAP_CLAUDE_HAIKU" ;; gpt-mini) ech
 # fatal (check_run). Raised from 1024 to 4096 on Nov 23: the first launch (tag freeze-2026-11-22)
 # halted with 41 of 8,000 replies cut off at 1024.
 HAIKU_CP_MAX_TOKENS=4096
-# claude-haiku document-upload limit for the quiz and survey banks (decided Nov 24; must equal the
-# manifest's max_tokens): the second launch (tag freeze-2026-11-23) halted with 16 of 400 document
-# replies cut off at 3000. Rule: the larger of 8192 and twice the largest finished reply (2994),
-# rounded up to a power of two, capped at the model's 128K. Written-answer banks keep 6000;
-# gpt-mini is unchanged.
+# claude-haiku document-upload limit, all banks (decided Nov 24; must equal the manifest's
+# max_tokens, both entries): the second launch (tag freeze-2026-11-23) halted with 16 of 400
+# document replies cut off at 3000. Quiz and survey banks: the larger of 8192 and twice the largest
+# finished reply (2994), rounded up to a power of two, capped at the model's 128K. Written-answer
+# banks (asurre-train, held-out OSMI): the same 8192, one limit for all claude-haiku document
+# upload (gpt-mini's largest written-answer reply was 564). gpt-mini is unchanged.
 HAIKU_DU_MAX_TOKENS=8192
 DRY_RUN=${DRY_RUN:-0}
 SAMPLES=20
@@ -99,6 +100,10 @@ print(f\"{c['claude-haiku']:g} {c['gpt-mini']:g}\")" "$MANIFEST")
 ['claude-haiku']['doc_upload']['quiz_and_survey'])" "$MANIFEST")
   [ "$dutok" = "$HAIKU_DU_MAX_TOKENS" ] \
     || fail "claude-haiku document-upload max_tokens differ: driver $HAIKU_DU_MAX_TOKENS, manifest $dutok"
+  duwtok=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1]))['max_tokens']\
+['claude-haiku']['doc_upload']['written_answers'])" "$MANIFEST")
+  [ "$duwtok" = "$HAIKU_DU_MAX_TOKENS" ] \
+    || fail "claude-haiku written-answer document-upload max_tokens differ: driver $HAIKU_DU_MAX_TOKENS, manifest $duwtok"
   log "preflight: this week's spend against the weekly cap"
   "$PY" scripts/freeze_manifest.py budget \
     || fail "weekly budget below the two jobs' caps (\$$CAP_CLAUDE_HAIKU + \$$CAP_GPT_MINI): start after 17:00 Arizona time Sunday (00:00 UTC Monday)"
@@ -143,9 +148,9 @@ max_tokens_flag() {  # copy-paste only: claude-haiku's limit; gpt-mini keeps the
   return 0
 }
 
-du_max_tokens() {  # document upload, quiz and survey banks: claude-haiku's limit, else the training's
+du_max_tokens() {  # document upload: claude-haiku's limit on every bank (passed explicitly), else the training's
   case "$1:$2" in
-    claude-haiku:quiz-*|claude-haiku:survey-*) echo "--max-tokens $HAIKU_DU_MAX_TOKENS" ;;
+    claude-haiku:*) echo "--max-tokens $HAIKU_DU_MAX_TOKENS" ;;
     *:quiz-*) echo "--max-tokens 3000" ;;
   esac
   return 0

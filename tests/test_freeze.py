@@ -92,7 +92,7 @@ def test_prep_verify_and_add_final(tmp_path, locked_profile):
     assert m["spend_caps_usd"] == {"claude-haiku": 12.0, "gpt-mini": 10.0}
     assert m["max_tokens"]["claude-haiku"]["copy_paste"] == 4096 and m["max_tokens"]["reason"]
     du = m["max_tokens"]["claude-haiku"]["doc_upload"]
-    assert du["quiz_and_survey"] == 8192 and du["written_answers"] == 6000
+    assert du["quiz_and_survey"] == 8192 and du["written_answers"] == 8192
     assert m["style_profile"]["profile_sha256"] == fm.STYLE_PROFILE_SHA12 + m["style_profile"][
         "profile_sha256"][12:]
     assert Path(m["pilot_bank"]["path"]).parts[-2:] == ("server", "pilot_items.json")
@@ -216,9 +216,11 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_8_router_replays(tmp_p
         assert ("--max-tokens 4096" in ln) == ("claude-haiku" in ln)
     for ln in du:  # document upload keeps the training limits for both models
         assert "--max-tokens 4096" not in ln
-        # claude-haiku quiz and survey banks: 8192; written-answer banks and gpt-mini: training's
-        quiz_or_survey = "--bank survey-" in ln or "quiz-" in ln
-        assert ("--max-tokens 8192" in ln) == ("claude-haiku" in ln and quiz_or_survey)
+        # claude-haiku: 8192 on every bank, incl. ASURRE and OSMI written answers;
+        # gpt-mini keeps the training's (no override on written-answer banks)
+        assert ("--max-tokens 8192" in ln) == ("claude-haiku" in ln)
+        if "gpt-mini" in ln and "--bank assignment-" in ln:
+            assert "--max-tokens" not in ln
     for line in out.splitlines():  # every attacker call is a --final call at temperature 0.7
         if "--run-id v1-final" in line:
             assert "--final" in line and "--temperature 0.7" in line and "--samples 20" in line

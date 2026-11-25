@@ -43,18 +43,20 @@ SPEND_CAPS_USD = {"claude-haiku": 12.0, "gpt-mini": 10.0}
 # Reply limits of the final attacker runs (decided Nov 21; claude-haiku copy-paste raised to 4096
 # on Nov 23 after the halted first launch); scripts/freeze_run.sh must match.
 HAIKU_CP_MAX_TOKENS = 4096
-# claude-haiku document upload, quiz and survey banks (decided Nov 24 after the second halt).
+# claude-haiku document upload, all banks (decided Nov 24 after the second halt and the #59 review).
 HAIKU_DU_MAX_TOKENS = 8192
 MAX_TOKENS = {
     "claude-haiku": {
         "copy_paste": HAIKU_CP_MAX_TOKENS,
         "doc_upload": {
             "quiz_and_survey": HAIKU_DU_MAX_TOKENS,
-            "written_answers": 6000,
-            "rule": "the larger of 8192 and twice the largest finished reply in the halted run "
-                    "(2994 tokens), rounded up to a power of two, capped at the model's 128K "
-                    "output limit; written answers keep 6000 (no claude-haiku reply observed; "
-                    "gpt-mini's largest was 564)",
+            "written_answers": HAIKU_DU_MAX_TOKENS,
+            "rule": "quiz and survey banks: the larger of 8192 and twice the largest finished "
+                    "reply in the halted run (2994 tokens), rounded up to a power of two, capped "
+                    "at the model's 128K output limit; written answers: the same 8192 (raised "
+                    "from 6000 in review of #59), since the measured quiz maximum was 2994, "
+                    "gpt-mini's largest written-answer reply was 564, and one limit covers all "
+                    "claude-haiku document upload",
         },
     },
     "gpt-mini": "unchanged: the training runs' limits",
@@ -65,7 +67,7 @@ MAX_TOKENS = {
               "claude-haiku copy-paste replies cut off at 1024, so 4096. "
               "Nov 24: the second launch (tag freeze-2026-11-23) halted with 16 of 400 "
               "claude-haiku document-upload replies cut off at 3000, so 8192 for quiz and survey "
-              "banks.",
+              "banks and, from the #59 review, 8192 for written-answer banks too.",
     "truncation": "fatal: any truncated reply stops the driver (check_run)",
 }
 # Files the final run reads besides the outcome files (paths relative to the checkout root).
