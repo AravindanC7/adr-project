@@ -71,7 +71,7 @@ def make_client(tmp_path, fn=reads_pdf):
     models = {"fake-a": ModelSpec("fake-a", "fake", "fake-a-v1", 1.0, 2.0)}
     fake = FakeProvider(fn)
     client = LLMClient(models=models, cache_dir=tmp_path / "cache", providers={"fake-a": fake},
-                       max_retries=1)
+                       max_retries=1, max_connection_retries=1)
     return client, fake
 
 

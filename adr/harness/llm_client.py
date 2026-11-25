@@ -303,7 +303,9 @@ def classify_error(e: Exception) -> str:
     "fatal":          retrying can't help (bad key, no credit, bad request, unknown model);
                       on a 429 only no-credit messages ("credit balance", "no credits
                       remaining", insufficient_quota) and invalid-key messages are fatal
-    "retry":          probably transient (timeouts, 5xx) -> short backoff and retry
+    "connection":     the request never got an answer (APIConnectionError, timeouts, dropped
+                      network) -> longer exponential backoff, up to max_connection_retries
+    "retry":          probably transient (5xx) -> short backoff and retry
     """
     msg = str(e).lower()
     status = getattr(e, "status_code", None) or getattr(e, "code", None)
@@ -323,7 +325,18 @@ def classify_error(e: Exception) -> str:
         return "rate_limit"
     if isinstance(e, TypeError) or status in (400, 401, 403, 404, 422):
         return "fatal"
+    if _is_connection_error(e):
+        return "connection"
     return "retry"
+
+
+def _is_connection_error(e: Exception) -> bool:
+    """A connection drop or timeout, from any provider SDK: Anthropic and OpenAI raise
+    APIConnectionError / APITimeoutError, httpx ConnectError / ReadTimeout, Python
+    ConnectionError / TimeoutError. Matched on the class names, so no SDK import is needed."""
+    if isinstance(e, (ConnectionError, TimeoutError)):
+        return True
+    return any("Connection" in k.__name__ or "Timeout" in k.__name__ for k in type(e).__mro__)
 
 
 # ---------------------------------------------------------------- client
@@ -345,6 +358,11 @@ class LLMClient:
     weekly_spend_cap_usd: float | None = None
     providers: dict[str, Provider] = field(default_factory=dict)  # name -> provider (overrides)
     max_retries: int = 5
+    # Connection drops and timeouts get more tries and a longer backoff (2, 4, 8, ... s, capped at
+    # 120 s): the third freeze launch (Nov 24) halted on 12 calls that failed with
+    # APIConnectionError after 5 quick tries. Rate limits and fatal errors are unchanged.
+    max_connection_retries: int = 10
+    connection_backoff_cap_s: float = 120.0
     _sleep: Callable[[float], None] = time.sleep  # replaced in tests
     # The job this client spends for (a run, or a driver's set of runs). Its ledger lines carry
     # "job": job_id, so job_spend_usd() counts only this job even when other jobs or sessions
@@ -562,13 +580,16 @@ class LLMClient:
                     sent_temperature = None
                     continue
                 attempt += 1
-                if kind == "fatal" or attempt >= self.max_retries:
+                limit = self.max_connection_retries if kind == "connection" else self.max_retries
+                if kind == "fatal" or attempt >= limit:
                     raise RuntimeError(
                         f"{model}: {kind} error after {attempt} tr{'y' if attempt == 1 else 'ies'}: "
                         f"{type(e).__name__}: {str(e)[:300]}"
                     ) from e
                 if kind == "rate_limit":
                     wait = min(60.0, 10.0 * 2 ** (attempt - 1)) + random.uniform(0, 3)
+                elif kind == "connection":
+                    wait = min(self.connection_backoff_cap_s, 2.0**attempt) + random.uniform(0, 1)
                 else:
                     wait = min(2.0**attempt, 20.0)
                 self._sleep(wait)
