@@ -38,8 +38,10 @@ BANK_FILES = (  # content-checked files of the held-out bank, relative to its fo
 )
 CONFIGS = ("configs/data_decisions.json", "configs/models.yaml")
 DECISIONS = Path("configs/data_decisions.json")
-# Per-job spend caps (ADR_JOB_SPEND_CAP_USD), approved Nov 21; scripts/freeze_run.sh must match.
-SPEND_CAPS_USD = {"claude-haiku": 12.0, "gpt-mini": 10.0}
+# Per-job spend caps (ADR_JOB_SPEND_CAP_USD), approved Nov 21; gpt-mini lowered from 10 to 2 on
+# Nov 25 (estimate $0.55), since the weekly check needs remaining >= the sum of the caps and week 48
+# had $19.62 left after the third halt. scripts/freeze_run.sh must match.
+SPEND_CAPS_USD = {"claude-haiku": 12.0, "gpt-mini": 2.0}
 # Reply limits of the final attacker runs (decided Nov 21; claude-haiku copy-paste raised to 4096
 # on Nov 23 after the halted first launch); scripts/freeze_run.sh must match.
 HAIKU_CP_MAX_TOKENS = 4096
@@ -162,7 +164,7 @@ def cmd_check_heldout(a) -> int:
 def cmd_prep(a) -> int:
     training = [Path(p) for p in a.training_files.read_text(encoding="utf-8").splitlines() if p]
     manifest = {
-        "freeze": "freeze-2026-11-24",
+        "freeze": "freeze-2026-11-25",
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "git": git_state(),
         "heldout_bank": bank_entry(a.heldout_bank),

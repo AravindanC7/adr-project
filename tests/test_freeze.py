@@ -89,7 +89,7 @@ def test_prep_verify_and_add_final(tmp_path, locked_profile):
     m = json.loads(prep.out.read_text())
     assert {e["path"] for e in m["training_outcomes"]} == {str((tmp_path / "t.parquet").resolve())}
     assert set(m["configs"]) == set(fm.CONFIGS) and m["git"]["git_commit"]
-    assert m["spend_caps_usd"] == {"claude-haiku": 12.0, "gpt-mini": 10.0}
+    assert m["spend_caps_usd"] == {"claude-haiku": 12.0, "gpt-mini": 2.0}
     assert m["max_tokens"]["claude-haiku"]["copy_paste"] == 4096 and m["max_tokens"]["reason"]
     du = m["max_tokens"]["claude-haiku"]["doc_upload"]
     assert du["quiz_and_survey"] == 8192 and du["written_answers"] == 8192
@@ -163,7 +163,7 @@ def test_budget_refuses_when_the_week_has_less_than_the_two_caps_left(tmp_path, 
     client = _client(tmp_path, [("2026-11-19T20:00:00+00:00", 8.57),
                                 ("2026-11-21T18:00:00+00:00", 6.32)])
     need = sum(fm.SPEND_CAPS_USD.values())
-    assert need == 22.0
+    assert need == 14.0  # claude-haiku $12 + gpt-mini $2 (lowered from $10 on Nov 25)
     # Sun Nov 22 16:59 Arizona = 23:59 UTC: still ISO week 47, $14.89 spent, $10.11 left
     assert fm.budget_check(client, need, "2026-11-22T23:59:00+00:00") == 1
     out = capsys.readouterr()
@@ -172,6 +172,14 @@ def test_budget_refuses_when_the_week_has_less_than_the_two_caps_left(tmp_path, 
     # Sun Nov 22 17:00 Arizona = 00:00 UTC Monday: a new ISO week with the full $25
     assert fm.budget_check(client, need, "2026-11-23T00:00:00+00:00") == 0
     assert "2026-W48 (UTC): ledger spend $0.00" in capsys.readouterr().out
+
+
+def test_budget_passes_after_the_third_halt_with_the_lowered_gpt_mini_cap(tmp_path, capsys):
+    # week 48 after the third halt: $5.38 spent, $19.62 left; the old caps needed $22
+    client = _client(tmp_path, [("2026-11-25T04:20:00+00:00", 5.38)])
+    assert fm.budget_check(client, sum(fm.SPEND_CAPS_USD.values()), "2026-11-25T05:00:00+00:00") == 0
+    assert "$19.62 left" in capsys.readouterr().out
+    assert fm.budget_check(client, 22.0, "2026-11-25T05:00:00+00:00") == 1
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="bash driver")
@@ -201,13 +209,13 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_8_router_replays(tmp_p
         else:  # both models on the held-out OSMI bank only
             assert "unseen-survey" in ln and len(finals) == 12
             assert all("osmi-heldout" in f for f in finals)
-    assert "freeze_report.py --out results/freeze-2026-11-24/README.md" in out
-    assert "--unseen-model-ablation results/real-router/freeze-2026-11-24-unseen-model-all-style-clear" in out
+    assert "freeze_report.py --out results/freeze-2026-11-25/README.md" in out
+    assert "--unseen-model-ablation results/real-router/freeze-2026-11-25-unseen-model-all-style-clear" in out
     assert "--reference-no-low-effort results/real-router/rq2-l012-floor750-reopen-no-low-effort" in out
     assert "--jobs 8 --resume" in out and "--exclude-sessions" in out
     assert out.count("rescore --final") == 30  # every survey / written-answer run is re-scored
-    assert "freeze-2026-11-24-claude-haiku (cap $12)" in out
-    assert "freeze-2026-11-24-gpt-mini (cap $10)" in out
+    assert "freeze-2026-11-25-claude-haiku (cap $12)" in out
+    assert "freeze-2026-11-25-gpt-mini (cap $2)" in out
     assert list(tmp_path.iterdir()) == []  # a dry run creates no folders
     cp = [ln for ln in out.splitlines() if "--run-id v1-final-cp-" in ln and "DRY:" in ln]
     du = [ln for ln in out.splitlines() if "--run-id v1-final-du-" in ln and "DRY:" in ln]

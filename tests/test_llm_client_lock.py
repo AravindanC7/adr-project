@@ -182,3 +182,58 @@ def test_job_settings_come_from_the_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("ADR_JOB_SPEND_CAP_USD", "2.5")
     c, _ = client_with(tmp_path, lambda s, m: "x")
     assert (c.job_id, c.job_spend_cap_usd) == ("env-job", 2.5)
+
+
+# ---------------------------------------------------------------- connection drops
+class APIConnectionError(Exception):  # same class name as the Anthropic / OpenAI SDKs' error
+    pass
+
+
+class APITimeoutError(APIConnectionError):
+    pass
+
+
+def test_connection_errors_are_classified_apart_from_rate_limits_and_fatal():
+    assert classify_error(APIConnectionError("Connection error.")) == "connection"
+    assert classify_error(APITimeoutError("Request timed out.")) == "connection"
+    assert classify_error(ConnectionResetError("reset by peer")) == "connection"
+    assert classify_error(_Err("Error code: 429 - Rate limit reached", 429)) == "rate_limit"
+    assert classify_error(_Err(OPENAI_NO_CREDITS, 429)) == "fatal"
+
+
+def test_connection_error_retries_up_to_10_times_with_capped_backoff(tmp_path):
+    waits, fails = [], {"n": 9}
+
+    def flaky(system, messages):
+        if fails["n"]:
+            fails["n"] -= 1
+            raise APIConnectionError("Connection error.")
+        return "ok"
+
+    client, fake = client_with(tmp_path, flaky)  # max_retries=3 for other errors
+    client._sleep = waits.append
+    assert client.complete("m", MSG, prompt_version="t").text == "ok"
+    assert fake.calls == 10 and len(waits) == 9  # 9 drops, the 10th try answers
+    assert [int(w) for w in waits] == [2, 4, 8, 16, 32, 64, 120, 120, 120]
+
+
+def test_connection_error_gives_up_after_10_tries(tmp_path):
+    def down(system, messages):
+        raise APITimeoutError("Request timed out.")
+
+    client, fake = client_with(tmp_path, down)
+    client._sleep = lambda s: None
+    with pytest.raises(RuntimeError, match="connection error after 10 tries"):
+        client.complete("m", MSG, prompt_version="t")
+    assert fake.calls == 10
+
+
+def test_other_transient_errors_keep_max_retries(tmp_path):
+    def broken(system, messages):
+        raise _Err("Internal server error", 500)
+
+    client, fake = client_with(tmp_path, broken)  # max_retries=3
+    client._sleep = lambda s: None
+    with pytest.raises(RuntimeError, match="retry error after 3 tries"):
+        client.complete("m", MSG, prompt_version="t")
+    assert fake.calls == 3

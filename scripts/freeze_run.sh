@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Experiment freeze, Sun Nov 22: the ONE final run (AGENTS.md section 8). Do not start it without
 # the team's go. It needs #50 (cache-key lock, per-job spend cap) and #51 (calibration) merged and
-# the checkout at tag freeze-2026-11-24.
+# the checkout at tag freeze-2026-11-25.
 #
 #   (a) attacker runs, samples 0-19, run ids containing "final":
 #       claude-haiku (held-out model) on every bank the RQ2 composite sessions use plus the
 #       held-out OSMI bank; gpt-mini on the held-out OSMI bank only. Levels L0, L2, L2-generic;
 #       copy-paste and document upload, both at temperature 0.7 (the training runs' settings).
-#       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-24-<model>, with
-#       ADR_JOB_SPEND_CAP_USD = $12 for claude-haiku and $10 for gpt-mini (approved Nov 21).
+#       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-25-<model>, with
+#       ADR_JOB_SPEND_CAP_USD = $12 for claude-haiku (approved Nov 21) and $2 for gpt-mini (Nov 25).
 #       The caps are fixed here and recorded in the manifest; preflight stops if they differ.
 #   (b) scripts/run_real_router.py --final with the frozen config (configs/data_decisions.json
 #       router_calibration = the script's defaults), floor750 pilot, all 44 honest sessions and
@@ -25,20 +25,20 @@
 #       outcomes > 0 (or missing > 0 in unseen-model), or a threshold differs from #51's.
 #
 # START after 17:00 Arizona time on Sun Nov 22 (00:00 UTC Mon Nov 23): a new ISO week, so the
-# full $25 weekly cap applies. Preflight refuses if the week has less than $22 (both job caps) left.
+# full $25 weekly cap applies. Preflight refuses if the week has less than $14 (both job caps) left.
 #
 # FPR rule: False-flag rates come only from the 44 pilot honest sessions, with the same folds and
 # calibrated thresholds as #51; the held-out OSMI bank has no human side, so no FPR is reported
 # on it.
 #
 # Run from the root of a checkout at the tag, with data/ and cache/ pointing at the shared ones:
-#   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-24/driver.log 2>&1 &
+#   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-25/driver.log 2>&1 &
 # DRY_RUN=1 prints every command and runs nothing (no preflight, no API calls).
 # A restart resumes: finished attacker runs are skipped (their outputs still go to the router),
 # router steps resume from steps/*.json.
 set -euo pipefail
 
-FREEZE=freeze-2026-11-24
+FREEZE=freeze-2026-11-25
 OUT=results/$FREEZE
 MANIFEST=$OUT/freeze_manifest.json
 LOGS=$OUT/logs
@@ -47,7 +47,9 @@ PY=${PY:-python}
 REF_DIR=${REF_DIR:-results/real-router}  # #51's runs: rq2-l012-floor750-reopen-{all,no-low-effort}
 JOBS=${JOBS:-8}
 CAP_CLAUDE_HAIKU=12  # USD per job, approved Nov 21; must equal the manifest's spend_caps_usd
-CAP_GPT_MINI=10
+# gpt-mini lowered from 10 to 2 on Nov 25 (estimate $0.55): the weekly check needs the week's
+# remaining budget to cover the sum of the caps, and after the third halt week 48 had $19.62 left.
+CAP_GPT_MINI=2
 cap_for() { case "$1" in claude-haiku) echo "$CAP_CLAUDE_HAIKU" ;; gpt-mini) echo "$CAP_GPT_MINI" ;; esac; }
 # claude-haiku copy-paste reply limit (decided Nov 21; must equal the manifest's max_tokens): it is
 # billed ~190 output tokens per call beyond the reply text, so the training runs' 300 would cut

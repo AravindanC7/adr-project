@@ -38,6 +38,7 @@ def make_client(tmp_path, fn=naive_model, **kw):
         cache_dir=tmp_path / "cache",
         providers={"fake-a": fake, "fake-held": fake},
         max_retries=1,
+        max_connection_retries=1,
         **kw,
     )
     return client, fake
@@ -256,7 +257,8 @@ def test_classify_error():
     assert classify_error(_Err("Your credit balance is too low", 400)) == "fatal"
     assert classify_error(_Err("429 RESOURCE_EXHAUSTED quota", 429)) == "rate_limit"
     assert classify_error(_Err("Overloaded", 529)) == "rate_limit"
-    assert classify_error(TimeoutError("read timed out")) == "retry"
+    assert classify_error(TimeoutError("read timed out")) == "connection"
+    assert classify_error(_Err("Internal server error", 500)) == "retry"
 
 
 def test_classify_error_429_retries_even_with_billing_words():
