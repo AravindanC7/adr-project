@@ -3,6 +3,7 @@ import json
 import re
 
 import pytest
+import yaml
 from pypdf import PdfReader
 
 from adr.contracts import Assessment, Item, RenderedItem, read_outcomes
@@ -397,3 +398,39 @@ def test_script_passes_chunk_size(monkeypatch, flags, expected):
                                       "--run-id", "x"])
     script.main()
     assert seen["cfg"].questions_per_doc == expected   # stub has 4 items: 2 docs -> 2 each
+
+
+# ---------- refusals (decided Nov 26) ----------
+def test_a_finished_reply_with_no_answers_is_recorded_as_refused_not_an_error(tmp_path):
+    calls = {"n": 0}
+
+    def refuses_second_call(system, messages, attachments):
+        calls["n"] += 1
+        return "I can't help with this." if calls["n"] == 2 else reads_pdf(system, messages,
+                                                                            attachments)
+
+    client, _ = make_client(tmp_path, fn=refuses_second_call)
+    assessment, items, variants, mechs = _setup()
+    cfg = DocUploadConfig(run_id="du-refuse", models=["fake-a"], results_dir=str(tmp_path),
+                          max_workers=1)
+    rows = run_doc_upload(client, assessment, items, variants, mechs, cfg)
+    run_dir = tmp_path / "runs" / "du-refuse"
+    assert (run_dir / "errors.jsonl").read_text() == ""           # not a failure
+    refused = [json.loads(x) for x in (run_dir / "refused.jsonl").read_text().splitlines()]
+    assert len(refused) == 4 and {r["reason"] for r in refused} == {"refused"}  # one document
+    assert len({r["doc"] for r in refused}) == 1 and all(r["cache_key"] for r in refused)
+    config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert config["n_refused_replies"] == 1 and config["n_refused_questions"] == 4
+    assert config["n_rows"] == len(rows) > 0                     # the other document's rows
+    assert {r.session_id for r in rows}.isdisjoint({f"du-refuse:fake-a:0:d{refused[0]['doc']}"})
+
+
+def test_a_cut_off_reply_with_no_answers_is_not_a_refusal(tmp_path):
+    client, _ = make_client(tmp_path, fn=lambda s, m, a: ("I will now answer", "length"))
+    assessment, items, variants, mechs = _setup()
+    cfg = DocUploadConfig(run_id="du-cut-empty", models=["fake-a"], results_dir=str(tmp_path))
+    run_doc_upload(client, assessment, items, variants, mechs, cfg)
+    run_dir = tmp_path / "runs" / "du-cut-empty"
+    assert (run_dir / "refused.jsonl").read_text() == ""
+    errors = (run_dir / "errors.jsonl").read_text().splitlines()
+    assert any("hit max_tokens" in e for e in errors) and any("skipped" in e for e in errors)

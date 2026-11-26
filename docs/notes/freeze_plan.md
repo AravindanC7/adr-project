@@ -1,11 +1,11 @@
 # Experiment freeze, Sun Nov 22: the final run (plan, not run)
 
 Driver: `scripts/freeze_run.sh`. It needs #50 (cache-key lock, per-job spend cap) and #51
-(calibration) merged, and a checkout at tag `freeze-2026-11-25`. Apart from two smoke calls on a
-training item (below), the only paid runs so far are three halted launches: tag
+(calibration) merged, and a checkout at tag `freeze-2026-11-26`. Apart from two smoke calls on a
+training item (below), the only paid runs so far are four halted launches: tag
 `freeze-2026-11-22` (see "Halted first launch, Nov 22–23"), tag `freeze-2026-11-23` (see
-"Halted second launch, Nov 23–24") and tag `freeze-2026-11-24` (see "Halted third launch,
-Nov 24–25").
+"Halted second launch, Nov 23–24"), tag `freeze-2026-11-24` (see "Halted third launch,
+Nov 24–25") and tag `freeze-2026-11-25` (see "Halted fourth launch, Nov 25–26").
 
 ## FPR rule
 
@@ -13,7 +13,7 @@ Nov 24–25").
 calibrated thresholds as #51; the held-out OSMI bank has no human side, so no FPR is reported on
 it.**
 
-The same sentence is written at the top of the run's `results/freeze-2026-11-25/README.md` by
+The same sentence is written at the top of the run's `results/freeze-2026-11-26/README.md` by
 `scripts/freeze_report.py`.
 
 ## Start time and preflight
@@ -23,14 +23,14 @@ The same sentence is written at the top of the run's `results/freeze-2026-11-25/
 - From 00:00 UTC Monday, week 48 starts with the full $25.
 
 Before any paid call, the driver's preflight (`scripts/freeze_run.sh`) checks:
-- HEAD is exactly the tag `freeze-2026-11-25`;
+- HEAD is exactly the tag `freeze-2026-11-26`;
 - the tag is on main (`git merge-base --is-ancestor HEAD origin/main`);
 - tracked files are clean;
 - #50's per-job spend cap is present;
 - the manifest exists, and its spend caps and claude-haiku `max_tokens` equal the driver's;
 - #51's two reference runs exist.
 
-It then prints this week's ledger spend and **refuses to start if the remaining weekly budget is below the sum of the two job caps** ($14 since Nov 25; $22 before) (`scripts/freeze_manifest.py budget`). Finally it rebuilds the held-out bank and verifies every input against the manifest, including that the manifest's commit is HEAD.
+It then prints this week's ledger spend and **refuses to start if the remaining weekly budget is below the sum of the two job caps** ($10 since Nov 26; $14 on Nov 25; $22 before) (`scripts/freeze_manifest.py budget`). Finally it rebuilds the held-out bank and verifies every input against the manifest, including that the manifest's commit is HEAD.
 
 ## (a) Attacker runs: 42 runs, samples 0–19, run ids `v1-final-<mode>-<level>-<bank>-<model>-s20`
 
@@ -42,8 +42,8 @@ It then prints this week's ledger spend and **refuses to start if the remaining 
 
 - Every call runs at temperature 0.7 with `--final`.
 - The drivers refuse claude-haiku, OSMI items and held-out-split items without `--final`; with `--final` they require "final" in the run id (`adr/harness/final_guard.py`).
-- Each provider is its own job, `ADR_JOB_ID=freeze-2026-11-25-<model>`, with its own spend cap (`ADR_JOB_SPEND_CAP_USD`), approved by Arav on Nov 21:
-  - claude-haiku: **$12**;
+- Each provider is its own job, `ADR_JOB_ID=freeze-2026-11-26-<model>`, with its own spend cap (`ADR_JOB_SPEND_CAP_USD`), approved by Arav on Nov 21:
+  - claude-haiku: **$8** (lowered from $12 on Nov 26; see "Halted fourth launch, Nov 25–26");
   - gpt-mini: **$2** (lowered from $10 on Nov 25, estimate $0.55; see "Halted third launch, Nov 24–25").
 
   The caps are fixed in `scripts/freeze_run.sh` and recorded in the manifest (`spend_caps_usd`). The driver refuses to start if the two differ.
@@ -66,8 +66,8 @@ Every run uses `run_real_router.py --final` with #51's frozen config (per_mech c
 
 | report | final outcome files | router run ids |
 |---|---|---|
-| **Unseen model** | claude-haiku composite sessions on the training banks (30 files) | `freeze-2026-11-25-unseen-model-{all,no-low-effort}` |
-| **Unseen survey** | gpt-mini and claude-haiku on the OSMI bank (12 files) | `freeze-2026-11-25-unseen-survey-{all,no-low-effort}` |
+| **Unseen model** | claude-haiku composite sessions on the training banks (30 files) | `freeze-2026-11-26-unseen-model-{all,no-low-effort}` |
+| **Unseen survey** | gpt-mini and claude-haiku on the OSMI bank (12 files) | `freeze-2026-11-26-unseen-survey-{all,no-low-effort}` |
 
 Each report gives TPR at the A_0.05 (headline) and A_0.01 thresholds, with 95% bootstrap CIs.
 - It is broken down by model, level (L0, L2, L2g) and mode.
@@ -143,7 +143,7 @@ Tests: `tests/test_freeze.py` and `tests/test_final_guard.py`.
 
 ## Inputs and the held-out bank check
 
-`results/freeze-2026-11-25/freeze_manifest.json` (`scripts/freeze_manifest.py`) records sha256
+`results/freeze-2026-11-26/freeze_manifest.json` (`scripts/freeze_manifest.py`) records sha256
 for:
 - the held-out bank;
 - the floor750 pilot parquet;
@@ -177,7 +177,7 @@ The claude-haiku adjustments come from the two smoke calls on the same prompt:
 
 | job | calls | best estimate | cap |
 |---|---|---|---|
-| claude-haiku (36 runs) | 57,092 | **$8.0** | $12 |
+| claude-haiku (36 runs) | 57,092 | **$8.0** | $8 (was $12 until Nov 26; most of the work was done by then) |
 | gpt-mini (6 OSMI runs) | 1,292 | **$0.55** | $2 (was $10 until Nov 25) |
 
 claude-haiku by bank (calls, best estimate):
@@ -297,9 +297,29 @@ If claude-haiku hits the cap, the cap stops its calls and the driver fails on th
 - **#60 merged without review (Arav, Nov 25), because of time:** Archana and Harshini had been requested and had not reviewed yet. They were asked on #60 to raise any concerns after the merge.
 - **The halted run's files:** a copy is kept in the team's freeze folder outside the repo (`halted-launch-3/`), with the third launch's manifest and logs.
 
+## Halted fourth launch, Nov 25–26
+
+- **Launch:** tag `freeze-2026-11-25` (#60 merged as fb5743b), started Nov 25 at 15:43 Arizona time. Runs 1 and 2 were skipped, run 3 passed from cache, and runs 4–9 passed.
+- **Run 10 halted** (`v1-final-du-L2-quiz-arc-200-claude-haiku-s20`, 20:42): **one document-upload reply (document 4, sample 16) finished normally but answered none of its 20 questions.** It ended with stop reason "stop" after 735 output tokens (limit 8,192), with no numbered answers. By keywords ("can't", "instruction") it looks like a refusal at level L2; its text is not shared. Its 20 questions were logged as skipped, which the post-run check treats as failures. No call errors and no cut-offs; the other 7,980 rows are fine.
+- **Why a plain restart could not fix it:** the reply is cached, so a rerun gives the same reply. **Resampling it (deleting the cache entry and drawing again) was rejected**, because dropping refusals and redrawing until the model answers would bias the held-out model's results.
+- **Spent:** job `freeze-2026-11-25-claude-haiku`, $5.88. Week 48: $11.25 of $25, leaving $13.75, below the $14 the caps then needed.
+
+### Changes, Nov 26 (Arav)
+
+- **Refusal rule.** A document-upload reply that finished normally (stop reason "stop": not cut off, no call error) but answers none of its questions is recorded as **refused**: its questions are logged in `refused.jsonl` with reason `refused` (and counted in the run's `config.yaml` as `n_refused_questions`), not as failures, and they give no outcome rows. The post-run check of each attacker run (`scripts/freeze_manifest.py check-run`) passes if refused questions are at most **1% of the run's rows**, and fails above that. A reply that answers some questions but not all, cut-offs and call errors stay fatal. **This rule was added after seeing one refusal**, in place of resampling.
+- **Reports:** both final reports list the refused questions per attacker run and per group (model:mode:level).
+- **Replay check before the change (no API calls):** the router was replayed with the frozen settings on the training outcome files and the 10 final claude-haiku outcome files then present (all quiz runs), to see how composite sessions that contain the refused document are filled.
+  - The composite session with the refused document (claude-haiku, document upload, L2, sample 16) has 780 rows instead of 800: 380 quiz-arc rows instead of 400, all 400 quiz-mmlu rows, and the same item types and checks as its 19 peers.
+  - The router serves the pilot bank's items, so the session's checks are answered from its own rows on items of the same type (MCQ decoy rows), exactly as for its peers. Every group had synthetic = fallback = 0, and the document-upload L2 group's missing checks per session equal every other group's.
+  - Every group had 2.0 missing checks per session in this partial replay, because the survey and written-answer banks had not run yet. The final check (missing = 0 for unseen-model groups) applies once all banks have run.
+- **claude-haiku job cap: $12 → $8**; gpt-mini stays at $2. The weekly check now needs $10, against $13.75 left. About $3–4 of claude-haiku work remained (2 quiz-arc runs and the survey, ASURRE and OSMI banks, by the plan's estimates); finished runs come from the cache.
+- **Restart** from a new tag, `freeze-2026-11-26`; the old tags stay as they were. Runs 1–9 are skipped as passed; run 10 is redone from cache, with the refusal recorded.
+- **#61 merged without review (Arav, Nov 26), because it is Thanksgiving.** Archana and Harshini were asked on the PR to raise any concerns afterwards.
+- **The halted run's files:** a copy is kept in the team's freeze folder outside the repo (`halted-launch-4/`), with the fourth launch's manifest and logs.
+
 ## Follow-up: final tables
 
-`results/freeze-2026-11-25/README.md` is gitignored (results/ stays out of the repo). After the run, a follow-up docs PR will copy the final tables into `docs/notes/` with aggregates only, like the RQ2 calibration notes:
+`results/freeze-2026-11-26/README.md` is gitignored (results/ stays out of the repo). After the run, a follow-up docs PR will copy the final tables into `docs/notes/` with aggregates only, like the RQ2 calibration notes:
 - the two reports;
 - the post-run check results;
 - the manifest's commit and the run's spend.

@@ -1,6 +1,6 @@
 """Freeze reports and post-run checks for the final router runs (scripts/freeze_run.sh, step c).
 
-    python scripts/freeze_report.py --out results/freeze-2026-11-25/README.md \\
+    python scripts/freeze_report.py --out results/freeze-2026-11-26/README.md \\
         --unseen-model RUN_DIR [RUN_DIR] --unseen-survey RUN_DIR [RUN_DIR] \\
         [--reference-all results/real-router/rq2-l012-floor750-reopen-all] \\
         [--reference-no-low-effort results/real-router/rq2-l012-floor750-reopen-no-low-effort]
@@ -36,7 +36,11 @@ get the same group-matrix and source checks; each run's config.yaml must have th
 or on (ablation). Each report shows the ablation beside the main policy: the primary outcome (L2
 wrongly cleared), the costs (honest sessions cleared, checks per honest person) and the guardrail
 (honest false pauses). The main policy (#51) stays the headline.
-Reads aggregates only (metrics.json, config.yaml); no session ids, no answer text.
+Refusals (decided Nov 26): a document-upload reply that ended normally but answered none of its
+questions is recorded as refused, not as a failure (refused.jsonl; the driver allows up to 1% of a
+run's rows). Each report lists the refused questions per attacker run and per group, read from
+the run's config.yaml (n_refused_questions) via the router run's inputs.txt.
+Reads aggregates only (metrics.json, config.yaml, inputs.txt); no session ids, no answer text.
 """
 
 from __future__ import annotations
@@ -44,6 +48,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -173,6 +178,48 @@ def table(router: dict, models: tuple[str, ...]) -> list[str]:
     return lines
 
 
+_RUN_ID = re.compile(r"^v1-final-(cp|du)-(L2-generic|L0|L2)-.+-(claude-haiku|gpt-mini)-s\d+$")
+_MODE = {"cp": "copy_paste", "du": "doc_upload"}
+
+
+def refusals(run: Path) -> dict[str, int]:
+    """Refused questions per final attacker run (run id -> count), for the final outcome files the
+    router run read (its inputs.txt); each run's count is n_refused_questions in its
+    results/runs/<run_id>/config.yaml (0 if absent)."""
+    inputs = run / "inputs.txt"
+    if not inputs.is_file():
+        return {}
+    out = {}
+    for line in inputs.read_text(encoding="utf-8").splitlines():
+        p = Path(line.strip())
+        if p.suffix != ".parquet" or not _RUN_ID.match(p.stem):
+            continue
+        cfg = p.parent.parent / "runs" / p.stem / "config.yaml"
+        conf = yaml.safe_load(cfg.read_text(encoding="utf-8")) if cfg.is_file() else {}
+        out[p.stem] = int((conf or {}).get("n_refused_questions") or 0)
+    return out
+
+
+def refusal_lines(run: Path) -> list[str]:
+    """Refused questions per attacker run and per group (model:mode:level)."""
+    per_run = refusals(run)
+    if not per_run:
+        return ["Refused questions: no final attacker runs listed in inputs.txt."]
+    per_group: dict[str, int] = {}
+    for rid, n in per_run.items():
+        mode, level, model = _RUN_ID.match(rid).groups()
+        g = f"{model}:{_MODE[mode]}:{'L2g' if level == 'L2-generic' else level}"
+        per_group[g] = per_group.get(g, 0) + n
+    total = sum(per_run.values())
+    lines = [("Refused questions (document upload: a reply that ended normally but answered "
+              f"none of its questions; not failures, at most 1% of a run's rows): {total} in all."),
+             "", "| group | refused questions |", "|---|---|"]
+    lines += [f"| {g} | {n} |" for g, n in sorted(per_group.items())]
+    lines += ["", "| attacker run | refused questions |", "|---|---|"]
+    lines += [f"| {rid} | {n} |" for rid, n in sorted(per_run.items())]
+    return lines
+
+
 def honest(router: dict) -> list[str]:
     n = router["n_sessions"]
     out = []
@@ -284,7 +331,8 @@ def report(name: str, desc: str, runs: list[Path], models: tuple[str, ...],
         router = load(run)
         lines += [f"### {run.name} ({router['n_sessions']} honest sessions)", "",
                   *table(router, models), "",
-                  "Honest side (the pilot's; see the FPR rule): " + "; ".join(honest(router)), ""]
+                  "Honest side (the pilot's; see the FPR rule): " + "; ".join(honest(router)), "",
+                  *refusal_lines(run), ""]
         if run in pairs:
             abl = load(pairs[run])
             lines += [f"#### Pre-registered ablation: {pairs[run].name}", "",

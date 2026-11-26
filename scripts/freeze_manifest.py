@@ -24,6 +24,8 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from adr.harness.provenance import git_state
@@ -41,7 +43,8 @@ DECISIONS = Path("configs/data_decisions.json")
 # Per-job spend caps (ADR_JOB_SPEND_CAP_USD), approved Nov 21; gpt-mini lowered from 10 to 2 on
 # Nov 25 (estimate $0.55), since the weekly check needs remaining >= the sum of the caps and week 48
 # had $19.62 left after the third halt. scripts/freeze_run.sh must match.
-SPEND_CAPS_USD = {"claude-haiku": 12.0, "gpt-mini": 2.0}
+# claude-haiku lowered from 12 to 8 on Nov 26 (week 48 had $13.75 left after the fourth halt).
+SPEND_CAPS_USD = {"claude-haiku": 8.0, "gpt-mini": 2.0}
 # Reply limits of the final attacker runs (decided Nov 21; claude-haiku copy-paste raised to 4096
 # on Nov 23 after the halted first launch); scripts/freeze_run.sh must match.
 HAIKU_CP_MAX_TOKENS = 4096
@@ -164,7 +167,7 @@ def cmd_check_heldout(a) -> int:
 def cmd_prep(a) -> int:
     training = [Path(p) for p in a.training_files.read_text(encoding="utf-8").splitlines() if p]
     manifest = {
-        "freeze": "freeze-2026-11-25",
+        "freeze": "freeze-2026-11-26",
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "git": git_state(),
         "heldout_bank": bank_entry(a.heldout_bank),
@@ -250,6 +253,29 @@ def budget_check(client, need: float, now: str | None = None) -> int:
     return 0
 
 
+def check_run(run_dir: Path, max_refused_frac: float) -> tuple[bool, str]:
+    """The driver's post-run check of one attacker run: finished, no call errors or skipped
+    questions (errors.jsonl), no reply cut off at max_tokens, no spend-cap stop, and refused
+    questions (refused.jsonl: a document-upload reply that ended normally but answered none of its
+    questions) at most `max_refused_frac` of the run's rows (decided Nov 26)."""
+    cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    errs = (run_dir / "errors.jsonl").read_text(encoding="utf-8").splitlines()
+    n_rows, refused = cfg.get("n_rows") or 0, cfg.get("n_refused_questions") or 0
+    bad = {"errors": len(errs), "truncated": cfg.get("n_truncated_replies") or 0,
+           "stopped_for_budget": bool(cfg.get("stopped_for_budget")),
+           "refused_over_limit": refused > max_refused_frac * n_rows}
+    if any(bad.values()) or not cfg.get("finished_at"):
+        return False, (f"{run_dir.name}: {bad}, refused={refused} of {n_rows} rows, "
+                       f"finished_at={cfg.get('finished_at')}")
+    return True, f"{run_dir.name}: ok ({n_rows} rows, {refused} refused)"
+
+
+def cmd_check_run(a) -> int:
+    ok, msg = check_run(a.run_dir, a.max_refused_frac)
+    print(msg, file=sys.stdout if ok else sys.stderr)
+    return 0 if ok else 1
+
+
 def cmd_budget(a) -> int:
     from adr.harness.llm_client import LLMClient
 
@@ -278,11 +304,14 @@ def main() -> None:
     v = sub.add_parser("verify")
     v.add_argument("--manifest", type=Path, required=True)
     v.add_argument("--heldout-bank", type=Path, help="check this bank folder's content instead")
+    r = sub.add_parser("check-run", help="the driver's post-run check of one attacker run")
+    r.add_argument("--run-dir", type=Path, required=True, help="results/runs/<run_id>")
+    r.add_argument("--max-refused-frac", type=float, required=True)
     b = sub.add_parser("budget", help="this week's ledger spend vs the two jobs' caps")
     b.add_argument("--config", default="configs/models.yaml")
     a = ap.parse_args()
     sys.exit({"check-heldout": cmd_check_heldout, "prep": cmd_prep, "add-final": cmd_add_final,
-              "verify": cmd_verify, "budget": cmd_budget}[a.cmd](a))
+              "verify": cmd_verify, "budget": cmd_budget, "check-run": cmd_check_run}[a.cmd](a))
 
 
 if __name__ == "__main__":
