@@ -391,6 +391,19 @@ def ai_sources(ai: list[list[Trace]]) -> dict[str, dict[str, float]]:
     return out
 
 
+def ai_missing_by_session(ai: list[list[Trace]]) -> dict[str, dict[str, float]]:
+    """Per AI group, the sessions with missing checks (mean over the fold maps) and how many,
+    e.g. {"claude-haiku:doc_upload:L2": {"composite:claude-haiku:doc_upload:L2:16": 1.0}}. AI
+    session ids only (harness sessions, no people). Lets the freeze report check that every missing
+    check in an unseen-model group belongs to a session with a recorded refusal."""
+    out: dict[str, dict[str, float]] = defaultdict(dict)
+    for f in ai:
+        miss = float(np.mean([t.sources[SOURCE_NAMES.index("missing")] for t in f]))
+        if miss > 0:
+            out[ai_group(f)][f[0].who.split("|", 1)[1]] = miss
+    return {g: dict(sorted(v.items())) for g, v in sorted(out.items())}
+
+
 def rates(
     real: list[Trace], ai: list[list[Trace]], synthetic: list[float], thresholds: dict[str, float]
 ) -> dict[str, dict[str, float]]:
@@ -540,6 +553,7 @@ def summarize(
         "n_sessions": len(real),
         "n_ai_sessions": len(ai),
         "ai_sources_by_group": ai_sources(all_ai),
+        "ai_missing_by_session": ai_missing_by_session(all_ai),
         "n_ai_sessions_by_group": dict(sorted(size.items())),
         "described_ai": describe_ai(small, th),
         "min_group_sessions": dict(mins),

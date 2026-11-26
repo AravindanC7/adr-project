@@ -95,6 +95,17 @@ class _Job:
 _Q_LINE = re.compile(r"^[\s>*\-]*Q\s*(\d+)\s*[:.)\-]\s*(.*)$", re.IGNORECASE)
 
 
+# Refusal wording (decided Nov 26): matched all 50 claude-haiku replies that answered none of their
+# questions in the final run's first 16 runs. A no-answer reply without it stays a failure.
+REFUSAL_PATTERN = re.compile(
+    r"\b(can['’]?t|cannot|can not|won['’]?t|will not|unable to|not able to|decline|"
+    r"not comfortable|as an ai)\b", re.IGNORECASE)
+
+
+def is_refusal(text: str) -> bool:
+    return bool(REFUSAL_PATTERN.search(text or ""))
+
+
 def split_answers(text: str) -> dict[int, str]:
     """Map question number -> the reply text for it. Lines after a "Q<n>:" line belong to that
     question until the next one (for written answers that run over). First "Q<n>" wins."""
@@ -196,10 +207,11 @@ def run_doc_upload(
     rows: list[OutcomeRow] = []
     responses: list[dict] = []
     errors: list[dict] = []
-    # A reply that ended normally (finish reason "stop": not cut off, no call error) but answers
-    # none of its document's questions is a refusal: its questions are logged in refused.jsonl
-    # with reason "refused", not as failures (decided Nov 26 after one claude-haiku L2 reply; the
-    # post-run check allows up to 1% of a run's rows). Partial answers stay failures.
+    # A reply that ended normally (finish reason "stop": not cut off, no call error), answers
+    # none of its document's questions and matches REFUSAL_PATTERN is a refusal: its questions
+    # are logged in refused.jsonl with reason "refused", not as failures (decided Nov 26; no
+    # limit since the second revision). Partial answers, and an empty-answer reply that does not
+    # match the pattern (a parsing bug guard), stay failures.
     refused: list[dict] = []
     skipped: Counter[str] = Counter()  # mechanism -> NoObservation count
     stopped_for_budget = False
@@ -253,7 +265,8 @@ def run_doc_upload(
                                           "off, so later answers may be missing or partial. "
                                           "Rerun with a higher --max-tokens."})
             answers = split_answers(out.text)
-            if out.finish_reason == "stop" and not any(answers.get(n) for n in job.doc.questions):
+            if (out.finish_reason == "stop" and not any(answers.get(n) for n in job.doc.questions)
+                    and is_refusal(out.text)):
                 refused += [{**_where(job), "question": n, "item_id": item.item_id,
                              "variant_id": rendered.variant_id, "reason": "refused",
                              "cache_key": out.cache_key}
