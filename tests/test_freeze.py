@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -89,7 +90,7 @@ def test_prep_verify_and_add_final(tmp_path, locked_profile):
     m = json.loads(prep.out.read_text())
     assert {e["path"] for e in m["training_outcomes"]} == {str((tmp_path / "t.parquet").resolve())}
     assert set(m["configs"]) == set(fm.CONFIGS) and m["git"]["git_commit"]
-    assert m["spend_caps_usd"] == {"claude-haiku": 12.0, "gpt-mini": 2.0}
+    assert m["spend_caps_usd"] == {"claude-haiku": 8.0, "gpt-mini": 2.0}
     assert m["max_tokens"]["claude-haiku"]["copy_paste"] == 4096 and m["max_tokens"]["reason"]
     du = m["max_tokens"]["claude-haiku"]["doc_upload"]
     assert du["quiz_and_survey"] == 8192 and du["written_answers"] == 8192
@@ -162,8 +163,8 @@ def _client(tmp_path, spent_by_ts):
 def test_budget_refuses_when_the_week_has_less_than_the_two_caps_left(tmp_path, capsys):
     client = _client(tmp_path, [("2026-11-19T20:00:00+00:00", 8.57),
                                 ("2026-11-21T18:00:00+00:00", 6.32)])
-    need = sum(fm.SPEND_CAPS_USD.values())
-    assert need == 14.0  # claude-haiku $12 + gpt-mini $2 (lowered from $10 on Nov 25)
+    assert sum(fm.SPEND_CAPS_USD.values()) == 10.0  # $8 (from $12, Nov 26) + $2 (from $10, Nov 25)
+    need = 22.0  # the caps when the freeze was first planned (Nov 21)
     # Sun Nov 22 16:59 Arizona = 23:59 UTC: still ISO week 47, $14.89 spent, $10.11 left
     assert fm.budget_check(client, need, "2026-11-22T23:59:00+00:00") == 1
     out = capsys.readouterr()
@@ -174,12 +175,42 @@ def test_budget_refuses_when_the_week_has_less_than_the_two_caps_left(tmp_path, 
     assert "2026-W48 (UTC): ledger spend $0.00" in capsys.readouterr().out
 
 
-def test_budget_passes_after_the_third_halt_with_the_lowered_gpt_mini_cap(tmp_path, capsys):
-    # week 48 after the third halt: $5.38 spent, $19.62 left; the old caps needed $22
-    client = _client(tmp_path, [("2026-11-25T04:20:00+00:00", 5.38)])
-    assert fm.budget_check(client, sum(fm.SPEND_CAPS_USD.values()), "2026-11-25T05:00:00+00:00") == 0
-    assert "$19.62 left" in capsys.readouterr().out
-    assert fm.budget_check(client, 22.0, "2026-11-25T05:00:00+00:00") == 1
+def test_budget_passes_after_the_fourth_halt_with_the_lowered_caps(tmp_path, capsys):
+    # week 48 after the fourth halt: $11.25 spent, $13.75 left; $12 + $2 needed $14
+    client = _client(tmp_path, [("2026-11-26T03:42:00+00:00", 11.25)])
+    assert fm.budget_check(client, sum(fm.SPEND_CAPS_USD.values()), "2026-11-26T05:00:00+00:00") == 0
+    assert "$13.75 left" in capsys.readouterr().out
+    assert fm.budget_check(client, 14.0, "2026-11-26T05:00:00+00:00") == 1
+
+
+
+# ------------------------------------------------------------------ post-run check of one run
+def _run_dir(tmp_path, n_rows=8000, refused=0, errors=0, truncated=0):
+    d = tmp_path / "runs" / "v1-final-du-L2-quiz-arc-200-claude-haiku-s20"
+    d.mkdir(parents=True)
+    (d / "config.yaml").write_text(yaml.safe_dump({
+        "finished_at": "2026-11-26T03:42:19+00:00", "n_rows": n_rows,
+        "n_truncated_replies": truncated, "stopped_for_budget": False,
+        "n_refused_replies": 1 if refused else 0, "n_refused_questions": refused}))
+    (d / "errors.jsonl").write_text("".join('{"error": "x"}\n' for _ in range(errors)))
+    return d
+
+
+def test_check_run_passes_refusals_up_to_one_percent(tmp_path):
+    ok, msg = fm.check_run(_run_dir(tmp_path, refused=20), 0.01)  # the Nov 26 case: 0.25%
+    assert ok and "8000 rows, 20 refused" in msg
+
+
+def test_check_run_fails_refusals_over_one_percent(tmp_path):
+    ok, msg = fm.check_run(_run_dir(tmp_path, n_rows=1000, refused=11), 0.01)
+    assert not ok and "'refused_over_limit': True" in msg and "refused=11 of 1000" in msg
+
+
+def test_check_run_still_fails_a_cut_off_or_a_call_error(tmp_path):
+    ok, msg = fm.check_run(_run_dir(tmp_path, truncated=1, errors=1), 0.01)
+    assert not ok and "'truncated': 1" in msg
+    ok, msg = fm.check_run(_run_dir(tmp_path / "b", errors=1), 0.01)
+    assert not ok and "'errors': 1" in msg
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="bash driver")
@@ -209,13 +240,13 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_8_router_replays(tmp_p
         else:  # both models on the held-out OSMI bank only
             assert "unseen-survey" in ln and len(finals) == 12
             assert all("osmi-heldout" in f for f in finals)
-    assert "freeze_report.py --out results/freeze-2026-11-25/README.md" in out
-    assert "--unseen-model-ablation results/real-router/freeze-2026-11-25-unseen-model-all-style-clear" in out
+    assert "freeze_report.py --out results/freeze-2026-11-26/README.md" in out
+    assert "--unseen-model-ablation results/real-router/freeze-2026-11-26-unseen-model-all-style-clear" in out
     assert "--reference-no-low-effort results/real-router/rq2-l012-floor750-reopen-no-low-effort" in out
     assert "--jobs 8 --resume" in out and "--exclude-sessions" in out
     assert out.count("rescore --final") == 30  # every survey / written-answer run is re-scored
-    assert "freeze-2026-11-25-claude-haiku (cap $12)" in out
-    assert "freeze-2026-11-25-gpt-mini (cap $2)" in out
+    assert "freeze-2026-11-26-claude-haiku (cap $8)" in out
+    assert "freeze-2026-11-26-gpt-mini (cap $2)" in out
     assert list(tmp_path.iterdir()) == []  # a dry run creates no folders
     cp = [ln for ln in out.splitlines() if "--run-id v1-final-cp-" in ln and "DRY:" in ln]
     du = [ln for ln in out.splitlines() if "--run-id v1-final-du-" in ln and "DRY:" in ln]
@@ -498,3 +529,27 @@ def test_ablation_guardrail_has_exact_cis_and_secondary_tpr_is_side_by_side(tmp_
             "0.50 [0.30, 0.70] / 0.50 [0.30, 0.70] |") in model_part
     assert survey_part.count("canary + style evidence only") == 2  # beside each ablation
     assert "canary + style evidence only" not in model_part
+
+
+def test_report_lists_refused_questions_per_run_and_per_group(tmp_path):
+    root = tmp_path / "results"
+    runs = {"v1-final-du-L2-quiz-arc-200-claude-haiku-s20": 20,
+            "v1-final-du-L2-quiz-mmlu-200-claude-haiku-s20": 0,
+            "v1-final-cp-L2-generic-quiz-arc-200-claude-haiku-s20": None}  # no count recorded
+    for rid, n in runs.items():
+        (root / "runs" / rid).mkdir(parents=True)
+        (root / "runs" / rid / "config.yaml").write_text(
+            yaml.safe_dump({} if n is None else {"n_refused_questions": n}))
+    router = tmp_path / "router"
+    router.mkdir()
+    (router / "inputs.txt").write_text("ai_outcomes:\n" + "".join(
+        f"  {root / 'outcomes' / (rid + '.parquet')}\n" for rid in runs)
+        + f"  {root / 'outcomes' / 'v1-cp-L0-quiz-mmlu-200-s5.parquet'}\n")  # training: ignored
+    assert fr.refusals(router) == {"v1-final-du-L2-quiz-arc-200-claude-haiku-s20": 20,
+                                   "v1-final-du-L2-quiz-mmlu-200-claude-haiku-s20": 0,
+                                   "v1-final-cp-L2-generic-quiz-arc-200-claude-haiku-s20": 0}
+    text = "\n".join(fr.refusal_lines(router))
+    assert "20 in all" in text
+    assert "| claude-haiku:doc_upload:L2 | 20 |" in text
+    assert "| claude-haiku:copy_paste:L2g | 0 |" in text
+    assert "| v1-final-du-L2-quiz-arc-200-claude-haiku-s20 | 20 |" in text

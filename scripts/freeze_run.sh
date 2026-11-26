@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Experiment freeze, Sun Nov 22: the ONE final run (AGENTS.md section 8). Do not start it without
 # the team's go. It needs #50 (cache-key lock, per-job spend cap) and #51 (calibration) merged and
-# the checkout at tag freeze-2026-11-25.
+# the checkout at tag freeze-2026-11-26.
 #
 #   (a) attacker runs, samples 0-19, run ids containing "final":
 #       claude-haiku (held-out model) on every bank the RQ2 composite sessions use plus the
 #       held-out OSMI bank; gpt-mini on the held-out OSMI bank only. Levels L0, L2, L2-generic;
 #       copy-paste and document upload, both at temperature 0.7 (the training runs' settings).
-#       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-25-<model>, with
-#       ADR_JOB_SPEND_CAP_USD = $12 for claude-haiku (approved Nov 21) and $2 for gpt-mini (Nov 25).
+#       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-26-<model>, with
+#       ADR_JOB_SPEND_CAP_USD = $8 for claude-haiku (Nov 26) and $2 for gpt-mini (Nov 25).
 #       The caps are fixed here and recorded in the manifest; preflight stops if they differ.
 #   (b) scripts/run_real_router.py --final with the frozen config (configs/data_decisions.json
 #       router_calibration = the script's defaults), floor750 pilot, all 44 honest sessions and
@@ -25,20 +25,20 @@
 #       outcomes > 0 (or missing > 0 in unseen-model), or a threshold differs from #51's.
 #
 # START after 17:00 Arizona time on Sun Nov 22 (00:00 UTC Mon Nov 23): a new ISO week, so the
-# full $25 weekly cap applies. Preflight refuses if the week has less than $14 (both job caps) left.
+# full $25 weekly cap applies. Preflight refuses if the week has less than $10 (both job caps) left.
 #
 # FPR rule: False-flag rates come only from the 44 pilot honest sessions, with the same folds and
 # calibrated thresholds as #51; the held-out OSMI bank has no human side, so no FPR is reported
 # on it.
 #
 # Run from the root of a checkout at the tag, with data/ and cache/ pointing at the shared ones:
-#   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-25/driver.log 2>&1 &
+#   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-26/driver.log 2>&1 &
 # DRY_RUN=1 prints every command and runs nothing (no preflight, no API calls).
 # A restart resumes: finished attacker runs are skipped (their outputs still go to the router),
 # router steps resume from steps/*.json.
 set -euo pipefail
 
-FREEZE=freeze-2026-11-25
+FREEZE=freeze-2026-11-26
 OUT=results/$FREEZE
 MANIFEST=$OUT/freeze_manifest.json
 LOGS=$OUT/logs
@@ -46,7 +46,10 @@ HELDOUT_BANK_DIR=data/processed/osmi-heldout-final
 PY=${PY:-python}
 REF_DIR=${REF_DIR:-results/real-router}  # #51's runs: rq2-l012-floor750-reopen-{all,no-low-effort}
 JOBS=${JOBS:-8}
-CAP_CLAUDE_HAIKU=12  # USD per job, approved Nov 21; must equal the manifest's spend_caps_usd
+# USD per job; must equal the manifest's spend_caps_usd. claude-haiku: $12 approved Nov 21,
+# lowered to $8 on Nov 26 (week 48 had $13.75 left after the fourth halt; the weekly check needs
+# remaining >= the sum of the caps; about $3-4 of claude-haiku work remained).
+CAP_CLAUDE_HAIKU=8
 # gpt-mini lowered from 10 to 2 on Nov 25 (estimate $0.55): the weekly check needs the week's
 # remaining budget to cover the sum of the caps, and after the third halt week 48 had $19.62 left.
 CAP_GPT_MINI=2
@@ -64,6 +67,8 @@ HAIKU_CP_MAX_TOKENS=4096
 # banks (asurre-train, held-out OSMI): the same 8192, one limit for all claude-haiku document
 # upload (gpt-mini's largest written-answer reply was 564). gpt-mini is unchanged.
 HAIKU_DU_MAX_TOKENS=8192
+# Refused questions may be at most this fraction of a run's rows (decided Nov 26; see check_run).
+REFUSED_MAX_FRAC=0.01
 DRY_RUN=${DRY_RUN:-0}
 SAMPLES=20
 TEMP=0.7
@@ -129,20 +134,12 @@ level_flags() {
   esac
 }
 
-check_run() {  # a finished run with no errors, no truncated replies and no spend-cap stop
+check_run() {  # a finished run with no errors, no truncated replies and no spend-cap stop;
+  # refused questions (document upload: a normally finished reply answering none of its
+  # questions, refused.jsonl) pass up to REFUSED_MAX_FRAC of the run's rows (decided Nov 26)
   [ "$DRY_RUN" = 1 ] && return 0
-  "$PY" - "$1" <<'PYEOF'
-import sys, yaml
-from pathlib import Path
-rid = sys.argv[1]
-cfg = yaml.safe_load((Path("results/runs") / rid / "config.yaml").read_text())
-errs = (Path("results/runs") / rid / "errors.jsonl").read_text().splitlines()
-bad = {"errors": len(errs), "truncated": cfg.get("n_truncated_replies") or 0,
-       "stopped_for_budget": bool(cfg.get("stopped_for_budget"))}
-if any(bad.values()) or not cfg.get("finished_at"):
-    sys.exit(f"{rid}: {bad}, finished_at={cfg.get('finished_at')}")
-print(f"{rid}: ok ({cfg.get('n_rows')} rows)")
-PYEOF
+  "$PY" scripts/freeze_manifest.py check-run --run-dir "results/runs/$1" \
+    --max-refused-frac "$REFUSED_MAX_FRAC"
 }
 
 max_tokens_flag() {  # copy-paste only: claude-haiku's limit; gpt-mini keeps the training limits

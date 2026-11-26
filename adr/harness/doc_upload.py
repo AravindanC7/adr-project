@@ -196,6 +196,11 @@ def run_doc_upload(
     rows: list[OutcomeRow] = []
     responses: list[dict] = []
     errors: list[dict] = []
+    # A reply that ended normally (finish reason "stop": not cut off, no call error) but answers
+    # none of its document's questions is a refusal: its questions are logged in refused.jsonl
+    # with reason "refused", not as failures (decided Nov 26 after one claude-haiku L2 reply; the
+    # post-run check allows up to 1% of a run's rows). Partial answers stay failures.
+    refused: list[dict] = []
     skipped: Counter[str] = Counter()  # mechanism -> NoObservation count
     stopped_for_budget = False
     n_truncated = 0  # replies that hit max_tokens
@@ -248,6 +253,12 @@ def run_doc_upload(
                                           "off, so later answers may be missing or partial. "
                                           "Rerun with a higher --max-tokens."})
             answers = split_answers(out.text)
+            if out.finish_reason == "stop" and not any(answers.get(n) for n in job.doc.questions):
+                refused += [{**_where(job), "question": n, "item_id": item.item_id,
+                             "variant_id": rendered.variant_id, "reason": "refused",
+                             "cache_key": out.cache_key}
+                            for n, (item, rendered) in job.doc.questions.items()]
+                continue
             for n, (item, rendered) in job.doc.questions.items():
                 text = answers.get(n, "")
                 if not text:
@@ -309,10 +320,16 @@ def run_doc_upload(
         "skipped_observations": dict(sorted(skipped.items())),  # per mechanism: NoObservation
         "stopped_for_budget": stopped_for_budget,
         "n_truncated_replies": n_truncated,  # hit max_tokens; each is a warning in errors.jsonl
+        "n_refused_replies": len({(r["model"], r["doc"], r["sample_idx"]) for r in refused}),
+        "n_refused_questions": len(refused),  # each is a line in refused.jsonl
     }, sort_keys=False, allow_unicode=True), encoding="utf-8")
     with (run_dir / "responses.jsonl").open("w", encoding="utf-8") as f:
         for r in sorted(responses, key=lambda r: (r["model"], r["session_id"], r["question"])):
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    with (run_dir / "refused.jsonl").open("w", encoding="utf-8") as f:  # always rewritten
+        for r in sorted(refused, key=lambda r: (r["model"], r["doc"], r["sample_idx"],
+                                                 r["question"])):
+            f.write(json.dumps(r) + "\n")
     with (run_dir / "errors.jsonl").open("w", encoding="utf-8") as f:  # always rewritten, empty = no failures
         for e in sorted(errors, key=lambda e: (e.get("model", ""), e.get("doc", -1),
                                                e.get("sample_idx", -1), e.get("question", 0))):
