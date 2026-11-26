@@ -1,6 +1,6 @@
 """Freeze reports and post-run checks for the final router runs (scripts/freeze_run.sh, step c).
 
-    python scripts/freeze_report.py --out results/freeze-2026-11-26b/README.md \\
+    python scripts/freeze_report.py --out results/freeze-2026-11-26c/README.md \\
         --unseen-model RUN_DIR [RUN_DIR] --unseen-survey RUN_DIR [RUN_DIR] \\
         [--reference-all results/real-router/rq2-l012-floor750-reopen-all] \\
         [--reference-no-low-effort results/real-router/rq2-l012-floor750-reopen-no-low-effort]
@@ -122,8 +122,9 @@ def source_problems(router: dict, kind: str,
     """Every group's active checks came from its own sessions' rows: synthetic = fallback = 0 for
     every group (any model), and missing = 0 for unseen-model groups (claude-haiku ran every
     training bank, so every check has rows) unless every missing check is explained by recorded
-    refusals (revised Nov 26): each session with missing checks (ai_missing_by_session) must have
-    a refused document in one of its group's attacker runs (`refused`: group -> sample indexes).
+    refused or unanswered questions (revised Nov 26): each session with missing checks
+    (ai_missing_by_session) must have a document with refused or unanswered questions in one of
+    its own group's attacker runs (`refused`: group -> sample indexes, from explained_samples).
     Any unexplained missing check fails. On the OSMI bank only canary has rows, so the
     unseen-survey groups' other checks are missing by design. Style is passive: it is scored on
     every written answer and is not in this source table."""
@@ -140,11 +141,13 @@ def source_problems(router: dict, kind: str,
                                  if _sample(s) not in refused.get(group, set()))
             if not sessions:
                 bad.append(f"{group}: missing {src['missing']} checks per session with no "
-                           "per-session record (must be 0, or explained by refusals)")
+                           "per-session record (must be 0, or explained by refused or unanswered "
+                           "questions)")
             elif unexplained:
                 bad.append(f"{group}: missing {src['missing']} checks per session; "
                            f"{len(unexplained)} of {len(sessions)} sessions with missing checks "
-                           "have no recorded refusal (unexplained missing must be 0)")
+                           "have no recorded refused or unanswered question (unexplained missing "
+                           "must be 0)")
     return bad
 
 
@@ -156,7 +159,7 @@ def _sample(session: str) -> int | None:
 
 def missing_lines(router: dict, refused: dict[str, set[int]]) -> list[str]:
     """Per unseen-model group: sessions with missing checks, and how many are explained by
-    recorded refusals."""
+    recorded refused or unanswered questions."""
     by_session = router.get("ai_missing_by_session") or {}
     rows = []
     for g, sessions in sorted(by_session.items()):
@@ -165,9 +168,10 @@ def missing_lines(router: dict, refused: dict[str, set[int]]) -> list[str]:
                     f"{sum(sessions[s] for s in explained) / max(len(sessions), 1):.2f} |")
     if not rows:
         return ["Missing checks: none in any group."]
-    return [("Missing checks explained by refusals (sessions with missing checks; of those, "
-             "sessions with a refused document; mean missing checks per session explained):"), "",
-            "| group | sessions with missing checks | explained by refusals | mean explained |",
+    return [("Missing checks explained by refused or unanswered questions (sessions with "
+             "missing checks; of those, sessions with a document that has refused or unanswered "
+             "questions; mean missing checks per session explained):"), "",
+            "| group | sessions with missing checks | explained | mean explained |",
             "|---|---|---|---|", *rows]
 
 
@@ -219,10 +223,9 @@ _RUN_ID = re.compile(r"^v1-final-(cp|du)-(L2-generic|L0|L2)-.+-(claude-haiku|gpt
 _MODE = {"cp": "copy_paste", "du": "doc_upload"}
 
 
-def refusals(run: Path) -> dict[str, int]:
-    """Refused questions per final attacker run (run id -> count), for the final outcome files the
-    router run read (its inputs.txt); each run's count is n_refused_questions in its
-    results/runs/<run_id>/config.yaml (0 if absent)."""
+def _final_runs(run: Path) -> dict[str, dict]:
+    """The final attacker runs the router run read (its inputs.txt): run id -> its
+    results/runs/<run_id>/config.yaml ({} if absent)."""
     inputs = run / "inputs.txt"
     if not inputs.is_file():
         return {}
@@ -232,23 +235,46 @@ def refusals(run: Path) -> dict[str, int]:
         if p.suffix != ".parquet" or not _RUN_ID.match(p.stem):
             continue
         cfg = p.parent.parent / "runs" / p.stem / "config.yaml"
-        conf = yaml.safe_load(cfg.read_text(encoding="utf-8")) if cfg.is_file() else {}
-        out[p.stem] = int((conf or {}).get("n_refused_questions") or 0)
+        out[p.stem] = (yaml.safe_load(cfg.read_text(encoding="utf-8")) if cfg.is_file() else {}) or {}
     return out
 
 
-def refused_samples(run: Path) -> dict[str, set[int]]:
-    """Per group (model:mode:level), the sample indexes with at least one refused document in the
-    group's final attacker runs (results/runs/<run_id>/refused.jsonl)."""
+def refusals(run: Path) -> dict[str, int]:
+    """Refused questions per final attacker run (run id -> n_refused_questions, 0 if absent)."""
+    return {rid: int(c.get("n_refused_questions") or 0) for rid, c in _final_runs(run).items()}
+
+
+def unanswered(run: Path) -> dict[str, int]:
+    """Unanswered (not refused) questions per final attacker run (run id ->
+    n_unanswered_questions, 0 if absent)."""
+    return {rid: int(c.get("n_unanswered_questions") or 0) for rid, c in _final_runs(run).items()}
+
+
+def _samples(run: Path, filename: str) -> dict[str, set[int]]:
     out: dict[str, set[int]] = {}
-    for rid in refusals(run):
-        path = _inputs_dir(run, rid) / "refused.jsonl"
+    for rid in _final_runs(run):
+        path = _inputs_dir(run, rid) / filename
         if not path.is_file():
             continue
         g = _group(rid)
         for line in path.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 out.setdefault(g, set()).add(int(json.loads(line)["sample_idx"]))
+    return out
+
+
+def refused_samples(run: Path) -> dict[str, set[int]]:
+    """Per group (model:mode:level), the sample indexes with at least one refused question in the
+    group's final attacker runs (results/runs/<run_id>/refused.jsonl)."""
+    return _samples(run, "refused.jsonl")
+
+
+def explained_samples(run: Path) -> dict[str, set[int]]:
+    """Per group, the sample indexes with at least one refused or unanswered question in the
+    group's own final attacker runs (refused.jsonl and unanswered.jsonl)."""
+    out = refused_samples(run)
+    for g, idx in _samples(run, "unanswered.jsonl").items():
+        out.setdefault(g, set()).update(idx)
     return out
 
 
@@ -267,22 +293,23 @@ def _inputs_dir(run: Path, rid: str) -> Path:
 
 
 def refusal_lines(run: Path) -> list[str]:
-    """Refused questions per attacker run and per group (model:mode:level)."""
-    per_run = refusals(run)
-    if not per_run:
+    """Refused and unanswered questions per attacker run and per group (model:mode:level)."""
+    ref, una = refusals(run), unanswered(run)
+    if not ref:
         return ["Refused questions: no final attacker runs listed in inputs.txt."]
-    per_group: dict[str, int] = {}
-    for rid, n in per_run.items():
-        g = _group(rid)
-        per_group[g] = per_group.get(g, 0) + n
-    total = sum(per_run.values())
-    lines = [("Refused questions (document upload: a reply that ended normally, answered "
-              "none of its questions and matches the refusal pattern; recorded, not failures): "
-              f"{total} in all."),
-             "", "| group | refused questions |", "|---|---|"]
-    lines += [f"| {g} | {n} |" for g, n in sorted(per_group.items())]
-    lines += ["", "| attacker run | refused questions |", "|---|---|"]
-    lines += [f"| {rid} | {n} |" for rid, n in sorted(per_run.items())]
+    per_group: dict[str, list[int]] = {}
+    for rid in ref:
+        g = per_group.setdefault(_group(rid), [0, 0])
+        g[0] += ref[rid]
+        g[1] += una[rid]
+    lines = [("Refused and unanswered questions (document upload, replies that ended normally; "
+              "recorded, not failures). Refused: the reply matches the refusal pattern, no limit. "
+              "Unanswered: it does not, allowed up to 5% of a run's questions. "
+              f"{sum(ref.values())} refused and {sum(una.values())} unanswered in all."),
+             "", "| group | refused questions | unanswered questions |", "|---|---|---|"]
+    lines += [f"| {g} | {r} | {u} |" for g, (r, u) in sorted(per_group.items())]
+    lines += ["", "| attacker run | refused questions | unanswered questions |", "|---|---|---|"]
+    lines += [f"| {rid} | {ref[rid]} | {una[rid]} |" for rid in sorted(ref)]
     return lines
 
 
@@ -399,7 +426,7 @@ def report(name: str, desc: str, runs: list[Path], models: tuple[str, ...],
                   *table(router, models), "",
                   "Honest side (the pilot's; see the FPR rule): " + "; ".join(honest(router)), "",
                   *refusal_lines(run), "",
-                  *missing_lines(router, refused_samples(run)), ""]
+                  *missing_lines(router, explained_samples(run)), ""]
         if run in pairs:
             abl = load(pairs[run])
             lines += [f"#### Pre-registered ablation: {pairs[run].name}", "",
@@ -461,12 +488,12 @@ def main() -> int:
     for kind, run in ablation_runs:  # same group-matrix and source checks as the main runs
         router = load(run)
         problems += [f"{run.name}: {p}" for p in group_problems(router, EXPECTED_GROUPS[kind])]
-        problems += [f"{run.name}: {p}" for p in source_problems(router, kind, refused_samples(run))]
+        problems += [f"{run.name}: {p}" for p in source_problems(router, kind, explained_samples(run))]
         problems += [f"{run.name}: {p}" for p in flag_problems(run, True)]
     for kind, run in runs:
         router = load(run)
         problems += [f"{run.name}: {p}" for p in group_problems(router, EXPECTED_GROUPS[kind])]
-        problems += [f"{run.name}: {p}" for p in source_problems(router, kind, refused_samples(run))]
+        problems += [f"{run.name}: {p}" for p in source_problems(router, kind, explained_samples(run))]
         problems += [f"{run.name}: {p}" for p in flag_problems(run, False)]
         ref = reference_for(run, a.reference_all, a.reference_no_low_effort)
         if ref is None:

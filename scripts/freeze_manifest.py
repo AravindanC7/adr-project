@@ -45,6 +45,9 @@ DECISIONS = Path("configs/data_decisions.json")
 # had $19.62 left after the third halt. scripts/freeze_run.sh must match.
 # claude-haiku lowered from 12 to 8 on Nov 26 (week 48 had $13.75 left after the fourth halt).
 SPEND_CAPS_USD = {"claude-haiku": 8.0, "gpt-mini": 2.0}
+# Unanswered questions in finished replies that do not match the refusal pattern
+# (unanswered.jsonl): allowed up to this share of a run's question slots (decided Nov 26).
+UNANSWERED_MAX_SHARE = 0.05
 # Reply limits of the final attacker runs (decided Nov 21; claude-haiku copy-paste raised to 4096
 # on Nov 23 after the halted first launch); scripts/freeze_run.sh must match.
 HAIKU_CP_MAX_TOKENS = 4096
@@ -167,7 +170,7 @@ def cmd_check_heldout(a) -> int:
 def cmd_prep(a) -> int:
     training = [Path(p) for p in a.training_files.read_text(encoding="utf-8").splitlines() if p]
     manifest = {
-        "freeze": "freeze-2026-11-26b",
+        "freeze": "freeze-2026-11-26c",
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "git": git_state(),
         "heldout_bank": bank_entry(a.heldout_bank),
@@ -255,19 +258,25 @@ def budget_check(client, need: float, now: str | None = None) -> int:
 
 def check_run(run_dir: Path) -> tuple[bool, str]:
     """The driver's post-run check of one attacker run: finished, no call errors or skipped
-    questions (errors.jsonl), no reply cut off at max_tokens, no spend-cap stop. Refused questions
-    (refused.jsonl: a document-upload reply that ended normally, answered none of its questions and
-    matches the refusal pattern) are recorded and reported, with no limit (revised Nov 26 after
-    98 of 120 L2 IPIP replies were refused; the first rule allowed 1%)."""
+    questions (errors.jsonl), no reply cut off at max_tokens, no spend-cap stop.
+
+    Unanswered questions in a document-upload reply that ended normally are recorded, not
+    errors (rule revised Nov 26 after seeing data; nothing was resampled):
+      - refused (refused.jsonl): the reply matches the refusal pattern; no limit;
+      - unanswered (unanswered.jsonl): it does not; allowed up to UNANSWERED_MAX_SHARE of the
+        run's question slots, and the run fails above that."""
     cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
     errs = (run_dir / "errors.jsonl").read_text(encoding="utf-8").splitlines()
     n_rows, refused = cfg.get("n_rows") or 0, cfg.get("n_refused_questions") or 0
+    unanswered, slots = cfg.get("n_unanswered_questions") or 0, cfg.get("n_question_slots") or 0
     bad = {"errors": len(errs), "truncated": cfg.get("n_truncated_replies") or 0,
-           "stopped_for_budget": bool(cfg.get("stopped_for_budget"))}
+           "stopped_for_budget": bool(cfg.get("stopped_for_budget")),
+           "unanswered_over_limit": bool(unanswered)
+           and (not slots or unanswered > UNANSWERED_MAX_SHARE * slots)}
+    counts = f"{n_rows} rows, {refused} refused, {unanswered} unanswered of {slots} questions"
     if any(bad.values()) or not cfg.get("finished_at"):
-        return False, (f"{run_dir.name}: {bad}, refused={refused} of {n_rows} rows, "
-                       f"finished_at={cfg.get('finished_at')}")
-    return True, f"{run_dir.name}: ok ({n_rows} rows, {refused} refused)"
+        return False, f"{run_dir.name}: {bad}, {counts}, finished_at={cfg.get('finished_at')}"
+    return True, f"{run_dir.name}: ok ({counts})"
 
 
 def cmd_check_run(a) -> int:

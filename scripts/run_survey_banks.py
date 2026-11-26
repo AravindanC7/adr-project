@@ -294,7 +294,9 @@ def cmd_run(a) -> None:
     print(json.dumps({"run_id": rid, "rows": len(rows), "errors": len(errs),
                       "truncated": conf.get("n_truncated_replies"),
                       "stopped_for_budget": conf.get("stopped_for_budget"),
-                      "skipped": conf.get("skipped_observations")}))
+                      "skipped": conf.get("skipped_observations"),
+                      "refused": conf.get("n_refused_questions"),
+                      "unanswered": conf.get("n_unanswered_questions")}))
     if errs or conf.get("n_truncated_replies") or conf.get("stopped_for_budget"):
         print("STOP: errors, truncation or spend-cap stop; see errors.jsonl", file=sys.stderr)
         sys.exit(2)

@@ -185,22 +185,36 @@ def test_budget_passes_after_the_fourth_halt_with_the_lowered_caps(tmp_path, cap
 
 
 # ------------------------------------------------------------------ post-run check of one run
-def _run_dir(tmp_path, n_rows=8000, refused=0, errors=0, truncated=0):
+def _run_dir(tmp_path, n_rows=8000, refused=0, errors=0, truncated=0, unanswered=None,
+             slots=1000):
     d = tmp_path / "runs" / "v1-final-du-L2-quiz-arc-200-claude-haiku-s20"
     d.mkdir(parents=True)
     (d / "config.yaml").write_text(yaml.safe_dump({
         "finished_at": "2026-11-26T03:42:19+00:00", "n_rows": n_rows,
         "n_truncated_replies": truncated, "stopped_for_budget": False,
-        "n_refused_replies": 1 if refused else 0, "n_refused_questions": refused}))
+        "n_refused_replies": 1 if refused else 0, "n_refused_questions": refused,
+        **({} if unanswered is None else {"n_unanswered_questions": unanswered,
+                                          "n_question_slots": slots})}))
     (d / "errors.jsonl").write_text("".join('{"error": "x"}\n' for _ in range(errors)))
     return d
 
 
 def test_check_run_passes_refusals_with_no_limit(tmp_path):
     ok, msg = fm.check_run(_run_dir(tmp_path, refused=20))  # run 10: 0.25%
-    assert ok and "8000 rows, 20 refused" in msg
+    assert ok and "8000 rows, 20 refused, 0 unanswered" in msg
     ok, msg = fm.check_run(_run_dir(tmp_path / "b", n_rows=380, refused=1620))  # run 16: 81%
     assert ok and "380 rows, 1620 refused" in msg
+
+
+def test_check_run_allows_unanswered_questions_up_to_5_percent(tmp_path):
+    ok, msg = fm.check_run(_run_dir(tmp_path, unanswered=50, slots=1000))  # exactly 5%
+    assert ok and "50 unanswered of 1000 questions" in msg
+    ok, msg = fm.check_run(_run_dir(tmp_path / "b", unanswered=51, slots=1000))
+    assert not ok and "'unanswered_over_limit': True" in msg
+    ok, msg = fm.check_run(_run_dir(tmp_path / "c", unanswered=1, slots=0))  # no denominator
+    assert not ok
+    ok, _ = fm.check_run(_run_dir(tmp_path / "d", refused=900, unanswered=0, slots=1000))
+    assert ok                                         # refused has no limit
 
 
 def test_check_run_still_fails_a_cut_off_or_a_call_error(tmp_path):
@@ -237,13 +251,13 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_8_router_replays(tmp_p
         else:  # both models on the held-out OSMI bank only
             assert "unseen-survey" in ln and len(finals) == 12
             assert all("osmi-heldout" in f for f in finals)
-    assert "freeze_report.py --out results/freeze-2026-11-26b/README.md" in out
-    assert "--unseen-model-ablation results/real-router/freeze-2026-11-26b-unseen-model-all-style-clear" in out
+    assert "freeze_report.py --out results/freeze-2026-11-26c/README.md" in out
+    assert "--unseen-model-ablation results/real-router/freeze-2026-11-26c-unseen-model-all-style-clear" in out
     assert "--reference-no-low-effort results/real-router/rq2-l012-floor750-reopen-no-low-effort" in out
     assert "--jobs 8 --resume" in out and "--exclude-sessions" in out
     assert out.count("rescore --final") == 30  # every survey / written-answer run is re-scored
-    assert "freeze-2026-11-26b-claude-haiku (cap $8)" in out
-    assert "freeze-2026-11-26b-gpt-mini (cap $2)" in out
+    assert "freeze-2026-11-26c-claude-haiku (cap $8)" in out
+    assert "freeze-2026-11-26c-gpt-mini (cap $2)" in out
     assert list(tmp_path.iterdir()) == []  # a dry run creates no folders
     cp = [ln for ln in out.splitlines() if "--run-id v1-final-cp-" in ln and "DRY:" in ln]
     du = [ln for ln in out.splitlines() if "--run-id v1-final-du-" in ln and "DRY:" in ln]
@@ -389,7 +403,7 @@ def test_missing_checks_fail_in_unseen_model_only():
     problems = fr.source_problems(_router("unseen-model", src_by={g: {"missing": 1.0}}),
                                   "unseen-model")
     assert problems == [(f"{g}: missing 1.0 checks per session with no per-session record "
-                        "(must be 0, or explained by refusals)")]
+                        "(must be 0, or explained by refused or unanswered questions)")]
     assert fr.source_problems(_router("unseen-survey"), "unseen-survey") == []  # missing 3.0 ok
 
 
@@ -558,8 +572,10 @@ def test_report_lists_refused_questions_per_run_and_per_group(tmp_path):
             "v1-final-cp-L2-generic-quiz-arc-200-claude-haiku-s20": None}  # no count recorded
     for rid, n in runs.items():
         (root / "runs" / rid).mkdir(parents=True)
-        (root / "runs" / rid / "config.yaml").write_text(
-            yaml.safe_dump({} if n is None else {"n_refused_questions": n}))
+        conf = {} if n is None else {"n_refused_questions": n}
+        if "mmlu" in rid:
+            conf["n_unanswered_questions"] = 3
+        (root / "runs" / rid / "config.yaml").write_text(yaml.safe_dump(conf))
     router = tmp_path / "router"
     router.mkdir()
     (router / "inputs.txt").write_text("ai_outcomes:\n" + "".join(
@@ -569,10 +585,37 @@ def test_report_lists_refused_questions_per_run_and_per_group(tmp_path):
                                    "v1-final-du-L2-quiz-mmlu-200-claude-haiku-s20": 0,
                                    "v1-final-cp-L2-generic-quiz-arc-200-claude-haiku-s20": 0}
     text = "\n".join(fr.refusal_lines(router))
-    assert "20 in all" in text
-    assert "| claude-haiku:doc_upload:L2 | 20 |" in text
-    assert "| claude-haiku:copy_paste:L2g | 0 |" in text
-    assert "| v1-final-du-L2-quiz-arc-200-claude-haiku-s20 | 20 |" in text
+    assert "20 refused and 3 unanswered in all" in text
+    assert "| claude-haiku:doc_upload:L2 | 20 | 3 |" in text
+    assert "| claude-haiku:copy_paste:L2g | 0 | 0 |" in text
+    assert "| v1-final-du-L2-quiz-arc-200-claude-haiku-s20 | 20 | 0 |" in text
+    assert "| v1-final-du-L2-quiz-mmlu-200-claude-haiku-s20 | 0 | 3 |" in text
+    assert fr.unanswered(router)["v1-final-du-L2-quiz-mmlu-200-claude-haiku-s20"] == 3
+
+
+def test_missing_checks_are_explained_by_refused_or_unanswered_in_their_own_group(tmp_path):
+    root = tmp_path / "results"
+    l2, l2g = ("v1-final-du-L2-assignment-asurre-osmi-heldout-claude-haiku-s20",
+               "v1-final-du-L2-generic-assignment-asurre-osmi-heldout-claude-haiku-s20")
+    for rid, fname, idx in [(l2, "refused.jsonl", 3), (l2, "unanswered.jsonl", 5),
+                            (l2g, "unanswered.jsonl", 9)]:
+        d = root / "runs" / rid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "config.yaml").write_text("{}")
+        (d / fname).write_text(json.dumps({"sample_idx": idx, "doc": 0, "question": 2}) + "\n")
+    router = tmp_path / "router"
+    router.mkdir()
+    (router / "inputs.txt").write_text("".join(
+        f"{root / 'outcomes' / (rid + '.parquet')}\n" for rid in (l2, l2g)))
+    assert fr.refused_samples(router) == {"claude-haiku:doc_upload:L2": {3}}
+    explained = fr.explained_samples(router)
+    assert explained == {"claude-haiku:doc_upload:L2": {3, 5}, "claude-haiku:doc_upload:L2g": {9}}
+    g = "claude-haiku:doc_upload:L2"
+    r = _router("unseen-model", src_by={g: {"missing": 0.1}})
+    r["ai_missing_by_session"] = {g: {f"composite:{g}:3": 1.0, f"composite:{g}:5": 1.0}}
+    assert fr.source_problems(r, "unseen-model", explained) == []
+    r["ai_missing_by_session"][g][f"composite:{g}:9"] = 1.0  # explained only in L2g
+    assert "1 of 3 sessions" in fr.source_problems(r, "unseen-model", explained)[0]
 
 
 def test_replay_records_missing_checks_per_session():
@@ -612,3 +655,24 @@ def test_router_only_skips_the_budget_check_but_keeps_tag_and_manifest_checks():
     assert pre.index('HEAD is not the $FREEZE tag') < pre.index('ROUTER_ONLY')
     assert "freeze_manifest.py verify" in pre and 'no $MANIFEST' in pre
     assert 'ADR_JOB_SPEND_CAP_USD=0' in text
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="bash driver")
+@pytest.mark.parametrize("body, expected", [
+    ('runlog "$LOG" sh -c "exit 2"', "STOP: step exited with status 2 (see "),
+    ('run sh -c "exit 3"', "STOP: step exited with status 3: sh -c exit 3"),
+    ('false', "STOP: line "),                        # any other step: the ERR trap
+    ('f() { false; echo not-reached; }; f', "STOP: line "),  # inside a function too
+])
+def test_the_driver_prints_a_stop_line_whenever_a_step_fails(tmp_path, body, expected):
+    """The driver's helpers and trap, run on their own with a failing step (DRY_RUN=0)."""
+    text = (ROOT / "scripts" / "freeze_run.sh").read_text(encoding="utf-8")
+    helpers = text[text.index("log() {"):
+                   text.index("# ------------------------------------------------------------------ 0. preflight")]
+    script = (f"set -Eeuo pipefail\nDRY_RUN=0\nLOG={tmp_path / 'step.log'}\n{helpers}\n"
+              f"{body}\necho survived\n")
+    proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+    assert proc.returncode != 0 and "survived" not in proc.stdout
+    assert "not-reached" not in proc.stdout
+    stops = [x for x in proc.stdout.splitlines() if "STOP:" in x]
+    assert len(stops) == 1 and expected in stops[0], proc.stdout
