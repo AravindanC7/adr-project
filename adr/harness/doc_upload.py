@@ -18,6 +18,8 @@ Outputs (same layout as copy_paste.py):
   results/runs/<run_id>/config.yaml          what was run, for reproducibility
   results/runs/<run_id>/responses.jsonl      every parsed answer, for debugging
   results/runs/<run_id>/errors.jsonl         failed calls and skipped questions (if any)
+  results/runs/<run_id>/refused.jsonl        unanswered questions in replies that refuse
+  results/runs/<run_id>/unanswered.jsonl     unanswered questions in other finished replies
   results/runs/<run_id>/docs/doc-<k>.pdf     the documents sent, to look at by hand
 """
 
@@ -207,12 +209,17 @@ def run_doc_upload(
     rows: list[OutcomeRow] = []
     responses: list[dict] = []
     errors: list[dict] = []
-    # A reply that ended normally (finish reason "stop": not cut off, no call error), answers
-    # none of its document's questions and matches REFUSAL_PATTERN is a refusal: its questions
-    # are logged in refused.jsonl with reason "refused", not as failures (decided Nov 26; no
-    # limit since the second revision). Partial answers, and an empty-answer reply that does not
-    # match the pattern (a parsing bug guard), stay failures.
+    # Questions a reply leaves unanswered (decided Nov 26, third revision). Only a reply that
+    # ended normally (finish reason "stop": not cut off, no call error) qualifies:
+    #   - it matches REFUSAL_PATTERN: its answered questions are kept and the unanswered ones
+    #     are logged in refused.jsonl with reason "refused" (a full or partial refusal);
+    #   - it does not match: the unanswered questions are logged in unanswered.jsonl with
+    #     reason "unanswered" (a safety net; the post-run check allows them up to 5% of the
+    #     run's question slots and fails above that).
+    # Unanswered questions in a cut-off reply, and call errors, stay failures in errors.jsonl.
     refused: list[dict] = []
+    unanswered: list[dict] = []
+    n_question_slots = sum(len(j.doc.questions) for j in jobs)
     skipped: Counter[str] = Counter()  # mechanism -> NoObservation count
     stopped_for_budget = False
     n_truncated = 0  # replies that hit max_tokens
@@ -265,20 +272,23 @@ def run_doc_upload(
                                           "off, so later answers may be missing or partial. "
                                           "Rerun with a higher --max-tokens."})
             answers = split_answers(out.text)
-            if (out.finish_reason == "stop" and not any(answers.get(n) for n in job.doc.questions)
-                    and is_refusal(out.text)):
-                refused += [{**_where(job), "question": n, "item_id": item.item_id,
-                             "variant_id": rendered.variant_id, "reason": "refused",
-                             "cache_key": out.cache_key}
-                            for n, (item, rendered) in job.doc.questions.items()]
-                continue
+            finished = out.finish_reason == "stop" and not out.truncated
+            if finished and is_refusal(out.text):
+                missing_to, reason = refused, "refused"
+            elif finished:
+                missing_to, reason = unanswered, "unanswered"
+            else:
+                missing_to, reason = None, None
             for n, (item, rendered) in job.doc.questions.items():
                 text = answers.get(n, "")
                 if not text:
-                    errors.append({**_where(job), "question": n, "item_id": item.item_id,
-                                   "variant_id": rendered.variant_id,
-                                   "error": "skipped: no answer for this question",
-                                   "cache_key": out.cache_key})
+                    where = {**_where(job), "question": n, "item_id": item.item_id,
+                             "variant_id": rendered.variant_id}
+                    if missing_to is not None:
+                        missing_to.append({**where, "reason": reason, "cache_key": out.cache_key})
+                    else:
+                        errors.append({**where, "error": "skipped: no answer for this question",
+                                       "cache_key": out.cache_key})
                     continue
                 answer = parse_answer(item, text)
                 resp = Response(session_id=session_id, item_id=item.item_id,
@@ -335,6 +345,9 @@ def run_doc_upload(
         "n_truncated_replies": n_truncated,  # hit max_tokens; each is a warning in errors.jsonl
         "n_refused_replies": len({(r["model"], r["doc"], r["sample_idx"]) for r in refused}),
         "n_refused_questions": len(refused),  # each is a line in refused.jsonl
+        "n_unanswered_replies": len({(r["model"], r["doc"], r["sample_idx"]) for r in unanswered}),
+        "n_unanswered_questions": len(unanswered),  # each is a line in unanswered.jsonl
+        "n_question_slots": n_question_slots,  # jobs x questions per document
     }, sort_keys=False, allow_unicode=True), encoding="utf-8")
     with (run_dir / "responses.jsonl").open("w", encoding="utf-8") as f:
         for r in sorted(responses, key=lambda r: (r["model"], r["session_id"], r["question"])):
@@ -342,6 +355,10 @@ def run_doc_upload(
     with (run_dir / "refused.jsonl").open("w", encoding="utf-8") as f:  # always rewritten
         for r in sorted(refused, key=lambda r: (r["model"], r["doc"], r["sample_idx"],
                                                  r["question"])):
+            f.write(json.dumps(r) + "\n")
+    with (run_dir / "unanswered.jsonl").open("w", encoding="utf-8") as f:  # always rewritten
+        for r in sorted(unanswered, key=lambda r: (r["model"], r["doc"], r["sample_idx"],
+                                                    r["question"])):
             f.write(json.dumps(r) + "\n")
     with (run_dir / "errors.jsonl").open("w", encoding="utf-8") as f:  # always rewritten, empty = no failures
         for e in sorted(errors, key=lambda e: (e.get("model", ""), e.get("doc", -1),

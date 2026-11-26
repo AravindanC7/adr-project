@@ -249,11 +249,13 @@ def test_skipped_questions_are_logged(tmp_path):
     cfg = DocUploadConfig(run_id="du-skip", models=["fake-a"], results_dir=str(tmp_path))
     rows = run_doc_upload(client, assessment, items, variants, mechs, cfg)
     assert len(rows) == 6 and "handwritten:q2" not in {r.item_id for r in rows}
+    # the replies ended normally without refusal wording: recorded as unanswered, not errors
+    assert (tmp_path / "runs" / "du-skip" / "errors.jsonl").read_text() == ""
     errs = [json.loads(x) for x in
-            (tmp_path / "runs" / "du-skip" / "errors.jsonl").read_text().splitlines()]
+            (tmp_path / "runs" / "du-skip" / "unanswered.jsonl").read_text().splitlines()]
     assert [(e["doc"], e["question"], e["item_id"]) for e in errs] == [
         (0, 2, "handwritten:q2"), (1, 2, "handwritten:q2")]
-    assert all(e["error"].startswith("skipped") and e["model"] == "fake-a" for e in errs)
+    assert all(e["reason"] == "unanswered" and e["model"] == "fake-a" for e in errs)
 
 
 def test_failed_call_is_logged_not_fatal(tmp_path):
@@ -436,16 +438,76 @@ def test_a_cut_off_reply_with_no_answers_is_not_a_refusal(tmp_path):
     assert any("hit max_tokens" in e for e in errors) and any("skipped" in e for e in errors)
 
 
-def test_a_finished_reply_with_no_answers_and_no_refusal_wording_stays_a_failure(tmp_path):
-    # bug guard: an empty-answer reply that does not read as a refusal is not hidden as one
+def test_a_finished_reply_with_no_answers_and_no_refusal_wording_is_unanswered(tmp_path):
+    # safety net (third revision): recorded as unanswered, not refused; the post-run check
+    # limits it to 5% of the run's questions
     client, _ = make_client(tmp_path, fn=lambda s, m, a: "Here are my thoughts on the survey.")
     assessment, items, variants, mechs = _setup()
     cfg = DocUploadConfig(run_id="du-empty", models=["fake-a"], results_dir=str(tmp_path))
     run_doc_upload(client, assessment, items, variants, mechs, cfg)
     run_dir = tmp_path / "runs" / "du-empty"
     assert (run_dir / "refused.jsonl").read_text() == ""
+    assert (run_dir / "errors.jsonl").read_text() == ""
+    unanswered = [json.loads(x) for x in (run_dir / "unanswered.jsonl").read_text().splitlines()]
+    config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert unanswered and {r["reason"] for r in unanswered} == {"unanswered"}
+    assert config["n_unanswered_questions"] == len(unanswered) == config["n_question_slots"]
+    assert config["n_refused_questions"] == 0
+
+
+def _first_answer_only(prefix):
+    """A reply that ended normally and answers only the document's first question."""
+    def fn(system, messages, attachments):
+        first = reads_pdf(system, messages, attachments).splitlines()[0]
+        return f"{prefix}\n{first}" if prefix else first
+    return fn
+
+
+def test_a_partial_refusal_keeps_its_answers_and_records_the_rest_as_refused(tmp_path):
+    client, _ = make_client(tmp_path, fn=_first_answer_only("I can't answer the other questions."))
+    assessment, items, variants, mechs = _setup()
+    cfg = DocUploadConfig(run_id="du-partial", models=["fake-a"], results_dir=str(tmp_path),
+                          questions_per_doc=2)
+    rows = run_doc_upload(client, assessment, items, variants, mechs, cfg)
+    run_dir = tmp_path / "runs" / "du-partial"
+    config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert (run_dir / "errors.jsonl").read_text() == ""
+    assert (run_dir / "unanswered.jsonl").read_text() == ""
+    refused = [json.loads(x) for x in (run_dir / "refused.jsonl").read_text().splitlines()]
+    responses = (run_dir / "responses.jsonl").read_text().splitlines()
+    docs = config["n_documents"]
+    assert len(responses) == docs and len(refused) == config["n_question_slots"] - docs
+    assert {r["reason"] for r in refused} == {"refused"} and 1 not in {r["question"] for r in refused}
+    assert config["n_refused_replies"] == docs and rows        # answered questions kept
+
+
+def test_a_partial_reply_without_refusal_wording_is_unanswered(tmp_path):
+    client, _ = make_client(tmp_path, fn=_first_answer_only(""))
+    assessment, items, variants, mechs = _setup()
+    cfg = DocUploadConfig(run_id="du-partial-2", models=["fake-a"], results_dir=str(tmp_path),
+                          questions_per_doc=2)
+    run_doc_upload(client, assessment, items, variants, mechs, cfg)
+    run_dir = tmp_path / "runs" / "du-partial-2"
+    config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert (run_dir / "errors.jsonl").read_text() == ""
+    assert (run_dir / "refused.jsonl").read_text() == ""
+    unanswered = [json.loads(x) for x in (run_dir / "unanswered.jsonl").read_text().splitlines()]
+    assert len(unanswered) == config["n_unanswered_questions"] == config["n_question_slots"] - \
+        config["n_documents"]
+
+
+def test_a_cut_off_partial_reply_stays_a_failure(tmp_path):
+    cut = _first_answer_only("I can't answer the other questions.")
+    client, _ = make_client(tmp_path, fn=lambda s, m, a: (cut(s, m, a), "length"))
+    assessment, items, variants, mechs = _setup()
+    cfg = DocUploadConfig(run_id="du-cut-partial", models=["fake-a"], results_dir=str(tmp_path),
+                          questions_per_doc=2)
+    run_doc_upload(client, assessment, items, variants, mechs, cfg)
+    run_dir = tmp_path / "runs" / "du-cut-partial"
+    assert (run_dir / "refused.jsonl").read_text() == ""
+    assert (run_dir / "unanswered.jsonl").read_text() == ""
     errors = (run_dir / "errors.jsonl").read_text().splitlines()
-    assert errors and all("skipped: no answer" in e for e in errors)
+    assert any("hit max_tokens" in e for e in errors) and any("skipped: no answer" in e for e in errors)
 
 
 def test_refusal_pattern():

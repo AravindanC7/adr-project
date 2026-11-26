@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Experiment freeze, Sun Nov 22: the ONE final run (AGENTS.md section 8). Do not start it without
 # the team's go. It needs #50 (cache-key lock, per-job spend cap) and #51 (calibration) merged and
-# the checkout at tag freeze-2026-11-26b.
+# the checkout at tag freeze-2026-11-26c.
 #
 #   (a) attacker runs, samples 0-19, run ids containing "final":
 #       claude-haiku (held-out model) on every bank the RQ2 composite sessions use plus the
 #       held-out OSMI bank; gpt-mini on the held-out OSMI bank only. Levels L0, L2, L2-generic;
 #       copy-paste and document upload, both at temperature 0.7 (the training runs' settings).
-#       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-26b-<model>, with
+#       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-26c-<model>, with
 #       ADR_JOB_SPEND_CAP_USD = $8 for claude-haiku (Nov 26) and $2 for gpt-mini (Nov 25).
 #       The caps are fixed here and recorded in the manifest; preflight stops if they differ.
 #   (b) scripts/run_real_router.py --final with the frozen config (configs/data_decisions.json
@@ -32,16 +32,16 @@
 # on it.
 #
 # Run from the root of a checkout at the tag, with data/ and cache/ pointing at the shared ones:
-#   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-26b/driver.log 2>&1 &
+#   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-26c/driver.log 2>&1 &
 # DRY_RUN=1 prints every command and runs nothing (no preflight, no API calls).
 # ROUTER_ONLY=1 reruns only the router stage (b, c) from finished attacker outputs: it still checks
 # the tag and verifies the manifest, skips the weekly budget check (no API calls), and stops if any
 # attacker run has not finished cleanly instead of running it (added Nov 26).
 # A restart resumes: finished attacker runs are skipped (their outputs still go to the router),
 # router steps resume from steps/*.json.
-set -euo pipefail
+set -Eeuo pipefail
 
-FREEZE=freeze-2026-11-26b
+FREEZE=freeze-2026-11-26c
 OUT=results/$FREEZE
 MANIFEST=$OUT/freeze_manifest.json
 LOGS=$OUT/logs
@@ -76,14 +76,24 @@ SAMPLES=20
 TEMP=0.7
 
 log() { echo "$(date '+%F %T') $*"; }
+fail() { log "STOP: $*"; exit 1; }
+# Every step that exits non-zero ends the driver with a STOP: line naming it (decided Nov 26,
+# after a step died inside runlog under set -e with no STOP line). run and runlog name the
+# step; the ERR trap catches any other failing command (-E: also inside functions).
+trap 'rc=$?; log "STOP: line $LINENO exited with status $rc: $BASH_COMMAND"; exit $rc' ERR
 run() {  # run "$@", or only print it with DRY_RUN=1
-  if [ "$DRY_RUN" = 1 ]; then echo "DRY: $*"; else "$@"; fi
+  if [ "$DRY_RUN" = 1 ]; then echo "DRY: $*"; return; fi
+  local rc=0
+  "$@" || rc=$?
+  [ "$rc" = 0 ] || fail "step exited with status $rc: $*"
 }
 runlog() {  # runlog LOGFILE CMD...: run CMD appending its output to LOGFILE (DRY_RUN: print it)
   local logfile=$1; shift
-  if [ "$DRY_RUN" = 1 ]; then echo "DRY: $* >> $logfile"; else "$@" >> "$logfile" 2>&1; fi
+  if [ "$DRY_RUN" = 1 ]; then echo "DRY: $* >> $logfile"; return; fi
+  local rc=0
+  "$@" >> "$logfile" 2>&1 || rc=$?
+  [ "$rc" = 0 ] || fail "step exited with status $rc (see $logfile): $*"
 }
-fail() { log "STOP: $*"; exit 1; }
 
 # ------------------------------------------------------------------ 0. preflight
 # START TIME: after 17:00 Arizona time on Sun Nov 22 (00:00 UTC Mon Nov 23), when a new ISO week
