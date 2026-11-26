@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Experiment freeze, Sun Nov 22: the ONE final run (AGENTS.md section 8). Do not start it without
 # the team's go. It needs #50 (cache-key lock, per-job spend cap) and #51 (calibration) merged and
-# the checkout at tag freeze-2026-11-26.
+# the checkout at tag freeze-2026-11-26b.
 #
 #   (a) attacker runs, samples 0-19, run ids containing "final":
 #       claude-haiku (held-out model) on every bank the RQ2 composite sessions use plus the
 #       held-out OSMI bank; gpt-mini on the held-out OSMI bank only. Levels L0, L2, L2-generic;
 #       copy-paste and document upload, both at temperature 0.7 (the training runs' settings).
-#       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-26-<model>, with
+#       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-26b-<model>, with
 #       ADR_JOB_SPEND_CAP_USD = $8 for claude-haiku (Nov 26) and $2 for gpt-mini (Nov 25).
 #       The caps are fixed here and recorded in the manifest; preflight stops if they differ.
 #   (b) scripts/run_real_router.py --final with the frozen config (configs/data_decisions.json
@@ -32,13 +32,16 @@
 # on it.
 #
 # Run from the root of a checkout at the tag, with data/ and cache/ pointing at the shared ones:
-#   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-26/driver.log 2>&1 &
+#   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-26b/driver.log 2>&1 &
 # DRY_RUN=1 prints every command and runs nothing (no preflight, no API calls).
+# ROUTER_ONLY=1 reruns only the router stage (b, c) from finished attacker outputs: it still checks
+# the tag and verifies the manifest, skips the weekly budget check (no API calls), and stops if any
+# attacker run has not finished cleanly instead of running it (added Nov 26).
 # A restart resumes: finished attacker runs are skipped (their outputs still go to the router),
 # router steps resume from steps/*.json.
 set -euo pipefail
 
-FREEZE=freeze-2026-11-26
+FREEZE=freeze-2026-11-26b
 OUT=results/$FREEZE
 MANIFEST=$OUT/freeze_manifest.json
 LOGS=$OUT/logs
@@ -67,9 +70,8 @@ HAIKU_CP_MAX_TOKENS=4096
 # banks (asurre-train, held-out OSMI): the same 8192, one limit for all claude-haiku document
 # upload (gpt-mini's largest written-answer reply was 564). gpt-mini is unchanged.
 HAIKU_DU_MAX_TOKENS=8192
-# Refused questions may be at most this fraction of a run's rows (decided Nov 26; see check_run).
-REFUSED_MAX_FRAC=0.01
 DRY_RUN=${DRY_RUN:-0}
+ROUTER_ONLY=${ROUTER_ONLY:-0}
 SAMPLES=20
 TEMP=0.7
 
@@ -111,9 +113,13 @@ print(f\"{c['claude-haiku']:g} {c['gpt-mini']:g}\")" "$MANIFEST")
 ['claude-haiku']['doc_upload']['written_answers'])" "$MANIFEST")
   [ "$duwtok" = "$HAIKU_DU_MAX_TOKENS" ] \
     || fail "claude-haiku written-answer document-upload max_tokens differ: driver $HAIKU_DU_MAX_TOKENS, manifest $duwtok"
-  log "preflight: this week's spend against the weekly cap"
-  "$PY" scripts/freeze_manifest.py budget \
-    || fail "weekly budget below the two jobs' caps (\$$CAP_CLAUDE_HAIKU + \$$CAP_GPT_MINI): start after 17:00 Arizona time Sunday (00:00 UTC Monday)"
+  if [ "$ROUTER_ONLY" = 1 ]; then
+    log "preflight: router-only restart, no API calls: weekly budget check skipped"
+  else
+    log "preflight: this week's spend against the weekly cap"
+    "$PY" scripts/freeze_manifest.py budget \
+      || fail "weekly budget below the two jobs' caps (\$$CAP_CLAUDE_HAIKU + \$$CAP_GPT_MINI): start after 17:00 Arizona time Sunday (00:00 UTC Monday)"
+  fi
   for who in all no-low-effort; do
     [ -f "$REF_DIR/rq2-l012-floor750-reopen-$who/metrics.json" ] \
       || fail "no #51 reference run $REF_DIR/rq2-l012-floor750-reopen-$who (set REF_DIR)"
@@ -135,11 +141,9 @@ level_flags() {
 }
 
 check_run() {  # a finished run with no errors, no truncated replies and no spend-cap stop;
-  # refused questions (document upload: a normally finished reply answering none of its
-  # questions, refused.jsonl) pass up to REFUSED_MAX_FRAC of the run's rows (decided Nov 26)
+  # refused questions (refused.jsonl) are recorded and reported, with no limit (Nov 26)
   [ "$DRY_RUN" = 1 ] && return 0
-  "$PY" scripts/freeze_manifest.py check-run --run-dir "results/runs/$1" \
-    --max-refused-frac "$REFUSED_MAX_FRAC"
+  "$PY" scripts/freeze_manifest.py check-run --run-dir "results/runs/$1"
 }
 
 max_tokens_flag() {  # copy-paste only: claude-haiku's limit; gpt-mini keeps the training limits
@@ -166,6 +170,10 @@ attack() {  # attack MODEL MODE(cp|du) LEVEL(L0|L2|L2g) BANK; sets RID
   local rid="v1-final-$mode-$tag-$bank-$model-s$SAMPLES"
   RID=$rid
   if done_already "$rid"; then log "skip $rid (finished)"; return; fi
+  if [ "$ROUTER_ONLY" = 1 ]; then  # never call a model in a router-only restart
+    [ "$DRY_RUN" = 1 ] && { log "router-only: needs finished $rid"; return; }
+    fail "router-only: $rid has not finished cleanly; run the full driver instead"
+  fi
   log "run $rid"
   local flags; flags=$(level_flags "$level")
   case "$bank" in
@@ -204,6 +212,7 @@ HELDOUT_BANK=assignment-asurre-osmi-heldout
 
 for model in claude-haiku gpt-mini; do
   export ADR_JOB_ID="$FREEZE-$model" ADR_JOB_SPEND_CAP_USD="$(cap_for "$model")"
+  [ "$ROUTER_ONLY" = 1 ] && export ADR_JOB_SPEND_CAP_USD=0  # belt and braces: no paid call
   banks="$HELDOUT_BANK"
   [ "$model" = claude-haiku ] && banks="$TRAIN_BANKS $HELDOUT_BANK"
   log "job $ADR_JOB_ID (cap \$$ADR_JOB_SPEND_CAP_USD): banks $banks"

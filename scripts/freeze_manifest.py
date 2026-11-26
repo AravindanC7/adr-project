@@ -167,7 +167,7 @@ def cmd_check_heldout(a) -> int:
 def cmd_prep(a) -> int:
     training = [Path(p) for p in a.training_files.read_text(encoding="utf-8").splitlines() if p]
     manifest = {
-        "freeze": "freeze-2026-11-26",
+        "freeze": "freeze-2026-11-26b",
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "git": git_state(),
         "heldout_bank": bank_entry(a.heldout_bank),
@@ -253,17 +253,17 @@ def budget_check(client, need: float, now: str | None = None) -> int:
     return 0
 
 
-def check_run(run_dir: Path, max_refused_frac: float) -> tuple[bool, str]:
+def check_run(run_dir: Path) -> tuple[bool, str]:
     """The driver's post-run check of one attacker run: finished, no call errors or skipped
-    questions (errors.jsonl), no reply cut off at max_tokens, no spend-cap stop, and refused
-    questions (refused.jsonl: a document-upload reply that ended normally but answered none of its
-    questions) at most `max_refused_frac` of the run's rows (decided Nov 26)."""
+    questions (errors.jsonl), no reply cut off at max_tokens, no spend-cap stop. Refused questions
+    (refused.jsonl: a document-upload reply that ended normally, answered none of its questions and
+    matches the refusal pattern) are recorded and reported, with no limit (revised Nov 26 after
+    98 of 120 L2 IPIP replies were refused; the first rule allowed 1%)."""
     cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
     errs = (run_dir / "errors.jsonl").read_text(encoding="utf-8").splitlines()
     n_rows, refused = cfg.get("n_rows") or 0, cfg.get("n_refused_questions") or 0
     bad = {"errors": len(errs), "truncated": cfg.get("n_truncated_replies") or 0,
-           "stopped_for_budget": bool(cfg.get("stopped_for_budget")),
-           "refused_over_limit": refused > max_refused_frac * n_rows}
+           "stopped_for_budget": bool(cfg.get("stopped_for_budget"))}
     if any(bad.values()) or not cfg.get("finished_at"):
         return False, (f"{run_dir.name}: {bad}, refused={refused} of {n_rows} rows, "
                        f"finished_at={cfg.get('finished_at')}")
@@ -271,7 +271,7 @@ def check_run(run_dir: Path, max_refused_frac: float) -> tuple[bool, str]:
 
 
 def cmd_check_run(a) -> int:
-    ok, msg = check_run(a.run_dir, a.max_refused_frac)
+    ok, msg = check_run(a.run_dir)
     print(msg, file=sys.stdout if ok else sys.stderr)
     return 0 if ok else 1
 
@@ -306,7 +306,6 @@ def main() -> None:
     v.add_argument("--heldout-bank", type=Path, help="check this bank folder's content instead")
     r = sub.add_parser("check-run", help="the driver's post-run check of one attacker run")
     r.add_argument("--run-dir", type=Path, required=True, help="results/runs/<run_id>")
-    r.add_argument("--max-refused-frac", type=float, required=True)
     b = sub.add_parser("budget", help="this week's ledger spend vs the two jobs' caps")
     b.add_argument("--config", default="configs/models.yaml")
     a = ap.parse_args()

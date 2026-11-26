@@ -434,3 +434,25 @@ def test_a_cut_off_reply_with_no_answers_is_not_a_refusal(tmp_path):
     assert (run_dir / "refused.jsonl").read_text() == ""
     errors = (run_dir / "errors.jsonl").read_text().splitlines()
     assert any("hit max_tokens" in e for e in errors) and any("skipped" in e for e in errors)
+
+
+def test_a_finished_reply_with_no_answers_and_no_refusal_wording_stays_a_failure(tmp_path):
+    # bug guard: an empty-answer reply that does not read as a refusal is not hidden as one
+    client, _ = make_client(tmp_path, fn=lambda s, m, a: "Here are my thoughts on the survey.")
+    assessment, items, variants, mechs = _setup()
+    cfg = DocUploadConfig(run_id="du-empty", models=["fake-a"], results_dir=str(tmp_path))
+    run_doc_upload(client, assessment, items, variants, mechs, cfg)
+    run_dir = tmp_path / "runs" / "du-empty"
+    assert (run_dir / "refused.jsonl").read_text() == ""
+    errors = (run_dir / "errors.jsonl").read_text().splitlines()
+    assert errors and all("skipped: no answer" in e for e in errors)
+
+
+def test_refusal_pattern():
+    from adr.harness.doc_upload import is_refusal
+
+    for text in ("I can't complete this survey.", "I won’t answer as a person.",
+                 "I cannot fill this in", "As an AI, I don't have opinions.",
+                 "I'm not able to do that", "I will not pretend", "I must decline."):
+        assert is_refusal(text), text
+    assert not is_refusal("Here are my answers below.") and not is_refusal("")

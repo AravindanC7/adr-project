@@ -1,11 +1,12 @@
 # Experiment freeze, Sun Nov 22: the final run (plan, not run)
 
 Driver: `scripts/freeze_run.sh`. It needs #50 (cache-key lock, per-job spend cap) and #51
-(calibration) merged, and a checkout at tag `freeze-2026-11-26`. Apart from two smoke calls on a
-training item (below), the only paid runs so far are four halted launches: tag
+(calibration) merged, and a checkout at tag `freeze-2026-11-26b`. Apart from two smoke calls on a
+training item (below), the only paid runs so far are five halted launches: tag
 `freeze-2026-11-22` (see "Halted first launch, Nov 22–23"), tag `freeze-2026-11-23` (see
 "Halted second launch, Nov 23–24"), tag `freeze-2026-11-24` (see "Halted third launch,
-Nov 24–25") and tag `freeze-2026-11-25` (see "Halted fourth launch, Nov 25–26").
+Nov 24–25"), tag `freeze-2026-11-25` (see "Halted fourth launch, Nov 25–26") and tag
+`freeze-2026-11-26` (see "Halted fifth launch, Nov 26").
 
 ## FPR rule
 
@@ -13,7 +14,7 @@ Nov 24–25") and tag `freeze-2026-11-25` (see "Halted fourth launch, Nov 25–2
 calibrated thresholds as #51; the held-out OSMI bank has no human side, so no FPR is reported on
 it.**
 
-The same sentence is written at the top of the run's `results/freeze-2026-11-26/README.md` by
+The same sentence is written at the top of the run's `results/freeze-2026-11-26b/README.md` by
 `scripts/freeze_report.py`.
 
 ## Start time and preflight
@@ -23,7 +24,7 @@ The same sentence is written at the top of the run's `results/freeze-2026-11-26/
 - From 00:00 UTC Monday, week 48 starts with the full $25.
 
 Before any paid call, the driver's preflight (`scripts/freeze_run.sh`) checks:
-- HEAD is exactly the tag `freeze-2026-11-26`;
+- HEAD is exactly the tag `freeze-2026-11-26b`;
 - the tag is on main (`git merge-base --is-ancestor HEAD origin/main`);
 - tracked files are clean;
 - #50's per-job spend cap is present;
@@ -42,7 +43,7 @@ It then prints this week's ledger spend and **refuses to start if the remaining 
 
 - Every call runs at temperature 0.7 with `--final`.
 - The drivers refuse claude-haiku, OSMI items and held-out-split items without `--final`; with `--final` they require "final" in the run id (`adr/harness/final_guard.py`).
-- Each provider is its own job, `ADR_JOB_ID=freeze-2026-11-26-<model>`, with its own spend cap (`ADR_JOB_SPEND_CAP_USD`), approved by Arav on Nov 21:
+- Each provider is its own job, `ADR_JOB_ID=freeze-2026-11-26b-<model>`, with its own spend cap (`ADR_JOB_SPEND_CAP_USD`), approved by Arav on Nov 21:
   - claude-haiku: **$8** (lowered from $12 on Nov 26; see "Halted fourth launch, Nov 25–26");
   - gpt-mini: **$2** (lowered from $10 on Nov 25, estimate $0.55; see "Halted third launch, Nov 24–25").
 
@@ -66,8 +67,8 @@ Every run uses `run_real_router.py --final` with #51's frozen config (per_mech c
 
 | report | final outcome files | router run ids |
 |---|---|---|
-| **Unseen model** | claude-haiku composite sessions on the training banks (30 files) | `freeze-2026-11-26-unseen-model-{all,no-low-effort}` |
-| **Unseen survey** | gpt-mini and claude-haiku on the OSMI bank (12 files) | `freeze-2026-11-26-unseen-survey-{all,no-low-effort}` |
+| **Unseen model** | claude-haiku composite sessions on the training banks (30 files) | `freeze-2026-11-26b-unseen-model-{all,no-low-effort}` |
+| **Unseen survey** | gpt-mini and claude-haiku on the OSMI bank (12 files) | `freeze-2026-11-26b-unseen-survey-{all,no-low-effort}` |
 
 Each report gives TPR at the A_0.05 (headline) and A_0.01 thresholds, with 95% bootstrap CIs.
 - It is broken down by model, level (L0, L2, L2g) and mode.
@@ -128,7 +129,7 @@ No other group changes. TPR is unchanged: the 5 stopped sessions end undecided, 
    in that run. A gpt-mini group there is an unexpected model and fails.
 2. **Every check answered from the session's own rows.** In the per-group source table
    (`ai_sources_by_group`), synthetic = fallback = 0 for every group, gpt-mini's OSMI groups included.
-   Unseen-model groups must also have missing = 0.
+   Unseen-model groups must also have missing = 0, unless every missing check is explained by recorded refusals (since Nov 26): each session with missing checks (`ai_missing_by_session`) must have a refused document in one of its group's attacker runs. Any unexplained missing check fails, and the report gives the count per group.
    - AI donors are built from the held-out rows with no failure map (`adr/replay/crossfit.py`), so a value above 0 means something is wrong with the inputs.
    - Unseen-survey groups are allowed missing checks: they are the pilot checks with no OSMI rows.
    - Style is passive (scored on every written answer), so it is not in the source table; the README says so.
@@ -143,7 +144,7 @@ Tests: `tests/test_freeze.py` and `tests/test_final_guard.py`.
 
 ## Inputs and the held-out bank check
 
-`results/freeze-2026-11-26/freeze_manifest.json` (`scripts/freeze_manifest.py`) records sha256
+`results/freeze-2026-11-26b/freeze_manifest.json` (`scripts/freeze_manifest.py`) records sha256
 for:
 - the held-out bank;
 - the floor750 pilot parquet;
@@ -317,9 +318,30 @@ If claude-haiku hits the cap, the cap stops its calls and the driver fails on th
 - **#61 merged without review (Arav, Nov 26), because it is Thanksgiving.** Archana and Harshini were asked on the PR to raise any concerns afterwards.
 - **The halted run's files:** a copy is kept in the team's freeze folder outside the repo (`halted-launch-4/`), with the fourth launch's manifest and logs.
 
+## Halted fifth launch, Nov 26
+
+- **Launch:** tag `freeze-2026-11-26` (#61 merged as f8df1d7), started Nov 26 at 00:25 Arizona time. Runs 1–9 were skipped; run 10 passed from cache with 20 refused questions (0.25%); runs 11–15 passed.
+- **Run 16 halted** (`v1-final-du-L2-survey-ipip-claude-haiku-s20`, 02:32): **98 of 120 L2 document replies were refused** (1,620 refused questions against 380 answered rows), far over the 1% limit. No call errors and no cut-offs; every refused reply ended normally (599–970 output tokens). Copy-paste L2 and document upload L0 on the same bank had passed with no refusals.
+- **Classified by keywords only; the text is not shared.** Of the 49 distinct refused replies, all mention "survey", 34 "can't", 26 "won't", 22 "persona"/"personal", 11 "as an AI". At L2 the attacker is told about the checks, and claude-haiku largely declines to fill in a personality survey as a person.
+- **Replay with run 16's partial file (no API calls):** 12 of the 20 document-upload L2 composite sessions had no IPIP rows; every group still had synthetic = fallback = 0, and the document-upload L2 group's missing checks per session equalled every other group's (2.0, from the banks not yet run).
+- **Spent:** job `freeze-2026-11-26-claude-haiku`, $1.73. Week 48: about $12.98 of $25, leaving about $12.02.
+
+### Changes, Nov 26, second revision (Arav)
+
+- **The refusal rule was revised after seeing data, with no resampling.** The 1% limit (set after one refusal) is removed: 82% on IPIP shows that refusal is a real behaviour of the held-out model at L2, not noise, so it is recorded and reported as a result rather than stopping the run or being resampled away.
+  - Every finished reply (stop reason "stop") that answers none of its questions **and matches the refusal pattern** (`REFUSAL_PATTERN` in `adr/harness/doc_upload.py`: can't, cannot, won't, will not, unable to, not able to, decline, not comfortable, as an AI) is recorded as refused, with no limit. The pattern matched all 50 no-answer replies seen so far.
+  - A finished reply with no answers that does **not** match the pattern stays fatal (a guard against a parsing bug passing as refusals). Partial answers, cut-offs and call errors stay fatal.
+  - Both reports give refused counts per attacker run and per group.
+- **Router check:** missing = 0 for unseen-model groups passes if every missing check is in a session with a recorded refusal (the replay now records missing checks per session, `ai_missing_by_session`); the report gives the counts per group. Unexplained missing still fails; synthetic = fallback = 0 is unchanged.
+- **Router-only restart:** `ROUTER_ONLY=1 bash scripts/freeze_run.sh` reruns only the router stage from finished attacker outputs. It still checks the tag and verifies the manifest, skips the weekly budget check (no API calls; job caps are set to $0 as a guard), and stops if any attacker run has not finished cleanly instead of running it.
+- **Caps unchanged:** claude-haiku $8, gpt-mini $2; the weekly check needs $10 against about $12.02 left.
+- **Restart** from tag `freeze-2026-11-26b` (a second tag the same day); the old tags stay as they were. Runs 1–15 are skipped as passed; run 16 is redone from cache with its refusals recorded.
+- **#62 merged without review (Arav, Nov 26): it is Thanksgiving and the deadline is Friday.** Archana and Harshini were asked on the PR to raise any concerns afterwards.
+- **The halted run's files:** a copy is kept in the team's freeze folder outside the repo (`halted-launch-5/`), with the fifth launch's manifest and logs.
+
 ## Follow-up: final tables
 
-`results/freeze-2026-11-26/README.md` is gitignored (results/ stays out of the repo). After the run, a follow-up docs PR will copy the final tables into `docs/notes/` with aggregates only, like the RQ2 calibration notes:
+`results/freeze-2026-11-26b/README.md` is gitignored (results/ stays out of the repo). After the run, a follow-up docs PR will copy the final tables into `docs/notes/` with aggregates only, like the RQ2 calibration notes:
 - the two reports;
 - the post-run check results;
 - the manifest's commit and the run's spend.

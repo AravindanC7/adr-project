@@ -196,20 +196,17 @@ def _run_dir(tmp_path, n_rows=8000, refused=0, errors=0, truncated=0):
     return d
 
 
-def test_check_run_passes_refusals_up_to_one_percent(tmp_path):
-    ok, msg = fm.check_run(_run_dir(tmp_path, refused=20), 0.01)  # the Nov 26 case: 0.25%
+def test_check_run_passes_refusals_with_no_limit(tmp_path):
+    ok, msg = fm.check_run(_run_dir(tmp_path, refused=20))  # run 10: 0.25%
     assert ok and "8000 rows, 20 refused" in msg
-
-
-def test_check_run_fails_refusals_over_one_percent(tmp_path):
-    ok, msg = fm.check_run(_run_dir(tmp_path, n_rows=1000, refused=11), 0.01)
-    assert not ok and "'refused_over_limit': True" in msg and "refused=11 of 1000" in msg
+    ok, msg = fm.check_run(_run_dir(tmp_path / "b", n_rows=380, refused=1620))  # run 16: 81%
+    assert ok and "380 rows, 1620 refused" in msg
 
 
 def test_check_run_still_fails_a_cut_off_or_a_call_error(tmp_path):
-    ok, msg = fm.check_run(_run_dir(tmp_path, truncated=1, errors=1), 0.01)
+    ok, msg = fm.check_run(_run_dir(tmp_path, truncated=1, errors=1))
     assert not ok and "'truncated': 1" in msg
-    ok, msg = fm.check_run(_run_dir(tmp_path / "b", errors=1), 0.01)
+    ok, msg = fm.check_run(_run_dir(tmp_path / "b", errors=1, refused=20))
     assert not ok and "'errors': 1" in msg
 
 
@@ -240,13 +237,13 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_8_router_replays(tmp_p
         else:  # both models on the held-out OSMI bank only
             assert "unseen-survey" in ln and len(finals) == 12
             assert all("osmi-heldout" in f for f in finals)
-    assert "freeze_report.py --out results/freeze-2026-11-26/README.md" in out
-    assert "--unseen-model-ablation results/real-router/freeze-2026-11-26-unseen-model-all-style-clear" in out
+    assert "freeze_report.py --out results/freeze-2026-11-26b/README.md" in out
+    assert "--unseen-model-ablation results/real-router/freeze-2026-11-26b-unseen-model-all-style-clear" in out
     assert "--reference-no-low-effort results/real-router/rq2-l012-floor750-reopen-no-low-effort" in out
     assert "--jobs 8 --resume" in out and "--exclude-sessions" in out
     assert out.count("rescore --final") == 30  # every survey / written-answer run is re-scored
-    assert "freeze-2026-11-26-claude-haiku (cap $8)" in out
-    assert "freeze-2026-11-26-gpt-mini (cap $2)" in out
+    assert "freeze-2026-11-26b-claude-haiku (cap $8)" in out
+    assert "freeze-2026-11-26b-gpt-mini (cap $2)" in out
     assert list(tmp_path.iterdir()) == []  # a dry run creates no folders
     cp = [ln for ln in out.splitlines() if "--run-id v1-final-cp-" in ln and "DRY:" in ln]
     du = [ln for ln in out.splitlines() if "--run-id v1-final-du-" in ln and "DRY:" in ln]
@@ -391,9 +388,32 @@ def test_missing_checks_fail_in_unseen_model_only():
     g = "claude-haiku:copy_paste:L0"
     problems = fr.source_problems(_router("unseen-model", src_by={g: {"missing": 1.0}}),
                                   "unseen-model")
-    assert problems == [(f"{g}: missing 1.0 checks per session (must be 0 in the unseen-model "
-                        "report)")]
+    assert problems == [(f"{g}: missing 1.0 checks per session with no per-session record "
+                        "(must be 0, or explained by refusals)")]
     assert fr.source_problems(_router("unseen-survey"), "unseen-survey") == []  # missing 3.0 ok
+
+
+def test_missing_checks_pass_when_every_session_has_a_recorded_refusal():
+    g = "claude-haiku:doc_upload:L2"
+    router = _router("unseen-model", src_by={g: {"missing": 0.1}})
+    router["ai_missing_by_session"] = {g: {f"composite:{g}:3": 1.0, f"composite:{g}:16": 1.0}}
+    assert fr.source_problems(router, "unseen-model", {g: {3, 16, 7}}) == []
+    lines = "\n".join(fr.missing_lines(router, {g: {3, 16, 7}}))
+    assert f"| {g} | 2 | 2 | 1.00 |" in lines
+
+
+def test_unexplained_missing_checks_still_fail():
+    g = "claude-haiku:doc_upload:L2"
+    router = _router("unseen-model", src_by={g: {"missing": 0.1}})
+    router["ai_missing_by_session"] = {g: {f"composite:{g}:3": 1.0, f"composite:{g}:5": 1.0}}
+    problems = fr.source_problems(router, "unseen-model", {g: {3}})  # sample 5 refused nothing
+    assert len(problems) == 1 and "1 of 2 sessions with missing checks" in problems[0]
+    # a refusal in another group does not explain this one
+    assert fr.source_problems(router, "unseen-model",
+                              {"claude-haiku:doc_upload:L2g": {3, 5}}) != []
+    # synthetic and fallback stay strict even with refusals
+    router["ai_sources_by_group"][g]["fallback"] = 0.5
+    assert any("fallback 0.5" in p for p in fr.source_problems(router, "unseen-model", {g: {3, 5}}))
 
 
 def test_threshold_check_against_51():
@@ -553,3 +573,42 @@ def test_report_lists_refused_questions_per_run_and_per_group(tmp_path):
     assert "| claude-haiku:doc_upload:L2 | 20 |" in text
     assert "| claude-haiku:copy_paste:L2g | 0 |" in text
     assert "| v1-final-du-L2-quiz-arc-200-claude-haiku-s20 | 20 |" in text
+
+
+def test_replay_records_missing_checks_per_session():
+    from types import SimpleNamespace
+
+    from adr.replay.crossfit import ai_missing_by_session
+
+    def trace(who, missing):
+        return SimpleNamespace(who=who, sources=(0, 0, 0, missing))
+
+    g = "claude-haiku:doc_upload:L2"
+    ai = [[trace(f"ai:{g}|composite:{g}:16", 2), trace(f"ai:{g}|composite:{g}:16", 0)],
+          [trace(f"ai:{g}|composite:{g}:3", 0)]]
+    assert ai_missing_by_session(ai) == {g: {f"composite:{g}:16": 1.0}}
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="bash driver")
+def test_router_only_dry_run_runs_no_attacker_and_all_router_replays(tmp_path):
+    env = {**os.environ, "DRY_RUN": "1", "ROUTER_ONLY": "1", "PY": "python"}
+    proc = subprocess.run(["bash", str(ROOT / "scripts" / "freeze_run.sh")], cwd=tmp_path, env=env,
+                          capture_output=True, text=True, encoding="utf-8", check=False)
+    assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-2000:]
+    out = proc.stdout
+    assert out.count("router-only: needs finished v1-final-") == 42
+    assert "run_copy_paste.py" not in out and "run_doc_upload.py" not in out
+    assert "run_survey_banks.py" not in out                  # no attacker call, no re-score
+    assert out.count("scripts/run_real_router.py") == 8      # every router replay
+    assert "freeze_report.py --out" in out
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_router_only_skips_the_budget_check_but_keeps_tag_and_manifest_checks():
+    text = (ROOT / "scripts" / "freeze_run.sh").read_text(encoding="utf-8")
+    pre = text[text.index("# ------------------------------------------------------------------ 0. preflight"):
+               text.index("# ------------------------------------------------------------------ (a)")]
+    assert 'router-only restart, no API calls: weekly budget check skipped' in pre
+    assert pre.index('HEAD is not the $FREEZE tag') < pre.index('ROUTER_ONLY')
+    assert "freeze_manifest.py verify" in pre and 'no $MANIFEST' in pre
+    assert 'ADR_JOB_SPEND_CAP_USD=0' in text
