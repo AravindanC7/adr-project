@@ -170,7 +170,7 @@ def cmd_check_heldout(a) -> int:
 def cmd_prep(a) -> int:
     training = [Path(p) for p in a.training_files.read_text(encoding="utf-8").splitlines() if p]
     manifest = {
-        "freeze": "freeze-2026-11-26c",
+        "freeze": "freeze-2026-11-26d",
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "git": git_state(),
         "heldout_bank": bank_entry(a.heldout_bank),

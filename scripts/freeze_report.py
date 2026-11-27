@@ -1,6 +1,6 @@
 """Freeze reports and post-run checks for the final router runs (scripts/freeze_run.sh, step c).
 
-    python scripts/freeze_report.py --out results/freeze-2026-11-26c/README.md \\
+    python scripts/freeze_report.py --out results/freeze-2026-11-26d/README.md \\
         --unseen-model RUN_DIR [RUN_DIR] --unseen-survey RUN_DIR [RUN_DIR] \\
         [--reference-all results/real-router/rq2-l012-floor750-reopen-all] \\
         [--reference-no-low-effort results/real-router/rq2-l012-floor750-reopen-no-low-effort]
@@ -14,8 +14,10 @@ A_0.05 and A_0.01 thresholds per attacker level and mode (95% bootstrap CIs over
 Checks, each failing loudly (exit 1) after writing what it found:
   * every run has exactly the expected AI groups (model:mode:level): each expected group is in
     BOTH n_ai_sessions_by_group and ai_sources_by_group, and each table's count is independently
-    exactly 20 (samples 0-19). No groups at all, a missing, short or over-full group, or a group
-    or model outside the matrix fails, naming the run, the group, the table and the count.
+    exactly 20 (samples 0-19). A group may be short (or absent) only by sessions whose documents
+    were all refused in its own attacker runs (revised Nov 26). No groups at all, any other
+    missing, short or over-full group, or a group or model outside the matrix fails, naming the
+    run, the group, the table and the count.
     Expected groups:
       unseen model   claude-haiku x {L0, L2, L2g} x {copy_paste, doc_upload}  (6 groups)
       unseen survey  claude-haiku and gpt-mini x the same levels and modes   (12 groups)
@@ -37,8 +39,7 @@ or on (ablation). Each report shows the ablation beside the main policy: the pri
 wrongly cleared), the costs (honest sessions cleared, checks per honest person) and the guardrail
 (honest false pauses). The main policy (#51) stays the headline.
 Refusals (decided Nov 26): a document-upload reply that ended normally but answered none of its
-questions is recorded as refused, not as a failure (refused.jsonl; the driver allows up to 1% of a
-run's rows). Each report lists the refused questions per attacker run and per group, read from
+questions is recorded as refused, not as a failure (refused.jsonl; no limit, revised twice since). Each report lists the refused questions per attacker run and per group, read from
 the run's config.yaml (n_refused_questions) via the router run's inputs.txt.
 Reads aggregates only (metrics.json, config.yaml, inputs.txt); no session ids, no answer text.
 """
@@ -94,20 +95,36 @@ def _sessions(router: dict, table: str) -> dict[str, int]:
     return dict(rows)
 
 
-def group_problems(router: dict, expected: frozenset[str], n: int = SESSIONS_PER_GROUP) -> list[str]:
+def group_problems(router: dict, expected: frozenset[str], n: int = SESSIONS_PER_GROUP,
+                   refused: dict[str, set[int]] | None = None) -> list[str]:
     """Every expected group must be in BOTH session tables, each count independently equal to `n`;
-    no group outside the expected matrix (empty list = exactly the expected matrix)."""
+    no group outside the expected matrix (empty list = exactly the expected matrix).
+
+    Revised Nov 26 after seeing the counts (no resampling): a group may have fewer than `n`
+    sessions, or none, only if every missing session is a fully refused one, i.e. the shortfall
+    equals the number of samples whose documents were all refused in the group's own attacker
+    runs (`refused`: group -> sample indexes, from fully_refused_samples). Any other shortfall
+    fails."""
+    refused = refused or {}
     tables = {t: _sessions(router, t) for t in SESSION_TABLES}
     if not any(tables.values()):
         return [f"no AI groups at all (expected {len(expected)} groups of {n} sessions)"]
     models = {g.split(":")[0] for g in expected}
     bad = []
     for g in sorted(expected):
+        k = len(refused.get(g, ()))
         for t, found in tables.items():
+            got = found.get(g, 0)
+            if got == n or (got < n and n - got == k):
+                continue
             if g not in found:
-                bad.append(f"missing group {g}: not in {t} (expected {n} sessions)")
-            elif found[g] != n:
-                bad.append(f"group {g} has {found[g]} sessions in {t}, expected exactly {n}")
+                bad.append(f"missing group {g}: not in {t} (expected {n} sessions, "
+                           f"{k} fully refused)")
+            elif got < n:
+                bad.append(f"group {g} has {got} sessions in {t}, expected exactly {n} "
+                           f"({k} fully refused; {n - got - k} missing sessions unexplained)")
+            else:
+                bad.append(f"group {g} has {got} sessions in {t}, expected exactly {n}")
     for g in sorted(set().union(*tables.values()) - expected):
         counts = ", ".join(f"{t} {found[g]}" for t, found in tables.items() if g in found)
         model = g.split(":")[0]
@@ -196,24 +213,30 @@ def _cell(router: dict, t: str, group: str) -> str:
     return f"{v:.2f}" + (f" [{ci[0]:.2f}, {ci[1]:.2f}]" if ci else "")
 
 
-def table(router: dict, models: tuple[str, ...]) -> list[str]:
+def table(router: dict, models: tuple[str, ...],
+          refused: dict[str, set[int]] | None = None) -> list[str]:
+    """Per group: sessions present, sessions missing because every document was refused, and TPR
+    on the present sessions (n beside it). Fully refused sessions are not detections or misses."""
+    refused = refused or {}
     n_by = router.get("n_ai_sessions_by_group") or {}
     src = router.get("ai_sources_by_group") or {}
     lines = [
-        ("| model | level | mode | AI sessions | TPR at A_0.05 [95% CI] | TPR at A_0.01 [95% CI] "
-         "| missing checks per session |"),
-        "|---|---|---|---|---|---|---|",
+        ("| model | level | mode | AI sessions present | missing: fully refused "
+         "| TPR at A_0.05 [95% CI] (n) | TPR at A_0.01 [95% CI] (n) | missing checks per session |"),
+        "|---|---|---|---|---|---|---|---|",
     ]
     for model in models:
         for level in LEVELS:
             for mode in MODES:
                 g = f"{model}:{mode}:{level}"
-                if g not in n_by:
+                k = len(refused.get(g, ()))
+                if g not in n_by and not k:
                     continue
+                n = n_by.get(g, 0)
                 miss = src.get(g, {}).get("missing")
                 lines.append(
-                    f"| {model} | {level} | {mode.replace('_', '-')} | {n_by[g]} | "
-                    f"{_cell(router, 'A_0.05', g)} | {_cell(router, 'A_0.01', g)} | "
+                    f"| {model} | {level} | {mode.replace('_', '-')} | {n} | {k} | "
+                    f"{_cell(router, 'A_0.05', g)} ({n}) | {_cell(router, 'A_0.01', g)} ({n}) | "
                     f"{'–' if miss is None else f'{miss:.1f}'} |"
                 )
     return lines
@@ -275,6 +298,42 @@ def explained_samples(run: Path) -> dict[str, set[int]]:
     out = refused_samples(run)
     for g, idx in _samples(run, "unanswered.jsonl").items():
         out.setdefault(g, set()).update(idx)
+    return out
+
+
+def fully_refused_samples(run: Path) -> dict[str, set[int]]:
+    """Per group, the sample indexes whose documents were ALL refused in every one of the group's
+    final attacker runs: each run is a document-upload run with refused.jsonl entries for every
+    one of its documents (n_documents in config.yaml) for that sample, and no answered question
+    (responses.jsonl) for it. Such a sample has no outcome rows, so its session is missing from
+    the replay; it is reported separately, never counted as a detection or a miss."""
+    by_group: dict[str, list[str]] = {}
+    for rid in _final_runs(run):
+        by_group.setdefault(_group(rid), []).append(rid)
+    out: dict[str, set[int]] = {}
+    for g, rids in by_group.items():
+        samples: set[int] | None = None
+        for rid in rids:
+            d = _inputs_dir(run, rid)
+            conf = _final_runs(run)[rid]
+            n_docs = conf.get("n_documents")
+            if conf.get("mode") != "doc_upload" or not n_docs or not (d / "refused.jsonl").is_file() \
+                    or not (d / "responses.jsonl").is_file():
+                samples = set()
+                break
+            docs: dict[int, set[int]] = {}
+            for line in (d / "refused.jsonl").read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    r = json.loads(line)
+                    docs.setdefault(int(r["sample_idx"]), set()).add(int(r["doc"]))
+            answered = set()
+            for line in (d / "responses.jsonl").read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    answered.add(int(json.loads(line)["session_id"].rsplit(":", 2)[-2]))
+            full = {s for s, ks in docs.items() if len(ks) == n_docs and s not in answered}
+            samples = full if samples is None else samples & full
+        if samples:
+            out[g] = samples
     return out
 
 
@@ -373,7 +432,8 @@ def _of(router: dict, t: str, key: str, n: int) -> str:
     return "–" if v is None else f"{round(v * n)} of {n} ({v:.2f})"
 
 
-def ablation_table(main: dict, abl: dict, models: tuple[str, ...]) -> list[str]:
+def ablation_table(main: dict, abl: dict, models: tuple[str, ...],
+                   refused: dict[str, set[int]] | None = None) -> list[str]:
     """The pre-registered measures, main policy (#51) beside the ablation, at both thresholds."""
     lines = ["| measure | threshold | main policy (#51) | ablation (style must look human to clear) |",
              "|---|---|---|---|"]
@@ -383,10 +443,17 @@ def ablation_table(main: dict, abl: dict, models: tuple[str, ...]) -> list[str]:
         for model in models:
             for mode in MODES:
                 g = f"{model}:{mode}:L2"
-                n = (main.get("n_ai_sessions_by_group") or {}).get(g, SESSIONS_PER_GROUP)
+                n = (main.get("n_ai_sessions_by_group") or {}).get(g, 0)
+                k = len((refused or {}).get(g, ()))
+                if n == 0:
+                    cell = f"no sessions ({k} fully refused)"
+                    lines.append(f"| **primary:** L2 wrongly cleared, {model} "
+                                 f"{mode.replace('_', '-')} | {thr} | {cell} | {cell} |")
+                    continue
+                note = f"; {k} fully refused, not counted" if k else ""
                 lines.append(f"| **primary:** L2 wrongly cleared, {model} {mode.replace('_', '-')} "
-                             f"| {thr} | {_of(main, t, f'ai_cleared_rate[{g}]', n)} | "
-                             f"{_of(abl, t, f'ai_cleared_rate[{g}]', n)} |")
+                             f"| {thr} | {_of(main, t, f'ai_cleared_rate[{g}]', n)}{note} | "
+                             f"{_of(abl, t, f'ai_cleared_rate[{g}]', n)}{note} |")
         lines += [
             (f"| cost: honest sessions cleared | {thr} | "
             f"{_of(main, t, 'honest_cleared_rate', n_h)} | {_of(abl, t, 'honest_cleared_rate', n_h)} |"),
@@ -399,18 +466,24 @@ def ablation_table(main: dict, abl: dict, models: tuple[str, ...]) -> list[str]:
     return lines
 
 
-def secondary_tpr_table(main: dict, abl: dict, models: tuple[str, ...]) -> list[str]:
-    """Secondary outcome: per-group TPR, main policy beside the ablation, at both thresholds."""
+def secondary_tpr_table(main: dict, abl: dict, models: tuple[str, ...],
+                        refused: dict[str, set[int]] | None = None) -> list[str]:
+    """Secondary outcome: per-group TPR, main policy beside the ablation, at both thresholds, on the
+    present sessions (n), with fully refused sessions beside it."""
+    refused = refused or {}
     n_by = main.get("n_ai_sessions_by_group") or {}
-    lines = [("| model | level | mode | TPR at A_0.05: main / ablation | "
-              "TPR at A_0.01: main / ablation |"), "|---|---|---|---|---|"]
+    lines = [("| model | level | mode | sessions present | missing: fully refused | "
+              "TPR at A_0.05: main / ablation | TPR at A_0.01: main / ablation |"),
+             "|---|---|---|---|---|---|---|"]
     for model in models:
         for level in LEVELS:
             for mode in MODES:
                 g = f"{model}:{mode}:{level}"
-                if g not in n_by:
+                k = len(refused.get(g, ()))
+                if g not in n_by and not k:
                     continue
                 lines.append(f"| {model} | {level} | {mode.replace('_', '-')} | "
+                             f"{n_by.get(g, 0)} | {k} | "
                              f"{_cell(main, 'A_0.05', g)} / {_cell(abl, 'A_0.05', g)} | "
                              f"{_cell(main, 'A_0.01', g)} / {_cell(abl, 'A_0.01', g)} |")
     return lines
@@ -422,8 +495,12 @@ def report(name: str, desc: str, runs: list[Path], models: tuple[str, ...],
     pairs = dict(zip(runs, ablations or [], strict=False))
     for run in runs:
         router = load(run)
+        full = fully_refused_samples(run)
         lines += [f"### {run.name} ({router['n_sessions']} honest sessions)", "",
-                  *table(router, models), "",
+                  ("TPR is on the AI sessions present (n beside it). A session whose documents "
+                   "were all refused has no rows: it is listed as fully refused and never "
+                   "counted as a detection or a miss."), "",
+                  *table(router, models, full), "",
                   "Honest side (the pilot's; see the FPR rule): " + "; ".join(honest(router)), "",
                   *refusal_lines(run), "",
                   *missing_lines(router, explained_samples(run)), ""]
@@ -436,9 +513,9 @@ def report(name: str, desc: str, runs: list[Path], models: tuple[str, ...],
                       "main / ablation; each run calibrates them on the same 44-session pilot "
                       "folds."), "",
                       *([ablation_note, ""] if ablation_note else []),
-                      *ablation_table(router, abl, models), "",
+                      *ablation_table(router, abl, models, full), "",
                       "Secondary outcome: per-group TPR [95% CI], main policy / ablation:", "",
-                      *secondary_tpr_table(router, abl, models), ""]
+                      *secondary_tpr_table(router, abl, models, full), ""]
     return lines
 
 
@@ -487,12 +564,14 @@ def main() -> int:
         ("unseen-survey", r) for r in a.unseen_survey_ablation]
     for kind, run in ablation_runs:  # same group-matrix and source checks as the main runs
         router = load(run)
-        problems += [f"{run.name}: {p}" for p in group_problems(router, EXPECTED_GROUPS[kind])]
+        problems += [f"{run.name}: {p}" for p in group_problems(
+            router, EXPECTED_GROUPS[kind], refused=fully_refused_samples(run))]
         problems += [f"{run.name}: {p}" for p in source_problems(router, kind, explained_samples(run))]
         problems += [f"{run.name}: {p}" for p in flag_problems(run, True)]
     for kind, run in runs:
         router = load(run)
-        problems += [f"{run.name}: {p}" for p in group_problems(router, EXPECTED_GROUPS[kind])]
+        problems += [f"{run.name}: {p}" for p in group_problems(
+            router, EXPECTED_GROUPS[kind], refused=fully_refused_samples(run))]
         problems += [f"{run.name}: {p}" for p in source_problems(router, kind, explained_samples(run))]
         problems += [f"{run.name}: {p}" for p in flag_problems(run, False)]
         ref = reference_for(run, a.reference_all, a.reference_no_low_effort)
@@ -509,7 +588,8 @@ def main() -> int:
          "fallback 0); unseen-model groups also missing 0, or every missing check in a session "
          "with a recorded refusal."),
         (f"- AI groups: exactly the expected matrix, {SESSIONS_PER_GROUP} sessions in each "
-         "(unseen model: claude-haiku, 6 groups; unseen survey: both models, 12 groups)."),
+         "(unseen model: claude-haiku, 6 groups; unseen survey: both models, 12 groups), except "
+         "sessions whose documents were all refused in the group's own runs (listed per group)."),
         "- thresholds: equal to #51's runs with the same honest sessions.",
         ("- pre-registered ablation: every main run has its -style-clear partner, with the same "
          "group matrix and sources; the flag is off in the main runs and on in the partners."),

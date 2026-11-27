@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Experiment freeze, Sun Nov 22: the ONE final run (AGENTS.md section 8). Do not start it without
 # the team's go. It needs #50 (cache-key lock, per-job spend cap) and #51 (calibration) merged and
-# the checkout at tag freeze-2026-11-26c.
+# the checkout at tag freeze-2026-11-26d.
 #
 #   (a) attacker runs, samples 0-19, run ids containing "final":
 #       claude-haiku (held-out model) on every bank the RQ2 composite sessions use plus the
 #       held-out OSMI bank; gpt-mini on the held-out OSMI bank only. Levels L0, L2, L2-generic;
 #       copy-paste and document upload, both at temperature 0.7 (the training runs' settings).
-#       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-26c-<model>, with
+#       Each provider is its own job: ADR_JOB_ID=freeze-2026-11-26d-<model>, with
 #       ADR_JOB_SPEND_CAP_USD = $8 for claude-haiku (Nov 26) and $2 for gpt-mini (Nov 25).
 #       The caps are fixed here and recorded in the manifest; preflight stops if they differ.
 #   (b) scripts/run_real_router.py --final with the frozen config (configs/data_decisions.json
@@ -32,7 +32,7 @@
 # on it.
 #
 # Run from the root of a checkout at the tag, with data/ and cache/ pointing at the shared ones:
-#   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-26c/driver.log 2>&1 &
+#   nohup caffeinate -i bash scripts/freeze_run.sh > results/freeze-2026-11-26d/driver.log 2>&1 &
 # DRY_RUN=1 prints every command and runs nothing (no preflight, no API calls).
 # ROUTER_ONLY=1 reruns only the router stage (b, c) from finished attacker outputs: it still checks
 # the tag and verifies the manifest, skips the weekly budget check (no API calls), and stops if any
@@ -41,7 +41,7 @@
 # router steps resume from steps/*.json.
 set -Eeuo pipefail
 
-FREEZE=freeze-2026-11-26c
+FREEZE=freeze-2026-11-26d
 OUT=results/$FREEZE
 MANIFEST=$OUT/freeze_manifest.json
 LOGS=$OUT/logs

@@ -251,13 +251,13 @@ def test_freeze_driver_dry_run_plans_42_attacker_runs_and_8_router_replays(tmp_p
         else:  # both models on the held-out OSMI bank only
             assert "unseen-survey" in ln and len(finals) == 12
             assert all("osmi-heldout" in f for f in finals)
-    assert "freeze_report.py --out results/freeze-2026-11-26c/README.md" in out
-    assert "--unseen-model-ablation results/real-router/freeze-2026-11-26c-unseen-model-all-style-clear" in out
+    assert "freeze_report.py --out results/freeze-2026-11-26d/README.md" in out
+    assert "--unseen-model-ablation results/real-router/freeze-2026-11-26d-unseen-model-all-style-clear" in out
     assert "--reference-no-low-effort results/real-router/rq2-l012-floor750-reopen-no-low-effort" in out
     assert "--jobs 8 --resume" in out and "--exclude-sessions" in out
     assert out.count("rescore --final") == 30  # every survey / written-answer run is re-scored
-    assert "freeze-2026-11-26c-claude-haiku (cap $8)" in out
-    assert "freeze-2026-11-26c-gpt-mini (cap $2)" in out
+    assert "freeze-2026-11-26d-claude-haiku (cap $8)" in out
+    assert "freeze-2026-11-26d-gpt-mini (cap $2)" in out
     assert list(tmp_path.iterdir()) == []  # a dry run creates no folders
     cp = [ln for ln in out.splitlines() if "--run-id v1-final-cp-" in ln and "DRY:" in ln]
     du = [ln for ln in out.splitlines() if "--run-id v1-final-du-" in ln and "DRY:" in ln]
@@ -346,6 +346,7 @@ def test_no_groups_at_all_fails():
 
 
 G = "claude-haiku:doc_upload:L0"
+U1 = " (0 fully refused; 1 missing sessions unexplained)"
 
 
 @pytest.mark.parametrize(
@@ -354,27 +355,28 @@ G = "claude-haiku:doc_upload:L0"
         # missing from both tables / from one table only
         ("unseen-survey", {"gpt-mini:doc_upload:L2g": None}, {"gpt-mini:doc_upload:L2g": None},
          [("missing group gpt-mini:doc_upload:L2g: not in n_ai_sessions_by_group (expected 20 "
-          "sessions)"), ("missing group gpt-mini:doc_upload:L2g: not in ai_sources_by_group "
-          "(expected 20 sessions)")]),
+          "sessions, 0 fully refused)"), ("missing group gpt-mini:doc_upload:L2g: not in "
+          "ai_sources_by_group (expected 20 sessions, 0 fully refused)")]),
         ("unseen-model", None, {G: None},
-         [f"missing group {G}: not in ai_sources_by_group (expected 20 sessions)"]),
+         [(f"missing group {G}: not in ai_sources_by_group (expected 20 sessions, 0 fully "
+           "refused)")]),
         # short and over-full, in both tables
         ("unseen-model", {"claude-haiku:copy_paste:L2": 19}, {"claude-haiku:copy_paste:L2":
                                                              {"sessions": 19}},
          [("group claude-haiku:copy_paste:L2 has 19 sessions in n_ai_sessions_by_group, expected "
-          "exactly 20"), ("group claude-haiku:copy_paste:L2 has 19 sessions in ai_sources_by_group, "
-          "expected exactly 20")]),
+          f"exactly 20{U1}"), ("group claude-haiku:copy_paste:L2 has 19 sessions in "
+          f"ai_sources_by_group, expected exactly 20{U1}")]),
         ("unseen-model", {"claude-haiku:copy_paste:L0": 7}, None,  # Harshini's n=7 case
          [("group claude-haiku:copy_paste:L0 has 7 sessions in n_ai_sessions_by_group, expected "
-          "exactly 20")]),
+          "exactly 20 (0 fully refused; 13 missing sessions unexplained)")]),
         ("unseen-survey", {G: 21}, {G: {"sessions": 21}},
          [f"group {G} has 21 sessions in n_ai_sessions_by_group, expected exactly 20",
           f"group {G} has 21 sessions in ai_sources_by_group, expected exactly 20"]),
         # Archana's case: the two tables disagree (20 vs 19)
         ("unseen-model", None, {G: {"sessions": 19}},
-         [f"group {G} has 19 sessions in ai_sources_by_group, expected exactly 20"]),
+         [f"group {G} has 19 sessions in ai_sources_by_group, expected exactly 20{U1}"]),
         ("unseen-model", {G: 19}, None,
-         [f"group {G} has 19 sessions in n_ai_sessions_by_group, expected exactly 20"]),
+         [f"group {G} has 19 sessions in n_ai_sessions_by_group, expected exactly 20{U1}"]),
         # unexpected model / unexpected group
         ("unseen-model", {"gpt-mini:copy_paste:L0": 20}, {"gpt-mini:copy_paste:L0": {}},
          [("unexpected model gpt-mini: group gpt-mini:copy_paste:L0 (n_ai_sessions_by_group 20, "
@@ -481,7 +483,8 @@ def test_report_writes_the_fpr_rule_both_reports_and_the_wording(tmp_path):
     assert '"Unseen model" means an unseen model, not unseen items' in model_part
     assert "canary and style only and is not comparable to the headline" in survey_part
     assert "Style is passive" in readme and "not in the source table" in readme
-    assert "| gpt-mini | L0 | copy-paste | 20 | 0.50 [0.30, 0.70] | 0.50 [0.30, 0.70]" in survey_part
+    assert ("| gpt-mini | L0 | copy-paste | 20 | 0 | 0.50 [0.30, 0.70] (20) | "
+            "0.50 [0.30, 0.70] (20)") in survey_part
     assert "FAILED" not in readme
 
 
@@ -559,7 +562,7 @@ def test_ablation_guardrail_has_exact_cis_and_secondary_tpr_is_side_by_side(tmp_
     assert ("| guardrail: honest false pauses [exact 95% CI] | A_0.05 (0.008 / 0.008) | "
             "1 of 44 = 2.3% [0.1%, 12.0%] | 1 of 44 = 2.3% [0.1%, 12.0%] |") in model_part
     assert model_part.count("Secondary outcome: per-group TPR") == 2
-    assert ("| claude-haiku | L2 | copy-paste | 0.50 [0.30, 0.70] / 0.50 [0.30, 0.70] | "
+    assert ("| claude-haiku | L2 | copy-paste | 20 | 0 | 0.50 [0.30, 0.70] / 0.50 [0.30, 0.70] | "
             "0.50 [0.30, 0.70] / 0.50 [0.30, 0.70] |") in model_part
     assert survey_part.count("canary + style evidence only") == 2  # beside each ablation
     assert "canary + style evidence only" not in model_part
@@ -676,3 +679,84 @@ def test_the_driver_prints_a_stop_line_whenever_a_step_fails(tmp_path, body, exp
     assert "not-reached" not in proc.stdout
     stops = [x for x in proc.stdout.splitlines() if "STOP:" in x]
     assert len(stops) == 1 and expected in stops[0], proc.stdout
+
+
+# ------------------------------------------------------------------ fully refused sessions (Nov 26)
+OSMI_L2 = "v1-final-du-L2-assignment-asurre-osmi-heldout-claude-haiku-s20"
+OSMI_L2G = "v1-final-du-L2-generic-assignment-asurre-osmi-heldout-claude-haiku-s20"
+
+
+def _osmi_runs(tmp_path, refused_by_run: dict[str, set[int]], n_docs=2, partial=()):
+    """Attacker runs for the OSMI document-upload groups and a router dir reading them. In each
+    run, samples in `refused_by_run[rid]` refuse every document; every other sample answers,
+    except samples in `partial`, which refuse only document 0 and answer document 1."""
+    root = tmp_path / "results"
+    for rid, refused in refused_by_run.items():
+        d = root / "runs" / rid
+        d.mkdir(parents=True)
+        (d / "config.yaml").write_text(yaml.safe_dump({"mode": "doc_upload",
+                                                      "n_documents": n_docs}))
+        ref, resp = [], []
+        for s in range(20):
+            for k in range(n_docs):
+                if s in refused or (s in partial and k == 0):
+                    ref.append({"sample_idx": s, "doc": k, "question": 1, "reason": "refused"})
+                else:
+                    resp.append({"session_id": f"{rid}:claude-haiku:{s}:d{k}", "question": 1})
+        (d / "refused.jsonl").write_text("".join(json.dumps(r) + "\n" for r in ref))
+        (d / "responses.jsonl").write_text("".join(json.dumps(r) + "\n" for r in resp))
+    router = tmp_path / "router"
+    router.mkdir()
+    (router / "inputs.txt").write_text("".join(
+        f"{root / 'outcomes' / (rid + '.parquet')}\n" for rid in refused_by_run))
+    return router
+
+
+def test_fully_refused_samples_need_every_document_refused_and_no_answer(tmp_path):
+    router = _osmi_runs(tmp_path, {OSMI_L2: set(range(20)), OSMI_L2G: set(range(8))},
+                        partial={10, 11})
+    full = fr.fully_refused_samples(router)
+    assert full == {"claude-haiku:doc_upload:L2": set(range(20)),
+                    "claude-haiku:doc_upload:L2g": set(range(8))}  # 10, 11 partly answered
+
+
+@pytest.mark.parametrize("present, refused", [(0, set(range(20))), (12, set(range(8)))])
+def test_a_short_group_passes_when_every_missing_session_was_fully_refused(present, refused):
+    g = "claude-haiku:doc_upload:L2"
+    router = _router("unseen-survey", n_by={g: present or None},
+                     src_by={g: {"sessions": present} if present else None})
+    assert _groups("unseen-survey", router) != []          # strict without the refusals
+    assert fr.group_problems(router, fr.EXPECTED_GROUPS["unseen-survey"],
+                             refused={g: refused}) == []
+
+
+def test_an_unexplained_shortfall_still_fails():
+    g = "claude-haiku:doc_upload:L2g"
+    router = _router("unseen-survey", n_by={g: 11}, src_by={g: {"sessions": 11}})
+    problems = fr.group_problems(router, fr.EXPECTED_GROUPS["unseen-survey"],
+                                 refused={g: set(range(8))})  # 9 missing, 8 explained
+    assert len(problems) == 2 and all("1 missing sessions unexplained" in p for p in problems)
+
+
+def test_refusals_from_another_group_do_not_explain_a_shortfall():
+    g, other = "claude-haiku:doc_upload:L2", "claude-haiku:doc_upload:L2g"
+    router = _router("unseen-survey", n_by={g: None}, src_by={g: None})
+    problems = fr.group_problems(router, fr.EXPECTED_GROUPS["unseen-survey"],
+                                 refused={other: set(range(20))})
+    assert len(problems) == 2 and all(f"missing group {g}" in p for p in problems)
+
+
+def test_report_lists_present_and_fully_refused_sessions_and_tpr_on_present(tmp_path):
+    g0, g12 = "claude-haiku:doc_upload:L2", "claude-haiku:doc_upload:L2g"
+    router = _router("unseen-survey", n_by={g0: None, g12: 12},
+                     src_by={g0: None, g12: {"sessions": 12}})
+    full = {g0: set(range(20)), g12: set(range(8))}
+    text = "\n".join(fr.table(router, fr.UNSEEN_SURVEY_MODELS, full))
+    assert "| claude-haiku | L2 | doc-upload | 0 | 20 | – (0) | – (0) |" in text
+    assert "| claude-haiku | L2g | doc-upload | 12 | 8 | 0.50 [0.30, 0.70] (12) |" in text
+    assert "| gpt-mini | L2 | doc-upload | 20 | 0 | 0.50 [0.30, 0.70] (20) |" in text
+    abl = "\n".join(fr.ablation_table(router, router, fr.UNSEEN_SURVEY_MODELS, full))
+    assert "doc-upload | A_0.05 (0.008 / 0.008) | no sessions (20 fully refused) |" in abl
+    sec = "\n".join(fr.secondary_tpr_table(router, router, fr.UNSEEN_SURVEY_MODELS, full))
+    assert "| claude-haiku | L2 | doc-upload | 0 | 20 | – / – | – / – |" in sec
+    assert "| claude-haiku | L2g | doc-upload | 12 | 8 |" in sec
